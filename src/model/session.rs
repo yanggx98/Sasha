@@ -95,6 +95,7 @@ pub struct SessionState {
     pub active_picker: Option<ActivePickerKind>,
     next_log_id: u64,
     next_sim_rx_seq: u64,
+    rx_line_open: bool,
 }
 
 impl Default for SessionState {
@@ -133,6 +134,7 @@ impl SessionState {
             active_picker: None,
             next_log_id: 4,
             next_sim_rx_seq: 0,
+            rx_line_open: false,
         }
     }
 
@@ -156,6 +158,7 @@ impl SessionState {
             active_picker: None,
             next_log_id: 1,
             next_sim_rx_seq: 0,
+            rx_line_open: false,
         }
     }
 
@@ -189,6 +192,7 @@ impl SessionState {
         self.connection = if connected {
             SimulatedConnectionState::Connected
         } else {
+            self.rx_line_open = false;
             SimulatedConnectionState::Disconnected
         };
     }
@@ -245,6 +249,7 @@ impl SessionState {
     /// Clears visible logs without resetting RX/TX byte counters.
     pub fn clear_receive_logs(&mut self) {
         self.logs.clear();
+        self.rx_line_open = false;
     }
 
     /// Returns the exact text currently visible in `LogView` for Save As export.
@@ -252,13 +257,44 @@ impl SessionState {
         format_visible_logs(&self.logs, self.receive.show_timestamp, self.receive.hex_mode)
     }
 
-    /// Appends received bytes (used by real serial backend) and updates RX counters.
-    /// Respects `receive.paused` and omits the simulated badge when in real mode.
+    /// Appends received bytes (used by real serial backend) with streaming `\n` line framing,
+    /// updating RX counters, respecting `receive.paused`, and omitting the simulated badge in real mode.
     #[allow(dead_code)]
     pub fn append_rx_bytes(&mut self, payload: &[u8], timestamp: &str) {
+        if payload.is_empty() {
+            return;
+        }
         self.counters.rx_bytes += payload.len() as u64;
-        let entry = self.build_log_entry(timestamp, LogDirection::Rx, payload.to_vec());
-        self.record_log(entry);
+
+        for chunk in payload.split_inclusive(|&b| b == b'\n') {
+            let appended = if self.rx_line_open {
+                let target = if self.receive.paused {
+                    &mut self.retained_while_paused
+                } else {
+                    &mut self.logs
+                };
+                if let Some(last) = target.last_mut()
+                    && last.direction == LogDirection::Rx
+                    && !last.bytes.ends_with(b"\n")
+                {
+                    last.bytes.extend_from_slice(chunk);
+                    if chunk.ends_with(b"\n") {
+                        self.rx_line_open = false;
+                    }
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+
+            if !appended {
+                let entry = self.build_log_entry(timestamp, LogDirection::Rx, chunk.to_vec());
+                self.record_log(entry);
+                self.rx_line_open = !chunk.ends_with(b"\n");
+            }
+        }
     }
 
     /// Injects a clearly-labelled simulated RX event.
@@ -340,6 +376,7 @@ impl SessionState {
     /// Records transmitted bytes after a successful serial write, updating TX counters
     /// and respecting `receive.paused`.
     pub fn record_tx_bytes(&mut self, payload: &[u8], timestamp: &str) {
+        self.rx_line_open = false;
         self.counters.tx_bytes += payload.len() as u64;
         let entry = self.build_log_entry(timestamp, LogDirection::Tx, payload.to_vec());
         self.record_log(entry);
@@ -760,5 +797,67 @@ mod tests {
         assert_eq!(state.logs[3].direction, LogDirection::Tx);
         assert_eq!(state.logs[3].bytes, b"T1");
         assert!(!state.logs[3].is_simulated);
+    }
+
+    #[test]
+    fn streaming_rx_line_framing_joins_fragments_and_splits_newlines() {
+        let mut state = SessionState::new_real_session(SerialConfig::default(), true);
+
+        // Empty payload is a no-op.
+        state.append_rx_bytes(b"", "15:10:00.000");
+        assert!(state.logs.is_empty());
+        assert_eq!(state.counters.rx_bytes, 0);
+
+        state.append_rx_bytes(b"I", "15:10:00.001");
+        state.append_rx_bytes(b": 35559\r\nI: 35563\r\n", "15:10:00.002");
+        state.append_rx_bytes(b"I: TH boo", "15:10:00.003");
+        state.append_rx_bytes(b"t=1\r\n", "15:10:00.004");
+
+        assert_eq!(state.logs.len(), 3);
+        assert_eq!(state.logs[0].bytes, b"I: 35559\r\n");
+        assert_eq!(state.logs[1].bytes, b"I: 35563\r\n");
+        assert_eq!(state.logs[2].bytes, b"I: TH boot=1\r\n");
+        assert_eq!(
+            state.counters.rx_bytes,
+            (b"I".len() + b": 35559\r\nI: 35563\r\n".len() + b"I: TH boo".len() + b"t=1\r\n".len())
+                as u64
+        );
+
+        // Text mode trims trailing \r\n, while HEX mode preserves 0D 0A.
+        assert_eq!(state.logs[0].format_payload(false), "I: 35559");
+        assert_eq!(
+            state.logs[0].format_payload(true),
+            "49 3A 20 33 35 35 35 39 0D 0A"
+        );
+        assert_eq!(state.logs[2].format_payload(false), "I: TH boot=1");
+    }
+
+    #[test]
+    fn streaming_rx_line_open_resets_on_tx_clear_and_disconnect() {
+        let mut state = SessionState::new_real_session(SerialConfig::default(), true);
+
+        // TX interrupts an open RX line.
+        state.append_rx_bytes(b"partial1", "15:11:00.001");
+        state.record_tx_bytes(b"AT\r\n", "15:11:00.002");
+        state.append_rx_bytes(b"next\n", "15:11:00.003");
+        assert_eq!(state.logs.len(), 3);
+        assert_eq!(state.logs[0].bytes, b"partial1");
+        assert_eq!(state.logs[2].bytes, b"next\n");
+
+        // Clear resets open line.
+        state.append_rx_bytes(b"partial2", "15:11:00.004");
+        state.clear_receive_logs();
+        state.append_rx_bytes(b"fresh\n", "15:11:00.005");
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs[0].bytes, b"fresh\n");
+
+        // Disconnect resets open line.
+        state.append_rx_bytes(b"partial3", "15:11:00.006");
+        state.set_connected(false);
+        state.set_connected(true);
+        state.append_rx_bytes(b"reconnected\n", "15:11:00.007");
+        assert_eq!(state.logs.len(), 3);
+        assert_eq!(state.logs[1].bytes, b"partial3");
+        assert_eq!(state.logs[2].bytes, b"reconnected\n");
     }
 }

@@ -59,12 +59,14 @@ impl LogEntry {
         }
     }
 
-    /// Formats payload as UTF-8 text or space-separated uppercase HEX bytes.
+    /// Formats payload as UTF-8 text (trimming trailing `\r`/`\n`) or space-separated uppercase HEX bytes.
     pub fn format_payload(&self, hex_mode: bool) -> String {
         if hex_mode {
             format_hex_bytes(&self.bytes)
         } else {
-            String::from_utf8_lossy(&self.bytes).into_owned()
+            String::from_utf8_lossy(&self.bytes)
+                .trim_end_matches(&['\r', '\n'][..])
+                .to_string()
         }
     }
 }
