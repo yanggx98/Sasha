@@ -5,7 +5,7 @@ use std::time::Duration;
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
-use gpui_kit::component::v_flex;
+use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -22,8 +22,8 @@ use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
 use crate::ui::send_card::SendCard;
 use crate::ui::start_page::{StartPage, StartPageState};
+use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
-use crate::ui::title_bar::AppTitleBar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPage {
@@ -31,12 +31,10 @@ pub enum AppPage {
     Workspace,
 }
 
-/// Root single-session application view.
-/// Owns `SessionState` as the shared state boundary for TASK-002 and TASK-003.
-pub struct SashaApp {
-    pub page: AppPage,
-    pub state: SessionState,
-    pub theme: NanoTheme,
+struct SessionTab {
+    id: u64,
+    page: AppPage,
+    state: SessionState,
     motion: UiMotionState,
     start_page: StartPageState,
     start_manual_port_input: Option<Entity<InputState>>,
@@ -45,10 +43,6 @@ pub struct SashaApp {
     _start_baud_sub: Option<Subscription>,
     serial_conn: Option<SerialConnection>,
     serial_rx_task: Option<Task<()>>,
-    picker_port_presets: Vec<String>,
-    picker_input: Option<Entity<InputState>>,
-    _picker_subscription: Option<Subscription>,
-    picker_error: Option<SharedString>,
     send_input: Option<Entity<TextareaState>>,
     _send_subscription: Option<Subscription>,
     send_error: Option<SharedString>,
@@ -61,8 +55,8 @@ pub struct SashaApp {
     log_selection: LogSelectionModel,
 }
 
-impl SashaApp {
-    pub fn new(cx: &mut Context<Self>) -> Self {
+impl SessionTab {
+    fn new(id: u64, cx: &mut Context<SashaApp>) -> Self {
         let state = SessionState::new_simulated_demo();
         let motion = UiMotionState::new(
             state.receive.hex_mode,
@@ -79,9 +73,9 @@ impl SashaApp {
             state.logs.len(),
         );
         Self {
+            id,
             page: AppPage::Start,
             state,
-            theme: NanoTheme::default(),
             motion,
             start_page: StartPageState::new(),
             start_manual_port_input: None,
@@ -90,10 +84,6 @@ impl SashaApp {
             _start_baud_sub: None,
             serial_conn: None,
             serial_rx_task: None,
-            picker_port_presets: Vec::new(),
-            picker_input: None,
-            _picker_subscription: None,
-            picker_error: None,
             send_input: None,
             _send_subscription: None,
             send_error: None,
@@ -104,6 +94,23 @@ impl SashaApp {
             last_tail_len: 0,
             last_display_flags: (true, false),
             log_selection,
+        }
+    }
+
+    fn tab_item(&self, active_id: u64) -> TabItem {
+        let title: SharedString = if self.page == AppPage::Start {
+            "新连接".into()
+        } else if self.state.is_simulated_session {
+            "模拟演示".into()
+        } else {
+            self.state.config.port.clone().into()
+        };
+        TabItem {
+            id: self.id,
+            title,
+            is_active: self.id == active_id,
+            is_connected: self.page == AppPage::Workspace && self.state.connection.is_connected(),
+            is_simulated: self.page == AppPage::Workspace && self.state.is_simulated_session,
         }
     }
 
@@ -126,501 +133,6 @@ impl SashaApp {
             self.state.receive.hex_mode,
             self.state.logs.len(),
         );
-    }
-
-    fn ensure_start_manual_port_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        if let Some(existing) = &self.start_manual_port_input {
-            return existing.clone();
-        }
-
-        let entity = cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
-        let entity_for_sub = entity.clone();
-        let sub = cx.subscribe_in(
-            &entity,
-            window,
-            move |this, _, event: &InputEvent, _window, cx| match event {
-                InputEvent::Change => {
-                    let raw = entity_for_sub.read(cx).value().to_string();
-                    this.start_page.set_manual_port_value(&raw);
-                    cx.notify();
-                }
-                InputEvent::PressEnter { .. } => {
-                    this.connect_from_start_page(cx);
-                }
-                _ => {}
-            },
-        );
-
-        self.start_manual_port_input = Some(entity.clone());
-        self._start_manual_port_sub = Some(sub);
-        entity
-    }
-
-    fn ensure_start_baud_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        if let Some(existing) = &self.start_baud_input {
-            return existing.clone();
-        }
-
-        let entity = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("输入正整数波特率（如 230400），回车确认")
-        });
-        let entity_for_sub = entity.clone();
-        let sub = cx.subscribe_in(
-            &entity,
-            window,
-            move |this, _, event: &InputEvent, _window, cx| match event {
-                InputEvent::Change => {
-                    if this.start_page.baud_error.is_some() {
-                        this.start_page.baud_error = None;
-                        cx.notify();
-                    }
-                }
-                InputEvent::PressEnter { .. } => {
-                    let raw = entity_for_sub.read(cx).value().to_string();
-                    let _ = this.start_page.apply_custom_baud(&raw);
-                    cx.notify();
-                }
-                _ => {}
-            },
-        );
-
-        self.start_baud_input = Some(entity.clone());
-        self._start_baud_sub = Some(sub);
-        entity
-    }
-
-    fn refresh_start_ports(&mut self, cx: &mut Context<Self>) {
-        self.start_page.refresh_ports(enumerate_serial_ports());
-        cx.notify();
-    }
-
-    fn select_start_port(&mut self, port_name: String, cx: &mut Context<Self>) {
-        self.start_page.select_detected_port(port_name);
-        cx.notify();
-    }
-
-    fn enable_start_manual_port(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.start_page.enable_manual_port();
-        let current_port = self.start_page.config.port.clone();
-        let input = self.ensure_start_manual_port_input(window, cx);
-        input.update(cx, |state, cx| {
-            if !current_port.is_empty() && state.value().is_empty() {
-                state.set_value(current_port, window, cx);
-            }
-            state.focus(window, cx);
-            state.select_all(window, cx);
-        });
-        let value = input.read(cx).value().to_string();
-        self.start_page.set_manual_port_value(&value);
-        cx.notify();
-    }
-
-    fn toggle_start_baud_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.start_page.baud_dropdown_open = !self.start_page.baud_dropdown_open;
-        self.start_page.baud_error = None;
-        if self.start_page.baud_dropdown_open {
-            let current_baud = self.start_page.config.baud_rate.to_string();
-            let input = self.ensure_start_baud_input(window, cx);
-            input.update(cx, |state, cx| {
-                state.set_value(current_baud, window, cx);
-                state.focus(window, cx);
-                state.select_all(window, cx);
-            });
-        }
-        cx.notify();
-    }
-
-    fn select_start_baud(&mut self, baud: u32, cx: &mut Context<Self>) {
-        self.start_page.select_baud_preset(baud);
-        cx.notify();
-    }
-
-    fn toggle_start_frame_expanded(&mut self, cx: &mut Context<Self>) {
-        self.start_page.frame_expanded = !self.start_page.frame_expanded;
-        cx.notify();
-    }
-
-    fn select_start_data_bits(&mut self, bits: DataBits, cx: &mut Context<Self>) {
-        self.start_page.config.data_bits = bits;
-        cx.notify();
-    }
-
-    fn select_start_parity(&mut self, parity: Parity, cx: &mut Context<Self>) {
-        self.start_page.config.parity = parity;
-        cx.notify();
-    }
-
-    fn select_start_stop_bits(&mut self, stop_bits: StopBits, cx: &mut Context<Self>) {
-        self.start_page.config.stop_bits = stop_bits;
-        cx.notify();
-    }
-
-    fn connect_from_start_page(&mut self, cx: &mut Context<Self>) {
-        if self.start_page.manual_port_mode
-            && let Some(input) = &self.start_manual_port_input
-        {
-            let raw = input.read(cx).value().to_string();
-            self.start_page.set_manual_port_value(&raw);
-        }
-
-        match SerialConnection::open(&self.start_page.config) {
-            Ok((conn, rx)) => {
-                self.disconnect_real_serial(None, cx);
-                self.state = SessionState::new_real_session(self.start_page.config.clone(), true);
-                self.sync_motion_and_selection_from_state();
-                self.send_input = None;
-                self._send_subscription = None;
-                self.send_error = None;
-                self.start_page.connect_error = None;
-                self.serial_conn = Some(conn);
-                self.page = AppPage::Workspace;
-                self.start_serial_rx_loop(rx, cx);
-                cx.notify();
-            }
-            Err(err) => {
-                self.start_page.connect_error = Some(err);
-                cx.notify();
-            }
-        }
-    }
-
-    fn enter_simulated_from_start_page(&mut self, cx: &mut Context<Self>) {
-        self.disconnect_real_serial(None, cx);
-        self.state = SessionState::new_simulated_demo();
-        self.sync_motion_and_selection_from_state();
-        self.send_input = None;
-        self._send_subscription = None;
-        self.send_error = None;
-        self.page = AppPage::Workspace;
-        cx.notify();
-    }
-
-    fn start_serial_rx_loop(&mut self, rx: Receiver<SerialEvent>, cx: &mut Context<Self>) {
-        self.serial_rx_task = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(Duration::from_millis(16))
-                    .await;
-
-                let mut rx_chunks: Vec<Vec<u8>> = Vec::new();
-                let mut disconnected_err: Option<String> = None;
-                let mut channel_closed = false;
-
-                loop {
-                    match rx.try_recv() {
-                        Ok(SerialEvent::Rx(bytes)) => rx_chunks.push(bytes),
-                        Ok(SerialEvent::Disconnected(err)) => {
-                            disconnected_err = Some(err);
-                            break;
-                        }
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            channel_closed = true;
-                            break;
-                        }
-                    }
-                }
-
-                let should_break = disconnected_err.is_some() || channel_closed;
-                if !rx_chunks.is_empty() || should_break {
-                    let updated = this.update(cx, |app, cx| {
-                        if !rx_chunks.is_empty() {
-                            let ts = current_timestamp_hms_ms();
-                            for chunk in rx_chunks {
-                                app.state.append_rx_bytes(&chunk, &ts);
-                            }
-                            app.log_selection.observe_log_len(app.state.logs.len());
-                        }
-                        if let Some(err) = disconnected_err {
-                            app.handle_serial_disconnected(Some(err), cx);
-                        } else if channel_closed && app.state.connection.is_connected() {
-                            app.handle_serial_disconnected(
-                                Some("串口读取通道已关闭".to_string()),
-                                cx,
-                            );
-                        } else {
-                            cx.notify();
-                        }
-                    });
-                    if updated.is_err() {
-                        break;
-                    }
-                }
-
-                if should_break {
-                    break;
-                }
-            }
-        }));
-    }
-
-    fn connect_real_serial(&mut self, cx: &mut Context<Self>) {
-        self.disconnect_real_serial(None, cx);
-        match SerialConnection::open(&self.state.config) {
-            Ok((conn, rx)) => {
-                self.serial_conn = Some(conn);
-                self.state.set_connected(true);
-                self.motion.connection.set(true);
-                self.send_error = None;
-                self.start_serial_rx_loop(rx, cx);
-            }
-            Err(err) => {
-                self.state.set_connected(false);
-                self.motion.connection.set(false);
-                self.send_error = Some(err.into());
-            }
-        }
-        cx.notify();
-    }
-
-    fn disconnect_real_serial(&mut self, error: Option<String>, cx: &mut Context<Self>) {
-        self.serial_rx_task = None;
-        if let Some(mut conn) = self.serial_conn.take() {
-            conn.close();
-        }
-        self.state.set_connected(false);
-        self.motion.connection.set(false);
-        if let Some(err) = error {
-            self.send_error = Some(err.into());
-        }
-        cx.notify();
-    }
-
-    fn handle_serial_disconnected(&mut self, error: Option<String>, cx: &mut Context<Self>) {
-        self.disconnect_real_serial(error, cx);
-    }
-
-    fn toggle_connection(&mut self, cx: &mut Context<Self>) {
-        if self.state.is_simulated_session {
-            self.toggle_simulated_connection(cx);
-        } else if self.state.connection.is_connected() {
-            self.disconnect_real_serial(None, cx);
-        } else {
-            self.connect_real_serial(cx);
-        }
-    }
-
-    fn ensure_send_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<TextareaState> {
-        if let Some(existing) = &self.send_input {
-            return existing.clone();
-        }
-
-        let initial_text = self.state.send.text.clone();
-        let placeholder = if self.state.is_simulated_session {
-            "输入发送内容（模拟）"
-        } else {
-            "输入发送内容"
-        };
-        let entity = cx.new(|cx| {
-            TextareaState::new(window, cx)
-                .placeholder(placeholder)
-                .default_value(initial_text)
-        });
-        let entity_for_sub = entity.clone();
-        let sub = cx.subscribe_in(
-            &entity,
-            window,
-            move |this, _, event: &InputEvent, window, cx| match event {
-                InputEvent::Change => {
-                    let raw = entity_for_sub.read(cx).value().to_string();
-                    if this.state.send.display_hex {
-                        let cursor = entity_for_sub.read(cx).cursor();
-                        let (formatted, next_cursor) = format_hex_input_with_cursor(&raw, cursor);
-                        if formatted != raw {
-                            this.state.send.text = formatted.clone();
-                            entity_for_sub.update(cx, |state, cx| {
-                                state.set_value(formatted, window, cx);
-                                state.set_cursor_position(
-                                    gpui_kit::component::input::Position::new(
-                                        0,
-                                        next_cursor as u32,
-                                    ),
-                                    window,
-                                    cx,
-                                );
-                            });
-                            if this.send_error.is_some() {
-                                this.send_error = None;
-                            }
-                            cx.notify();
-                            return;
-                        }
-                    }
-                    this.state.send.text = raw;
-                    if this.send_error.is_some() {
-                        this.send_error = None;
-                    }
-                    cx.notify();
-                }
-                InputEvent::PressEnter {
-                    secondary: true, ..
-                } => {
-                    this.submit_send(cx);
-                }
-                _ => {}
-            },
-        );
-
-        self.send_input = Some(entity.clone());
-        self._send_subscription = Some(sub);
-        entity
-    }
-
-    fn ensure_picker_input(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Entity<InputState> {
-        if let Some(existing) = &self.picker_input {
-            return existing.clone();
-        }
-
-        let entity =
-            cx.new(|cx| InputState::new(window, cx).placeholder("输入参数值或从下方选择预设"));
-        let sub = cx.subscribe_in(
-            &entity,
-            window,
-            |this, _, event: &InputEvent, _window, cx| match event {
-                InputEvent::PressEnter { .. } => {
-                    this.apply_picker_input(cx);
-                }
-                InputEvent::Change if this.picker_error.is_some() => {
-                    this.picker_error = None;
-                    cx.notify();
-                }
-                _ => {}
-            },
-        );
-
-        self.picker_input = Some(entity.clone());
-        self._picker_subscription = Some(sub);
-        entity
-    }
-
-    pub fn open_picker(
-        &mut self,
-        kind: ActivePickerKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.state.active_picker == Some(kind) {
-            self.cancel_picker(cx);
-            return;
-        }
-
-        self.state.active_picker = Some(kind);
-        self.motion.picker_open_epoch += 1;
-        self.picker_error = None;
-        if kind == ActivePickerKind::Port && !self.state.is_simulated_session {
-            self.picker_port_presets = enumerate_serial_ports()
-                .into_iter()
-                .map(|p| p.name)
-                .collect();
-        }
-
-        let current_val = self.state.config.current_value_str(kind);
-        let input = self.ensure_picker_input(window, cx);
-        input.update(cx, |state, cx| {
-            state.set_placeholder(kind.placeholder(), window, cx);
-            state.set_value(current_val, window, cx);
-            state.focus(window, cx);
-            state.select_all(window, cx);
-        });
-        cx.notify();
-    }
-
-    pub fn apply_picker_value(&mut self, raw: &str, cx: &mut Context<Self>) {
-        let Some(kind) = self.state.active_picker else {
-            return;
-        };
-
-        match self.state.config.apply_picker_value(kind, raw) {
-            Ok(()) => {
-                self.state.active_picker = None;
-                self.picker_error = None;
-                if !self.state.is_simulated_session && self.state.connection.is_connected() {
-                    self.disconnect_real_serial(None, cx);
-                    return;
-                }
-            }
-            Err(err) => {
-                self.picker_error = Some(err.into());
-            }
-        }
-        cx.notify();
-    }
-
-    pub fn apply_picker_input(&mut self, cx: &mut Context<Self>) {
-        let raw = self
-            .picker_input
-            .as_ref()
-            .map(|input| input.read(cx).value().to_string())
-            .unwrap_or_default();
-        self.apply_picker_value(&raw, cx);
-    }
-
-    pub fn cancel_picker(&mut self, cx: &mut Context<Self>) {
-        if self.state.active_picker.is_some() || self.picker_error.is_some() {
-            self.state.active_picker = None;
-            self.picker_error = None;
-            cx.notify();
-        }
-    }
-
-    pub fn toggle_simulated_connection(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_simulated_connection();
-        self.motion
-            .connection
-            .set(self.state.connection.is_connected());
-        if self.state.connection.is_connected() {
-            self.send_error = None;
-        }
-        cx.notify();
-    }
-
-    pub fn toggle_receive_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.state.toggle_receive_hex();
-        self.motion.rx_hex.set(self.state.receive.hex_mode);
-        self.sync_log_selection(window, cx);
-        cx.notify();
-    }
-
-    pub fn toggle_receive_timestamp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.state.toggle_receive_timestamp();
-        self.motion
-            .rx_timestamp
-            .set(self.state.receive.show_timestamp);
-        self.sync_log_selection(window, cx);
-        cx.notify();
-    }
-
-    pub fn toggle_receive_pause(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_receive_pause();
-        self.motion.rx_pause.set(self.state.receive.paused);
-        cx.notify();
-    }
-
-    pub fn toggle_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_auto_scroll();
-        self.motion
-            .rx_auto_scroll
-            .set(self.state.receive.auto_scroll);
-        if self.state.receive.auto_scroll {
-            self.log_list_state.scroll_to_end();
-        }
-        cx.notify();
     }
 
     fn sync_log_list_state(&mut self) {
@@ -664,17 +176,783 @@ impl SashaApp {
         self.last_display_flags = display_flags;
     }
 
+    fn disconnect_real_serial(&mut self, error: Option<String>) {
+        self.serial_rx_task = None;
+        if let Some(mut conn) = self.serial_conn.take() {
+            conn.close();
+        }
+        self.state.set_connected(false);
+        self.motion.connection.set(false);
+        if let Some(err) = error {
+            self.send_error = Some(err.into());
+        }
+    }
+}
+
+pub struct SashaApp {
+    tabs: Vec<SessionTab>,
+    active_tab_id: u64,
+    next_tab_id: u64,
+    theme: NanoTheme,
+    picker_port_presets: Vec<String>,
+    picker_input: Option<Entity<InputState>>,
+    _picker_subscription: Option<Subscription>,
+    picker_error: Option<SharedString>,
+}
+
+impl SashaApp {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        let initial_tab = SessionTab::new(1, cx);
+        Self {
+            tabs: vec![initial_tab],
+            active_tab_id: 1,
+            next_tab_id: 2,
+            theme: NanoTheme::default(),
+            picker_port_presets: Vec::new(),
+            picker_input: None,
+            _picker_subscription: None,
+            picker_error: None,
+        }
+    }
+
+    fn active_tab(&self) -> &SessionTab {
+        self.tabs
+            .iter()
+            .find(|t| t.id == self.active_tab_id)
+            .unwrap_or(&self.tabs[0])
+    }
+
+    fn active_tab_mut(&mut self) -> &mut SessionTab {
+        let active_id = self.active_tab_id;
+        let idx = self
+            .tabs
+            .iter()
+            .position(|t| t.id == active_id)
+            .unwrap_or(0);
+        &mut self.tabs[idx]
+    }
+
+    fn tab_mut(&mut self, tab_id: u64) -> Option<&mut SessionTab> {
+        self.tabs.iter_mut().find(|t| t.id == tab_id)
+    }
+
+    fn tab_items(&self) -> Vec<TabItem> {
+        self.tabs
+            .iter()
+            .map(|t| t.tab_item(self.active_tab_id))
+            .collect()
+    }
+
+    fn dismiss_picker_state(&mut self) {
+        self.picker_error = None;
+        for tab in &mut self.tabs {
+            tab.state.active_picker = None;
+        }
+    }
+
+    fn select_tab(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab_id == tab_id || !self.tabs.iter().any(|t| t.id == tab_id) {
+            return;
+        }
+        self.dismiss_picker_state();
+        TextSelection::clear(window, cx);
+        self.active_tab_id = tab_id;
+        cx.notify();
+    }
+
+    fn new_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_picker_state();
+        TextSelection::clear(window, cx);
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let tab = SessionTab::new(id, cx);
+        self.tabs.push(tab);
+        self.active_tab_id = id;
+        cx.notify();
+    }
+
+    fn close_tab(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(idx) = self.tabs.iter().position(|t| t.id == tab_id) else {
+            return;
+        };
+        self.dismiss_picker_state();
+        self.tabs[idx].disconnect_real_serial(None);
+        self.tabs.remove(idx);
+
+        if self.tabs.is_empty() {
+            window.remove_window();
+            return;
+        }
+
+        if self.active_tab_id == tab_id {
+            let next_idx = idx.min(self.tabs.len() - 1);
+            self.active_tab_id = self.tabs[next_idx].id;
+            TextSelection::clear(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn cycle_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let Some(idx) = self.tabs.iter().position(|t| t.id == self.active_tab_id) else {
+            return;
+        };
+        let next_idx = (idx as isize + delta).rem_euclid(self.tabs.len() as isize) as usize;
+        let next_id = self.tabs[next_idx].id;
+        self.select_tab(next_id, window, cx);
+    }
+
+    fn handle_tab_shortcut(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mods = &event.keystroke.modifiers;
+        if !mods.control || mods.alt || mods.platform {
+            return false;
+        }
+
+        if event.keystroke.key.eq_ignore_ascii_case("t") && !mods.shift {
+            self.new_tab(window, cx);
+            return true;
+        }
+        if event.keystroke.key.eq_ignore_ascii_case("w") && !mods.shift {
+            let active_id = self.active_tab_id;
+            self.close_tab(active_id, window, cx);
+            return true;
+        }
+        if event.keystroke.key.eq_ignore_ascii_case("tab") {
+            let delta = if mods.shift { -1 } else { 1 };
+            self.cycle_tab(delta, window, cx);
+            return true;
+        }
+        if !mods.shift
+            && let Some(digit) = event.keystroke.key.parse::<usize>().ok()
+            && (1..=9).contains(&digit)
+        {
+            let target_idx = if digit == 9 {
+                self.tabs.len().saturating_sub(1)
+            } else {
+                digit - 1
+            };
+            if let Some(tab) = self.tabs.get(target_idx) {
+                let id = tab.id;
+                self.select_tab(id, window, cx);
+            }
+            return true;
+        }
+        false
+    }
+
+    fn ensure_start_manual_port_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = self
+            .tab_mut(tab_id)
+            .and_then(|t| t.start_manual_port_input.clone())
+        {
+            return existing;
+        }
+
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
+        let entity_for_sub = entity.clone();
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        tab.start_page.set_manual_port_value(&raw);
+                    }
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    if this.active_tab_id == tab_id {
+                        this.connect_from_start_page(cx);
+                    }
+                }
+                _ => {}
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.start_manual_port_input = Some(entity.clone());
+            tab._start_manual_port_sub = Some(sub);
+        }
+        entity
+    }
+
+    fn ensure_start_baud_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = self
+            .tab_mut(tab_id)
+            .and_then(|t| t.start_baud_input.clone())
+        {
+            return existing;
+        }
+
+        let entity = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("输入正整数波特率（如 230400），回车确认")
+        });
+        let entity_for_sub = entity.clone();
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    if let Some(tab) = this.tab_mut(tab_id)
+                        && tab.start_page.baud_error.is_some()
+                    {
+                        tab.start_page.baud_error = None;
+                        cx.notify();
+                    }
+                }
+                InputEvent::PressEnter { .. } => {
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        let _ = tab.start_page.apply_custom_baud(&raw);
+                    }
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.start_baud_input = Some(entity.clone());
+            tab._start_baud_sub = Some(sub);
+        }
+        entity
+    }
+
+    fn refresh_start_ports(&mut self, cx: &mut Context<Self>) {
+        self.active_tab_mut()
+            .start_page
+            .refresh_ports(enumerate_serial_ports());
+        cx.notify();
+    }
+
+    fn select_start_port(&mut self, port_name: String, cx: &mut Context<Self>) {
+        self.active_tab_mut()
+            .start_page
+            .select_detected_port(port_name);
+        cx.notify();
+    }
+
+    fn enable_start_manual_port(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let current_port = {
+            let tab = self.active_tab_mut();
+            tab.start_page.enable_manual_port();
+            tab.start_page.config.port.clone()
+        };
+        let input = self.ensure_start_manual_port_input(tab_id, window, cx);
+        input.update(cx, |state, cx| {
+            if !current_port.is_empty() && state.value().is_empty() {
+                state.set_value(current_port, window, cx);
+            }
+            state.focus(window, cx);
+            state.select_all(window, cx);
+        });
+        let value = input.read(cx).value().to_string();
+        self.active_tab_mut()
+            .start_page
+            .set_manual_port_value(&value);
+        cx.notify();
+    }
+
+    fn toggle_start_baud_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let (opened, current_baud) = {
+            let tab = self.active_tab_mut();
+            tab.start_page.baud_dropdown_open = !tab.start_page.baud_dropdown_open;
+            tab.start_page.baud_error = None;
+            (
+                tab.start_page.baud_dropdown_open,
+                tab.start_page.config.baud_rate.to_string(),
+            )
+        };
+        if opened {
+            let input = self.ensure_start_baud_input(tab_id, window, cx);
+            input.update(cx, |state, cx| {
+                state.set_value(current_baud, window, cx);
+                state.focus(window, cx);
+                state.select_all(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn select_start_baud(&mut self, baud: u32, cx: &mut Context<Self>) {
+        self.active_tab_mut().start_page.select_baud_preset(baud);
+        cx.notify();
+    }
+
+    fn toggle_start_frame_expanded(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.start_page.frame_expanded = !tab.start_page.frame_expanded;
+        cx.notify();
+    }
+
+    fn select_start_data_bits(&mut self, bits: DataBits, cx: &mut Context<Self>) {
+        self.active_tab_mut().start_page.config.data_bits = bits;
+        cx.notify();
+    }
+
+    fn select_start_parity(&mut self, parity: Parity, cx: &mut Context<Self>) {
+        self.active_tab_mut().start_page.config.parity = parity;
+        cx.notify();
+    }
+
+    fn select_start_stop_bits(&mut self, stop_bits: StopBits, cx: &mut Context<Self>) {
+        self.active_tab_mut().start_page.config.stop_bits = stop_bits;
+        cx.notify();
+    }
+
+    fn connect_from_start_page(&mut self, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let manual_raw = {
+            let tab = self.active_tab();
+            if tab.start_page.manual_port_mode {
+                tab.start_manual_port_input
+                    .as_ref()
+                    .map(|input| input.read(cx).value().to_string())
+            } else {
+                None
+            }
+        };
+        if let Some(raw) = manual_raw {
+            self.active_tab_mut().start_page.set_manual_port_value(&raw);
+        }
+
+        let config = self.active_tab().start_page.config.clone();
+        match SerialConnection::open(&config) {
+            Ok((conn, rx)) => {
+                let tab = self.active_tab_mut();
+                tab.disconnect_real_serial(None);
+                tab.state = SessionState::new_real_session(config, true);
+                tab.sync_motion_and_selection_from_state();
+                tab.send_input = None;
+                tab._send_subscription = None;
+                tab.send_error = None;
+                tab.start_page.connect_error = None;
+                tab.serial_conn = Some(conn);
+                tab.page = AppPage::Workspace;
+                self.start_serial_rx_loop(tab_id, rx, cx);
+                cx.notify();
+            }
+            Err(err) => {
+                self.active_tab_mut().start_page.connect_error = Some(err);
+                cx.notify();
+            }
+        }
+    }
+
+    fn enter_simulated_from_start_page(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.disconnect_real_serial(None);
+        tab.state = SessionState::new_simulated_demo();
+        tab.sync_motion_and_selection_from_state();
+        tab.send_input = None;
+        tab._send_subscription = None;
+        tab.send_error = None;
+        tab.page = AppPage::Workspace;
+        cx.notify();
+    }
+
+    fn start_serial_rx_loop(
+        &mut self,
+        tab_id: u64,
+        rx: Receiver<SerialEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+
+                let mut rx_chunks: Vec<Vec<u8>> = Vec::new();
+                let mut disconnected_err: Option<String> = None;
+                let mut channel_closed = false;
+
+                loop {
+                    match rx.try_recv() {
+                        Ok(SerialEvent::Rx(bytes)) => rx_chunks.push(bytes),
+                        Ok(SerialEvent::Disconnected(err)) => {
+                            disconnected_err = Some(err);
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            channel_closed = true;
+                            break;
+                        }
+                    }
+                }
+
+                let should_break = disconnected_err.is_some() || channel_closed;
+                if !rx_chunks.is_empty() || should_break {
+                    let updated = this.update(cx, |app, cx| {
+                        let is_active = app.active_tab_id == tab_id;
+                        let Some(tab) = app.tab_mut(tab_id) else {
+                            return false;
+                        };
+                        if !rx_chunks.is_empty() {
+                            let ts = current_timestamp_hms_ms();
+                            for chunk in rx_chunks {
+                                tab.state.append_rx_bytes(&chunk, &ts);
+                            }
+                            tab.log_selection.observe_log_len(tab.state.logs.len());
+                        }
+                        if let Some(err) = disconnected_err {
+                            tab.disconnect_real_serial(Some(err));
+                            cx.notify();
+                        } else if channel_closed && tab.state.connection.is_connected() {
+                            tab.disconnect_real_serial(Some("串口读取通道已关闭".to_string()));
+                            cx.notify();
+                        } else if is_active {
+                            cx.notify();
+                        }
+                        true
+                    });
+                    match updated {
+                        Ok(true) => {}
+                        _ => break,
+                    }
+                }
+
+                if should_break {
+                    break;
+                }
+            }
+        });
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.serial_rx_task = Some(task);
+        }
+    }
+
+    fn connect_real_serial(&mut self, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let config = {
+            let tab = self.active_tab_mut();
+            tab.disconnect_real_serial(None);
+            tab.state.config.clone()
+        };
+        match SerialConnection::open(&config) {
+            Ok((conn, rx)) => {
+                let tab = self.active_tab_mut();
+                tab.serial_conn = Some(conn);
+                tab.state.set_connected(true);
+                tab.motion.connection.set(true);
+                tab.send_error = None;
+                self.start_serial_rx_loop(tab_id, rx, cx);
+            }
+            Err(err) => {
+                let tab = self.active_tab_mut();
+                tab.state.set_connected(false);
+                tab.motion.connection.set(false);
+                tab.send_error = Some(err.into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn disconnect_real_serial(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.active_tab_mut().disconnect_real_serial(error);
+        cx.notify();
+    }
+
+    fn handle_serial_disconnected(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.disconnect_real_serial(error, cx);
+    }
+
+    fn toggle_connection(&mut self, cx: &mut Context<Self>) {
+        let is_sim = self.active_tab().state.is_simulated_session;
+        let is_conn = self.active_tab().state.connection.is_connected();
+        if is_sim {
+            self.toggle_simulated_connection(cx);
+        } else if is_conn {
+            self.disconnect_real_serial(None, cx);
+        } else {
+            self.connect_real_serial(cx);
+        }
+    }
+
+    fn ensure_send_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<TextareaState> {
+        if let Some(existing) = self.tab_mut(tab_id).and_then(|t| t.send_input.clone()) {
+            return existing;
+        }
+
+        let (initial_text, is_sim) = self
+            .tab_mut(tab_id)
+            .map(|t| (t.state.send.text.clone(), t.state.is_simulated_session))
+            .unwrap_or_default();
+        let placeholder = if is_sim {
+            "输入发送内容（模拟）"
+        } else {
+            "输入发送内容"
+        };
+        let entity = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder(placeholder)
+                .default_value(initial_text)
+        });
+        let entity_for_sub = entity.clone();
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _, event: &InputEvent, window, cx| match event {
+                InputEvent::Change => {
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    let display_hex = this
+                        .tab_mut(tab_id)
+                        .is_some_and(|t| t.state.send.display_hex);
+                    if display_hex {
+                        let cursor = entity_for_sub.read(cx).cursor();
+                        let (formatted, next_cursor) = format_hex_input_with_cursor(&raw, cursor);
+                        if formatted != raw {
+                            if let Some(tab) = this.tab_mut(tab_id) {
+                                tab.state.send.text = formatted.clone();
+                                if tab.send_error.is_some() {
+                                    tab.send_error = None;
+                                }
+                            }
+                            entity_for_sub.update(cx, |state, cx| {
+                                state.set_value(formatted, window, cx);
+                                state.set_cursor_position(
+                                    gpui_kit::component::input::Position::new(
+                                        0,
+                                        next_cursor as u32,
+                                    ),
+                                    window,
+                                    cx,
+                                );
+                            });
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        tab.state.send.text = raw;
+                        if tab.send_error.is_some() {
+                            tab.send_error = None;
+                        }
+                    }
+                    cx.notify();
+                }
+                InputEvent::PressEnter {
+                    secondary: true, ..
+                } => {
+                    if this.active_tab_id == tab_id {
+                        this.submit_send(cx);
+                    }
+                }
+                _ => {}
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.send_input = Some(entity.clone());
+            tab._send_subscription = Some(sub);
+        }
+        entity
+    }
+
+    fn ensure_picker_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = &self.picker_input {
+            return existing.clone();
+        }
+
+        let entity =
+            cx.new(|cx| InputState::new(window, cx).placeholder("输入参数值或从下方选择预设"));
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::PressEnter { .. } => {
+                    this.apply_picker_input(cx);
+                }
+                InputEvent::Change if this.picker_error.is_some() => {
+                    this.picker_error = None;
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
+        self.picker_input = Some(entity.clone());
+        self._picker_subscription = Some(sub);
+        entity
+    }
+
+    pub fn open_picker(
+        &mut self,
+        kind: ActivePickerKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_tab().state.active_picker == Some(kind) {
+            self.cancel_picker(cx);
+            return;
+        }
+
+        let (is_sim, current_val) = {
+            let tab = self.active_tab_mut();
+            tab.state.active_picker = Some(kind);
+            tab.motion.picker_open_epoch += 1;
+            (
+                tab.state.is_simulated_session,
+                tab.state.config.current_value_str(kind),
+            )
+        };
+        self.picker_error = None;
+        if kind == ActivePickerKind::Port && !is_sim {
+            self.picker_port_presets = enumerate_serial_ports()
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
+        }
+
+        let input = self.ensure_picker_input(window, cx);
+        input.update(cx, |state, cx| {
+            state.set_placeholder(kind.placeholder(), window, cx);
+            state.set_value(current_val, window, cx);
+            state.focus(window, cx);
+            state.select_all(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn apply_picker_value(&mut self, raw: &str, cx: &mut Context<Self>) {
+        let Some(kind) = self.active_tab().state.active_picker else {
+            return;
+        };
+
+        let result = self
+            .active_tab_mut()
+            .state
+            .config
+            .apply_picker_value(kind, raw);
+        match result {
+            Ok(()) => {
+                self.picker_error = None;
+                let should_disconnect = {
+                    let tab = self.active_tab_mut();
+                    tab.state.active_picker = None;
+                    !tab.state.is_simulated_session && tab.state.connection.is_connected()
+                };
+                if should_disconnect {
+                    self.disconnect_real_serial(None, cx);
+                    return;
+                }
+            }
+            Err(err) => {
+                self.picker_error = Some(err.into());
+            }
+        }
+        cx.notify();
+    }
+
+    pub fn apply_picker_input(&mut self, cx: &mut Context<Self>) {
+        let raw = self
+            .picker_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string())
+            .unwrap_or_default();
+        self.apply_picker_value(&raw, cx);
+    }
+
+    pub fn cancel_picker(&mut self, cx: &mut Context<Self>) {
+        if self.active_tab().state.active_picker.is_some() || self.picker_error.is_some() {
+            self.active_tab_mut().state.active_picker = None;
+            self.picker_error = None;
+            cx.notify();
+        }
+    }
+
+    pub fn toggle_simulated_connection(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.toggle_simulated_connection();
+        tab.motion
+            .connection
+            .set(tab.state.connection.is_connected());
+        if tab.state.connection.is_connected() {
+            tab.send_error = None;
+        }
+        cx.notify();
+    }
+
+    pub fn toggle_receive_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.toggle_receive_hex();
+        tab.motion.rx_hex.set(tab.state.receive.hex_mode);
+        self.sync_log_selection(window, cx);
+        cx.notify();
+    }
+
+    pub fn toggle_receive_timestamp(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.toggle_receive_timestamp();
+        tab.motion
+            .rx_timestamp
+            .set(tab.state.receive.show_timestamp);
+        self.sync_log_selection(window, cx);
+        cx.notify();
+    }
+
+    pub fn toggle_receive_pause(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.toggle_receive_pause();
+        tab.motion.rx_pause.set(tab.state.receive.paused);
+        cx.notify();
+    }
+
+    pub fn toggle_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.toggle_auto_scroll();
+        tab.motion
+            .rx_auto_scroll
+            .set(tab.state.receive.auto_scroll);
+        if tab.state.receive.auto_scroll {
+            tab.log_list_state.scroll_to_end();
+        }
+        cx.notify();
+    }
+
     pub fn clear_receive_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.state.clear_receive_logs();
+        self.active_tab_mut().state.clear_receive_logs();
         self.sync_log_selection(window, cx);
         cx.notify();
     }
 
     fn sync_log_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let invalidate = self.log_selection.sync_display(
-            self.state.receive.show_timestamp,
-            self.state.receive.hex_mode,
-            self.state.logs.len(),
+        let tab = self.active_tab_mut();
+        let invalidate = tab.log_selection.sync_display(
+            tab.state.receive.show_timestamp,
+            tab.state.receive.hex_mode,
+            tab.state.logs.len(),
         );
         if invalidate {
             TextSelection::clear(window, cx);
@@ -683,6 +961,7 @@ impl SashaApp {
 
     fn editor_owns_copy(&self, window: &Window, cx: &App) -> bool {
         let send_focused = self
+            .active_tab()
             .send_input
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
@@ -695,8 +974,9 @@ impl SashaApp {
 
     fn copy_log_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let selected = TextSelection::selected_text(window, cx);
-        self.log_selection.set_selected_text(&selected);
-        let Some(text) = self.log_selection.copy_payload() else {
+        let tab = self.active_tab_mut();
+        tab.log_selection.set_selected_text(&selected);
+        let Some(text) = tab.log_selection.copy_payload() else {
             return false;
         };
         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -704,7 +984,7 @@ impl SashaApp {
     }
 
     pub fn save_receive_logs(&mut self, cx: &mut Context<Self>) {
-        let content_to_save = self.state.visible_log_export_text();
+        let content_to_save = self.active_tab().state.visible_log_export_text();
         let suggested_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("sasha-log.txt"));
@@ -718,81 +998,95 @@ impl SashaApp {
     }
 
     pub fn inject_simulated_rx_event(&mut self, cx: &mut Context<Self>) {
-        self.state
+        self.active_tab_mut()
+            .state
             .inject_next_deterministic_simulated_rx(current_timestamp_hms_ms());
         cx.notify();
     }
 
     pub fn toggle_send_display_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(input) = &self.send_input {
-            self.state.send.text = input.read(cx).value().to_string();
+        let send_input = self.active_tab().send_input.clone();
+        if let Some(input) = &send_input {
+            let value = input.read(cx).value().to_string();
+            self.active_tab_mut().state.send.text = value;
         }
 
-        match self.state.toggle_send_display_hex() {
+        let res = self.active_tab_mut().state.toggle_send_display_hex();
+        match res {
             Ok(()) => {
-                self.motion
-                    .tx_display_hex
-                    .set(self.state.send.display_hex);
-                self.send_error = None;
-                if let Some(input) = &self.send_input {
-                    let next_text = self.state.send.text.clone();
+                let (display_hex, next_text) = {
+                    let tab = self.active_tab_mut();
+                    tab.motion.tx_display_hex.set(tab.state.send.display_hex);
+                    tab.send_error = None;
+                    (tab.state.send.display_hex, tab.state.send.text.clone())
+                };
+                let _ = display_hex;
+                if let Some(input) = &send_input {
                     input.update(cx, |state, cx| {
                         state.set_value(next_text, window, cx);
                     });
                 }
             }
             Err(err) => {
-                self.send_error = Some(err.into());
+                self.active_tab_mut().send_error = Some(err.into());
             }
         }
         cx.notify();
     }
 
     pub fn toggle_send_format_hex(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_send_format_hex();
-        self.motion.tx_send_hex.set(self.state.send.send_hex);
-        self.send_error = None;
+        let tab = self.active_tab_mut();
+        tab.state.toggle_send_format_hex();
+        tab.motion.tx_send_hex.set(tab.state.send.send_hex);
+        tab.send_error = None;
         cx.notify();
     }
 
     pub fn submit_send(&mut self, cx: &mut Context<Self>) {
-        if let Some(input) = &self.send_input {
-            self.state.send.text = input.read(cx).value().to_string();
+        let send_input = self.active_tab().send_input.clone();
+        if let Some(input) = &send_input {
+            let value = input.read(cx).value().to_string();
+            self.active_tab_mut().state.send.text = value;
         }
 
-        if self.state.is_simulated_session {
-            match self
+        let is_simulated = self.active_tab().state.is_simulated_session;
+        if is_simulated {
+            let res = self
+                .active_tab_mut()
                 .state
-                .submit_send_with_timestamp(current_timestamp_hms_ms())
-            {
+                .submit_send_with_timestamp(current_timestamp_hms_ms());
+            match res {
                 Ok(_) => {
-                    self.send_error = None;
+                    self.active_tab_mut().send_error = None;
                 }
                 Err(SendPayloadError::Disconnected) => {
-                    self.send_error = Some("模拟未连接：请先点击底栏“模拟连接”".into());
+                    self.active_tab_mut().send_error =
+                        Some("模拟未连接：请先点击底栏“模拟连接”".into());
                 }
                 Err(SendPayloadError::EmptyInput) => {
-                    self.send_error = Some("发送内容为空，未提交".into());
+                    self.active_tab_mut().send_error = Some("发送内容为空，未提交".into());
                 }
                 Err(SendPayloadError::InvalidHex(msg)) => {
-                    self.send_error = Some(msg.into());
+                    self.active_tab_mut().send_error = Some(msg.into());
                 }
             }
             cx.notify();
             return;
         }
 
-        match self.state.prepare_send_bytes() {
+        let prepared = self.active_tab().state.prepare_send_bytes();
+        match prepared {
             Ok(bytes) => {
-                if let Some(conn) = self.serial_conn.as_mut() {
+                let tab = self.active_tab_mut();
+                if let Some(conn) = tab.serial_conn.as_mut() {
                     match conn.write_bytes(&bytes) {
                         Ok(()) => {
-                            self.state
+                            tab.state
                                 .record_tx_bytes(&bytes, &current_timestamp_hms_ms());
-                            self.send_error = None;
+                            tab.send_error = None;
                         }
                         Err(err) => {
-                            self.send_error = Some(err.into());
+                            tab.send_error = Some(err.into());
                         }
                     }
                 } else {
@@ -804,24 +1098,70 @@ impl SashaApp {
                 }
             }
             Err(SendPayloadError::Disconnected) => {
-                self.send_error = Some("串口未连接：请先点击底栏“连接”".into());
+                self.active_tab_mut().send_error = Some("串口未连接：请先点击底栏“连接”".into());
             }
             Err(SendPayloadError::EmptyInput) => {
-                self.send_error = Some("发送内容为空，未提交".into());
+                self.active_tab_mut().send_error = Some("发送内容为空，未提交".into());
             }
             Err(SendPayloadError::InvalidHex(msg)) => {
-                self.send_error = Some(msg.into());
+                self.active_tab_mut().send_error = Some(msg.into());
             }
         }
         cx.notify();
+    }
+
+    fn build_tab_rail(&self, cx: &mut Context<Self>) -> TabRail {
+        let weak = cx.entity().downgrade();
+        let on_select_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.select_tab(tab_id, window, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_close_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.close_tab(tab_id, window, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_new_tab = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.new_tab(window, cx));
+        });
+
+        TabRail::new(
+            self.theme,
+            self.tab_items(),
+            on_select_tab,
+            on_close_tab,
+            on_new_tab,
+        )
+    }
+
+    fn build_top_bar(&self) -> impl IntoElement {
+        div()
+            .relative()
+            .w_full()
+            .h(px(34.))
+            .flex_shrink_0()
+            .bg(self.theme.bg_canvas)
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .w(TAB_RAIL_WIDTH)
+                    .h_full()
+                    .bg(self.theme.bg_strip),
+            )
+            .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_b_0())
     }
 }
 
 impl Render for SashaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        if self.page == AppPage::Start {
-            let manual_port_input = self.ensure_start_manual_port_input(window, cx);
-            let baud_input = self.ensure_start_baud_input(window, cx);
+        let tab_rail = self.build_tab_rail(cx);
+        let active_id = self.active_tab_id;
+
+        if self.active_tab().page == AppPage::Start {
+            let manual_port_input = self.ensure_start_manual_port_input(active_id, window, cx);
+            let baud_input = self.ensure_start_baud_input(active_id, window, cx);
+            let start_page_state = self.active_tab().start_page.clone();
 
             let weak = cx.entity().downgrade();
             let on_refresh_ports = Rc::new(move |_: &mut Window, cx: &mut App| {
@@ -876,30 +1216,70 @@ impl Render for SashaApp {
                 .size_full()
                 .bg(self.theme.bg_canvas)
                 .text_color(self.theme.text_primary)
-                .child(AppTitleBar::new(self.theme, false))
-                .child(StartPage::new(
-                    self.theme,
-                    self.start_page.clone(),
-                    manual_port_input,
-                    baud_input,
-                    on_refresh_ports,
-                    on_select_port,
-                    on_enable_manual_port,
-                    on_toggle_baud_dropdown,
-                    on_select_baud,
-                    on_toggle_frame_expanded,
-                    on_select_data_bits,
-                    on_select_parity,
-                    on_select_stop_bits,
-                    on_connect,
-                    on_enter_simulated,
-                ))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if this.handle_tab_shortcut(event, window, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(self.build_top_bar())
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h_full()
+                                .child(StartPage::new(
+                                    self.theme,
+                                    start_page_state,
+                                    manual_port_input,
+                                    baud_input,
+                                    on_refresh_ports,
+                                    on_select_port,
+                                    on_enable_manual_port,
+                                    on_toggle_baud_dropdown,
+                                    on_select_baud,
+                                    on_toggle_frame_expanded,
+                                    on_select_data_bits,
+                                    on_select_parity,
+                                    on_select_stop_bits,
+                                    on_connect,
+                                    on_enter_simulated,
+                                )),
+                        )
+                        .child(tab_rail),
+                )
                 .into_any_element();
         }
 
-        self.log_selection.observe_log_len(self.state.logs.len());
-        let send_input = self.ensure_send_input(window, cx);
-        let log_focus = self.log_focus.clone();
+        {
+            let tab = self.active_tab_mut();
+            let log_len = tab.state.logs.len();
+            tab.log_selection.observe_log_len(log_len);
+            tab.sync_log_list_state();
+        }
+        let send_input = self.ensure_send_input(active_id, window, cx);
+        let tab = self.active_tab();
+        let log_focus = tab.log_focus.clone();
+        let log_list_state = tab.log_list_state.clone();
+        let logs = tab.state.logs.clone();
+        let receive_state = tab.state.receive.clone();
+        let simulated_notice = tab.state.simulated_notice;
+        let send_state = tab.state.send.clone();
+        let motion = tab.motion;
+        let is_connected = tab.state.connection.is_connected();
+        let is_simulated = tab.state.is_simulated_session;
+        let send_error = tab.send_error.clone();
+        let config = tab.state.config.clone();
+        let connection = tab.state.connection;
+        let conn_status_label = tab.state.connection_status_label();
+        let conn_action_label = tab.state.connection_action_label();
+        let counters = tab.state.counters;
+        let active_picker = tab.state.active_picker;
+        let picker_overlay = active_picker.zip(self.picker_input.clone());
 
         let weak_for_pick = cx.entity().downgrade();
         let on_pick = Rc::new(
@@ -962,9 +1342,6 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.submit_send(cx));
         });
 
-        let picker_overlay = self.state.active_picker.zip(self.picker_input.clone());
-        self.sync_log_list_state();
-
         v_flex()
             .id("sasha-root")
             .relative()
@@ -974,15 +1351,13 @@ impl Render for SashaApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.state.active_picker.is_some() {
+                    if this.active_tab().state.active_picker.is_some() {
                         this.cancel_picker(cx);
                     }
                 }),
             )
             .on_action(cx.listener(|this, _: &Copy, window, cx| {
                 if this.editor_owns_copy(window, cx) {
-                    // The focused field already saw Copy. Swallow it here so the
-                    // window root cannot replace that clipboard with the log.
                     return;
                 }
                 if !this.copy_log_selection(window, cx) {
@@ -990,19 +1365,22 @@ impl Render for SashaApp {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.handle_tab_shortcut(event, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+
                 // Deterministic simulated RX event injection path for verification (F9 or Ctrl+Shift+R).
                 let is_sim_rx_shortcut = event.keystroke.key.eq_ignore_ascii_case("f9")
                     || (event.keystroke.modifiers.control
                         && event.keystroke.modifiers.shift
                         && event.keystroke.key.eq_ignore_ascii_case("r"));
-                if is_sim_rx_shortcut && this.state.is_simulated_session {
+                if is_sim_rx_shortcut && this.active_tab().state.is_simulated_session {
                     this.inject_simulated_rx_event(cx);
                     cx.stop_propagation();
                     return;
                 }
 
-                // Fallback when the Copy action is not dispatched. The action
-                // handler above runs first and stops the key when it copies.
                 let is_copy = event.keystroke.modifiers.control
                     && !event.keystroke.modifiers.shift
                     && !event.keystroke.modifiers.alt
@@ -1015,18 +1393,20 @@ impl Render for SashaApp {
                     return;
                 }
 
-                if this.state.active_picker.is_none() {
+                if this.active_tab().state.active_picker.is_none() {
                     return;
                 }
+
                 match event.keystroke.key.as_str() {
                     "escape" => {
                         this.cancel_picker(cx);
                         cx.stop_propagation();
                     }
                     "enter" => {
-                        let input_focused = this.picker_input.as_ref().is_some_and(|input| {
-                            input.read(cx).focus_handle(cx).is_focused(window)
-                        });
+                        let input_focused = this
+                            .picker_input
+                            .as_ref()
+                            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
                         if !input_focused {
                             this.apply_picker_input(cx);
                             cx.stop_propagation();
@@ -1035,74 +1415,85 @@ impl Render for SashaApp {
                     _ => {}
                 }
             }))
-            .child(AppTitleBar::new(
-                self.theme,
-                self.state.is_simulated_session,
-            ))
+            .child(self.build_top_bar())
             .child(
-                v_flex()
-                    .id("receive-area")
+                h_flex()
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(LogView::new(
-                        self.theme,
-                        self.state.logs.clone(),
-                        self.state.receive.clone(),
-                        self.state.simulated_notice,
-                        log_focus,
-                        self.log_list_state.clone(),
-                    )),
+                    .child(
+                        v_flex()
+                            .id("workspace-main")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(
+                                v_flex()
+                                    .id("receive-area")
+                                    .flex_1()
+                                    .min_h_0()
+                                    .w_full()
+                                    .child(LogView::new(
+                                        self.theme,
+                                        logs,
+                                        receive_state.clone(),
+                                        simulated_notice,
+                                        log_focus,
+                                        log_list_state,
+                                    )),
+                            )
+                            .child(ReceiveToolbar::new(
+                                self.theme,
+                                receive_state,
+                                send_state.send_hex,
+                                motion.rx_hex,
+                                motion.rx_timestamp,
+                                motion.rx_pause,
+                                motion.rx_auto_scroll,
+                                motion.tx_send_hex,
+                                on_rx_hex,
+                                on_rx_timestamp,
+                                on_rx_pause,
+                                on_rx_auto_scroll,
+                                on_rx_clear,
+                                on_rx_save,
+                                on_tx_send_hex,
+                            ))
+                            // The send card overlaps the strip's lower edge so the strip reads as
+                            // a drawer tucked underneath it.
+                            .child(
+                                div()
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .mt(px(-12.))
+                                    .child(SendCard::new(
+                                        self.theme,
+                                        send_state,
+                                        is_connected,
+                                        is_simulated,
+                                        motion.tx_display_hex,
+                                        motion.connection,
+                                        send_input,
+                                        send_error,
+                                        on_tx_display_hex,
+                                        on_tx_submit,
+                                    )),
+                            )
+                            .child(BottomBar::new(
+                                self.theme,
+                                config,
+                                connection,
+                                conn_status_label,
+                                conn_action_label,
+                                motion.connection,
+                                counters,
+                                active_picker,
+                                on_pick,
+                                on_toggle_connection,
+                            )),
+                    )
+                    .child(tab_rail),
             )
-            .child(ReceiveToolbar::new(
-                self.theme,
-                self.state.receive.clone(),
-                self.state.send.send_hex,
-                self.motion.rx_hex,
-                self.motion.rx_timestamp,
-                self.motion.rx_pause,
-                self.motion.rx_auto_scroll,
-                self.motion.tx_send_hex,
-                on_rx_hex,
-                on_rx_timestamp,
-                on_rx_pause,
-                on_rx_auto_scroll,
-                on_rx_clear,
-                on_rx_save,
-                on_tx_send_hex,
-            ))
-            // The send card overlaps the strip's lower edge so the strip reads as
-            // a drawer tucked underneath it.
-            .child(
-                div()
-                    .w_full()
-                    .flex_shrink_0()
-                    .mt(px(-12.))
-                    .child(SendCard::new(
-                        self.theme,
-                        self.state.send.clone(),
-                        self.state.connection.is_connected(),
-                        self.state.is_simulated_session,
-                        self.motion.tx_display_hex,
-                        self.motion.connection,
-                        send_input,
-                        self.send_error.clone(),
-                        on_tx_display_hex,
-                        on_tx_submit,
-                    )),
-            )
-            .child(BottomBar::new(
-                self.theme,
-                self.state.config.clone(),
-                self.state.connection,
-                self.state.connection_status_label(),
-                self.state.connection_action_label(),
-                self.motion.connection,
-                self.state.counters,
-                self.state.active_picker,
-                on_pick,
-                on_toggle_connection,
-            ))
             .when_some(picker_overlay, |this, (kind, input)| {
                 this.child(
                     div()
@@ -1116,10 +1507,10 @@ impl Render for SashaApp {
                         .child(ParameterPickerPopover::new(
                             self.theme,
                             kind,
-                            self.state.is_simulated_session,
+                            is_simulated,
                             self.picker_port_presets.clone(),
-                            self.motion.picker_open_epoch,
-                            self.state.config.clone(),
+                            motion.picker_open_epoch,
+                            self.active_tab().state.config.clone(),
                             input,
                             self.picker_error.clone(),
                             on_select_preset,
