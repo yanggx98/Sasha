@@ -9,4 +9,7 @@ pub mod tab_rail;
 pub mod theme;
 pub mod workspace;
 
+#[cfg(test)]
+mod caret_tests;
+
 pub use workspace::SashaApp;

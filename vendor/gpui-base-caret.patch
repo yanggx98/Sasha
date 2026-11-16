@@ -1,0 +1,180 @@
+diff --git a/src/input/base/state.rs b/src/input/base/state.rs
+index 82ff480..39179c5 100644
+--- a/src/input/base/state.rs
++++ b/src/input/base/state.rs
+@@ -471,6 +471,8 @@ pub struct InputBaseState<M: InputModeKind> {
+     pub(super) wrapping_indent: WrappingIndent,
+     pub(super) scroll_beyond_last_line: Option<usize>,
+     pub(super) cursor_surrounding_lines: Option<usize>,
++    pub(super) caret_width: Pixels,
++    pub(super) caret_gap: Pixels,
+     pub(super) blink_cursor: Entity<BlinkCursor>,
+     pub(super) loading: bool,
+     /// The cursors and selections.
+@@ -984,6 +986,8 @@ impl<M: InputModeKind> InputBaseState<M> {
+             wrapping_indent: WrappingIndent::default(),
+             scroll_beyond_last_line: None,
+             cursor_surrounding_lines: None,
++            caret_width: CURSOR_WIDTH,
++            caret_gap: px(0.),
+             blink_cursor,
+             undo_manager,
+             inline_tokens: None,
+@@ -1597,6 +1601,23 @@ impl<M: InputModeKind> InputBaseState<M> {
+         cx.notify();
+     }
+ 
++    /// Set this input's native caret width and leading visual gap.
++    /// Defaults to a one-pixel bar with no gap. Uses the normal blink and IME lifecycle.
++    ///
++    /// # Panics
++    /// Panics for a non-finite or non-positive width, or a negative/non-finite gap.
++    pub fn caret_style(mut self, width: Pixels, gap: Pixels) -> Self {
++        assert!(f32::from(width).is_finite() && width >= px(1.));
++        assert!(f32::from(gap).is_finite() && gap >= px(0.));
++        self.caret_width = width;
++        self.caret_gap = gap;
++        self
++    }
++
++    pub(super) fn caret_span(&self) -> Pixels {
++        self.caret_width + self.caret_gap
++    }
++
+     /// Minimum number of lines the cursor is kept clear of the viewport's
+     /// top/bottom edge before auto-scroll engages. Mirrors VSCode's
+     /// `editor.cursorSurroundingLines` / Zed's `vertical_scroll_margin`.
+@@ -3047,6 +3068,7 @@ impl<M: InputModeKind> InputBaseState<M> {
+             self.scroll_size.width,
+             self.input_bounds.size.width,
+             self.text_align,
++            self.caret_span(),
+         );
+         if self.scroll_handle.offset() != offset {
+             self.scroll_handle.set_offset(offset);
+@@ -3104,9 +3126,9 @@ impl<M: InputModeKind> InputBaseState<M> {
+         // For Right alignment use 0 margin: the cursor indicator is clamped inside bounds
+         // in layout_cursors, so shifting the text here would cause a first-click visual jump.
+         let safety_margin = match last_layout.text_align {
+-            TextAlign::Left => RIGHT_MARGIN,
++            TextAlign::Left => RIGHT_MARGIN.max(self.caret_span()),
+             TextAlign::Right => px(0.),
+-            TextAlign::Center => CURSOR_WIDTH,
++            TextAlign::Center => self.caret_span(),
+         };
+         if let Some(vi) = last_layout
+             .visible_buffer_lines
+diff --git a/src/input/base/element.rs b/src/input/base/element.rs
+index d40bccb..7c510be 100644
+--- a/src/input/base/element.rs
++++ b/src/input/base/element.rs
+@@ -18,7 +18,7 @@ use std::{collections::BTreeSet, ops::Range, rc::Rc};
+ 
+ use crate::{
+     Scrollbar,
+-    input::{RopeExt as _, blink_cursor::CURSOR_WIDTH, display_map::LineLayout},
++    input::{RopeExt as _, display_map::LineLayout},
+ };
+ 
+ use super::{
+@@ -386,11 +386,12 @@ pub(super) fn clamp_horizontal_scroll_offset(
+     scroll_width: Pixels,
+     input_width: Pixels,
+     text_align: TextAlign,
++    caret_span: Pixels,
+ ) -> Pixels {
+     let caret_clearance = if text_align == TextAlign::Left {
+         px(0.)
+     } else {
+-        -CURSOR_WIDTH
++        -caret_span
+     };
+     let min_offset = (input_width - scroll_width + caret_clearance).min(caret_clearance);
+     offset.clamp(min_offset, px(0.))
+@@ -986,9 +987,9 @@ impl<M: InputModeKind> TextElement<M> {
+                     if selection_changed {
+                         // Right-aligned carets are clamped instead of scrolling.
+                         let safety_margin = match last_layout.text_align {
+-                            TextAlign::Left => RIGHT_MARGIN,
++                            TextAlign::Left => RIGHT_MARGIN.max(state.caret_span()),
+                             TextAlign::Right => px(0.),
+-                            TextAlign::Center => CURSOR_WIDTH,
++                            TextAlign::Center => state.caret_span(),
+                         };
+                         scroll_offset.x = if scroll_offset.x + cursor_pos.x
+                             > (bounds.size.width - line_number_width - safety_margin)
+@@ -1045,10 +1046,10 @@ impl<M: InputModeKind> TextElement<M> {
+             cursor_infos.push(CursorRenderInfo {
+                 bounds: Bounds::new(
+                     point(
+-                        cursor_x,
++                        cursor_x + state.caret_gap,
+                         bounds.top() + cursor_pos.y + ((line_height - cursor_height) / 2.),
+                     ),
+-                    size(CURSOR_WIDTH, cursor_height),
++                    size(state.caret_width, cursor_height),
+                 ),
+                 is_active,
+             });
+@@ -1062,12 +1063,13 @@ impl<M: InputModeKind> TextElement<M> {
+             scroll_size.width,
+             bounds.size.width,
+             last_layout.text_align,
++            state.caret_span(),
+         );
+         for info in &mut cursor_infos {
+             info.bounds.origin.x += scroll_offset.x;
+             // Right-aligned text keeps the caret inside the viewport edge.
+             if last_layout.text_align == TextAlign::Right {
+-                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - CURSOR_WIDTH);
++                info.bounds.origin.x = info.bounds.origin.x.min(bounds.right() - state.caret_width);
+             }
+         }
+         scroll_offset.y =
+@@ -3202,8 +3204,9 @@ impl<M: InputModeKind> Element for TextElement<M> {
+             Self::layout_line_numbers(&state, &text, text_size, &text_style, window);
+ 
+         let mut bounds = bounds;
++        let right_margin = RIGHT_MARGIN.max(state.caret_span());
+         let wrap_width = if multi_line && state.soft_wrap {
+-            Some(bounds.size.width - line_number_width - RIGHT_MARGIN)
++            Some((bounds.size.width - line_number_width - right_margin).max(px(1.)))
+         } else {
+             None
+         };
+@@ -3230,7 +3233,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+ 
+         let line_height = window.line_height();
+         let token_elements = self.measure_tokens(
+-            (bounds.size.width - line_number_width - RIGHT_MARGIN).max(px(1.)),
++            (bounds.size.width - line_number_width - right_margin).max(px(1.)),
+             line_height,
+             bounds.size.height,
+             window,
+@@ -3461,8 +3464,8 @@ impl<M: InputModeKind> Element for TextElement<M> {
+         // last content row, so take the max rather than summing — summing
+         // left a band of empty space the cursor could never reach.
+         let mut scroll_size = size(
+-            if longest_line_width + line_number_width + RIGHT_MARGIN > bounds.size.width {
+-                longest_line_width + line_number_width + RIGHT_MARGIN
++            if longest_line_width + line_number_width + right_margin > bounds.size.width {
++                longest_line_width + line_number_width + right_margin
+             } else {
+                 longest_line_width
+             },
+@@ -3552,6 +3555,7 @@ impl<M: InputModeKind> Element for TextElement<M> {
+                 scroll_size.width,
+                 input_bounds.size.width,
+                 last_layout.text_align,
++                state.caret_span(),
+             );
+             let mut geometry =
+                 PrepaintCaretGeometry::new(cursor_bounds, line_height, input_bounds, scroll_offset);
+@@ -4373,6 +4377,7 @@ fn split_runs_by_bg_segments(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::input::blink_cursor::CURSOR_WIDTH;
+     use crate::input::{
+         EditorMode, EditorState, FoldPlaceholderRenderer, FoldRange, GutterDecoration,
+         GutterDecorationCollection, OverviewRulerDecoration, OverviewRulerDecorationCollection,

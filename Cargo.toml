@@ -7,3 +7,9 @@ edition = "2024"
 chrono = "0.4"
 gpui-kit = "0.9.1"
 serialport = "4.10.1"
+
+[patch.crates-io]
+gpui-base = { path = "vendor/gpui-base" }
+
+[dev-dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
