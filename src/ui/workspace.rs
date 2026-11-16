@@ -11,8 +11,8 @@ use gpui_kit::*;
 
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
-    ActivePickerKind, DataBits, LogSelectionModel, Parity, SendPayloadError, SessionState,
-    StopBits, current_timestamp_hms_ms,
+    ActivePickerKind, ConfigStore, DataBits, LogSelectionModel, Parity, SendPayloadError,
+    SessionState, StopBits, current_timestamp_hms_ms,
 };
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports};
 use crate::ui::bottom_bar::BottomBar;
@@ -196,6 +196,8 @@ pub struct SashaApp {
     active_tab_id: u64,
     next_tab_id: u64,
     theme: NanoTheme,
+    #[allow(dead_code)]
+    config_store: ConfigStore,
     picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
@@ -204,12 +206,14 @@ pub struct SashaApp {
 
 impl SashaApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        let config_store = ConfigStore::load_default();
         let initial_tab = SessionTab::new(1, cx);
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
             next_tab_id: 2,
             theme: NanoTheme::default(),
+            config_store,
             picker_port_presets: Vec::new(),
             picker_input: None,
             _picker_subscription: None,

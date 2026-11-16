@@ -1,6 +1,7 @@
 pub mod config;
 pub mod log;
 pub mod session;
+pub mod settings;
 
 #[allow(unused_imports)]
 pub use config::{ActivePickerKind, DataBits, Parity, SerialConfig, StopBits};
@@ -14,3 +15,5 @@ pub use session::{
     ReceiveViewState, SendDraftState, SendLineEnding, SessionCounters, SessionState,
     SimulatedConnectionState,
 };
+#[allow(unused_imports)]
+pub use settings::{AppConfig, ConfigStore};
