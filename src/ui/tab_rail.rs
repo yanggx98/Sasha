@@ -12,8 +12,8 @@ pub type TabSelectCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type TabCloseCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type TabNewCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
-/// Matches the combined width of the three Windows titlebar control buttons (3 * 34px = 102px).
-pub const TAB_RAIL_WIDTH: Pixels = px(102.);
+/// Sidebar width leaves room for session names and their close buttons.
+pub const TAB_RAIL_WIDTH: Pixels = px(128.);
 
 #[derive(Clone, Debug)]
 pub struct TabItem {
@@ -65,7 +65,7 @@ impl RenderOnce for TabRail {
             .flex_shrink_0()
             .w(TAB_RAIL_WIDTH)
             .h_full()
-            .bg(theme.bg_strip)
+            .bg(theme.bg_card)
             .child(
                 v_flex()
                     .id("tab-rail-list")

@@ -1145,7 +1145,8 @@ impl SashaApp {
             .cursor_default()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 gpui_kit::base::GlobalState::suppress_text_selection(cx);
-                cx.stop_propagation();
+                // Windows needs the unhandled non-client mouse-down to start
+                // native title-bar dragging. Occlusion already blocks content below.
             })
             .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_b_0())
     }
