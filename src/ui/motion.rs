@@ -77,11 +77,13 @@ pub struct UiMotionState {
     pub rx_auto_scroll: TransitionFlag,
     pub tx_display_hex: TransitionFlag,
     pub tx_send_hex: TransitionFlag,
+    pub tx_line_ending: TransitionFlag,
     pub connection: TransitionFlag,
     pub picker_open_epoch: u64,
 }
 
 impl UiMotionState {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rx_hex: bool,
         rx_timestamp: bool,
@@ -89,6 +91,7 @@ impl UiMotionState {
         rx_auto_scroll: bool,
         tx_display_hex: bool,
         tx_send_hex: bool,
+        tx_line_ending: bool,
         connected: bool,
     ) -> Self {
         Self {
@@ -98,6 +101,7 @@ impl UiMotionState {
             rx_auto_scroll: TransitionFlag::new(rx_auto_scroll),
             tx_display_hex: TransitionFlag::new(tx_display_hex),
             tx_send_hex: TransitionFlag::new(tx_send_hex),
+            tx_line_ending: TransitionFlag::new(tx_line_ending),
             connection: TransitionFlag::new(connected),
             picker_open_epoch: 0,
         }

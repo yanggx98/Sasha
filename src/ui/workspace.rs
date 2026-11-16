@@ -65,6 +65,7 @@ impl SessionTab {
             state.receive.auto_scroll,
             state.send.display_hex,
             state.send.send_hex,
+            state.send.line_ending.is_active(),
             state.connection.is_connected(),
         );
         let log_selection = LogSelectionModel::new(
@@ -122,6 +123,7 @@ impl SessionTab {
             self.state.receive.auto_scroll,
             self.state.send.display_hex,
             self.state.send.send_hex,
+            self.state.send.line_ending.is_active(),
             self.state.connection.is_connected(),
         );
         self.last_log_count = 0;
@@ -1042,6 +1044,15 @@ impl SashaApp {
         cx.notify();
     }
 
+    pub fn cycle_send_line_ending(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.cycle_send_line_ending();
+        tab.motion
+            .tx_line_ending
+            .set(tab.state.send.line_ending.is_active());
+        cx.notify();
+    }
+
     pub fn submit_send(&mut self, cx: &mut Context<Self>) {
         let send_input = self.active_tab().send_input.clone();
         if let Some(input) = &send_input {
@@ -1335,6 +1346,10 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.toggle_send_format_hex(cx));
         });
         let weak = cx.entity().downgrade();
+        let on_tx_line_ending = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.cycle_send_line_ending(cx));
+        });
+        let weak = cx.entity().downgrade();
         let on_tx_submit = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.submit_send(cx));
         });
@@ -1440,11 +1455,13 @@ impl Render for SashaApp {
                                 self.theme,
                                 receive_state,
                                 send_state.send_hex,
+                                send_state.line_ending,
                                 motion.rx_hex,
                                 motion.rx_timestamp,
                                 motion.rx_pause,
                                 motion.rx_auto_scroll,
                                 motion.tx_send_hex,
+                                motion.tx_line_ending,
                                 on_rx_hex,
                                 on_rx_timestamp,
                                 on_rx_pause,
@@ -1452,6 +1469,7 @@ impl Render for SashaApp {
                                 on_rx_clear,
                                 on_rx_save,
                                 on_tx_send_hex,
+                                on_tx_line_ending,
                             ))
                             // The send card overlaps the strip's lower edge so the strip reads as
                             // a drawer tucked underneath it.

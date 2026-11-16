@@ -5,7 +5,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::*;
 
-use crate::model::ReceiveViewState;
+use crate::model::{ReceiveViewState, SendLineEnding};
 use crate::ui::motion::{TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
 
@@ -21,11 +21,13 @@ pub struct ReceiveToolbar {
     theme: NanoTheme,
     state: ReceiveViewState,
     send_hex: bool,
+    line_ending: SendLineEnding,
     rx_hex_flag: TransitionFlag,
     rx_timestamp_flag: TransitionFlag,
     rx_pause_flag: TransitionFlag,
     rx_auto_scroll_flag: TransitionFlag,
     tx_send_hex_flag: TransitionFlag,
+    tx_line_ending_flag: TransitionFlag,
     on_toggle_hex: ToolbarActionCallback,
     on_toggle_timestamp: ToolbarActionCallback,
     on_toggle_pause: ToolbarActionCallback,
@@ -33,6 +35,7 @@ pub struct ReceiveToolbar {
     on_clear: ToolbarActionCallback,
     on_save: ToolbarActionCallback,
     on_toggle_send_hex: ToolbarActionCallback,
+    on_cycle_line_ending: ToolbarActionCallback,
 }
 
 impl ReceiveToolbar {
@@ -41,11 +44,13 @@ impl ReceiveToolbar {
         theme: NanoTheme,
         state: ReceiveViewState,
         send_hex: bool,
+        line_ending: SendLineEnding,
         rx_hex_flag: TransitionFlag,
         rx_timestamp_flag: TransitionFlag,
         rx_pause_flag: TransitionFlag,
         rx_auto_scroll_flag: TransitionFlag,
         tx_send_hex_flag: TransitionFlag,
+        tx_line_ending_flag: TransitionFlag,
         on_toggle_hex: ToolbarActionCallback,
         on_toggle_timestamp: ToolbarActionCallback,
         on_toggle_pause: ToolbarActionCallback,
@@ -53,16 +58,19 @@ impl ReceiveToolbar {
         on_clear: ToolbarActionCallback,
         on_save: ToolbarActionCallback,
         on_toggle_send_hex: ToolbarActionCallback,
+        on_cycle_line_ending: ToolbarActionCallback,
     ) -> Self {
         Self {
             theme,
             state,
             send_hex,
+            line_ending,
             rx_hex_flag,
             rx_timestamp_flag,
             rx_pause_flag,
             rx_auto_scroll_flag,
             tx_send_hex_flag,
+            tx_line_ending_flag,
             on_toggle_hex,
             on_toggle_timestamp,
             on_toggle_pause,
@@ -70,6 +78,7 @@ impl ReceiveToolbar {
             on_clear,
             on_save,
             on_toggle_send_hex,
+            on_cycle_line_ending,
         }
     }
 
@@ -233,6 +242,20 @@ impl RenderOnce for ReceiveToolbar {
                         epoch: self.tx_send_hex_flag.epoch,
                     }),
                     self.on_toggle_send_hex.clone(),
+                ))
+                .child(self.text_tool_button(
+                    "tx-tool-line-ending",
+                    self.line_ending.label(),
+                    match self.line_ending {
+                        SendLineEnding::None => "发送自动换行：关（点击切换为 \\r\\n）",
+                        SendLineEnding::CrLf => "发送自动换行：\\r\\n（点击切换为 \\n）",
+                        SendLineEnding::Lf => "发送自动换行：\\n（点击关闭）",
+                    },
+                    Some(TransitionFlag {
+                        active: self.line_ending.is_active(),
+                        epoch: self.tx_line_ending_flag.epoch,
+                    }),
+                    self.on_cycle_line_ending.clone(),
                 )),
         )
     }

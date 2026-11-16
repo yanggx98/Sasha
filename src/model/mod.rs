@@ -11,5 +11,6 @@ pub use log::{
     selectable_log_line,
 };
 pub use session::{
-    ReceiveViewState, SendDraftState, SessionCounters, SessionState, SimulatedConnectionState,
+    ReceiveViewState, SendDraftState, SendLineEnding, SessionCounters, SessionState,
+    SimulatedConnectionState,
 };

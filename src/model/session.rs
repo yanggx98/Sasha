@@ -60,6 +60,45 @@ impl Default for ReceiveViewState {
     }
 }
 
+/// Line ending appended to outgoing text payloads on send (ignored in HEX send mode).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendLineEnding {
+    #[default]
+    None,
+    CrLf,
+    Lf,
+}
+
+impl SendLineEnding {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::None => Self::CrLf,
+            Self::CrLf => Self::Lf,
+            Self::Lf => Self::None,
+        }
+    }
+
+    pub fn suffix_bytes(self) -> &'static [u8] {
+        match self {
+            Self::None => b"",
+            Self::CrLf => b"\r\n",
+            Self::Lf => b"\n",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "\\r\\n",
+            Self::CrLf => "\\r\\n",
+            Self::Lf => "\\n",
+        }
+    }
+
+    pub fn is_active(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 /// Floating send card state (independent from receive HEX flag).
 ///
 /// `display_hex` controls only how `text` is displayed/converted in the input box,
@@ -69,6 +108,7 @@ pub struct SendDraftState {
     pub text: String,
     pub display_hex: bool,
     pub send_hex: bool,
+    pub line_ending: SendLineEnding,
 }
 
 impl Default for SendDraftState {
@@ -77,6 +117,7 @@ impl Default for SendDraftState {
             text: String::new(),
             display_hex: false,
             send_hex: false,
+            line_ending: SendLineEnding::None,
         }
     }
 }
@@ -133,6 +174,7 @@ impl SessionState {
                 text: "AT+VERSION".to_string(),
                 display_hex: false,
                 send_hex: false,
+                line_ending: SendLineEnding::None,
             },
             counters: SessionCounters { rx_bytes, tx_bytes },
             logs: vec![
@@ -393,6 +435,11 @@ impl SessionState {
         self.send.send_hex = !self.send.send_hex;
     }
 
+    /// Cycles the outgoing text line ending: `None -> CrLf -> Lf -> None`.
+    pub fn cycle_send_line_ending(&mut self) {
+        self.send.line_ending = self.send.line_ending.cycle();
+    }
+
     /// Validates connection, non-empty draft, and HEX syntax (when `send.send_hex` is
     /// enabled) without mutating state.
     pub fn prepare_send_bytes(&self) -> Result<Vec<u8>, SendPayloadError> {
@@ -405,7 +452,9 @@ impl SessionState {
         } else if self.send.text.is_empty() {
             Err(SendPayloadError::EmptyInput)
         } else {
-            Ok(self.send.text.as_bytes().to_vec())
+            let mut bytes = self.send.text.as_bytes().to_vec();
+            bytes.extend_from_slice(self.send.line_ending.suffix_bytes());
+            Ok(bytes)
         }
     }
 
@@ -976,5 +1025,31 @@ mod tests {
         assert!(!state.send.display_hex);
         assert!(!state.receive.hex_mode);
         assert_eq!(state.send.text, "4142");
+    }
+
+    #[test]
+    fn line_ending_cycles_and_appends_only_in_text_mode() {
+        let mut state = SessionState::new_simulated_demo();
+        state.toggle_simulated_connection();
+        state.send.text = "AT".to_string();
+
+        assert_eq!(state.send.line_ending, SendLineEnding::None);
+        assert_eq!(state.prepare_send_bytes(), Ok(b"AT".to_vec()));
+
+        state.cycle_send_line_ending();
+        assert_eq!(state.send.line_ending, SendLineEnding::CrLf);
+        assert_eq!(state.prepare_send_bytes(), Ok(b"AT\r\n".to_vec()));
+
+        state.cycle_send_line_ending();
+        assert_eq!(state.send.line_ending, SendLineEnding::Lf);
+        assert_eq!(state.prepare_send_bytes(), Ok(b"AT\n".to_vec()));
+
+        // HEX send mode ignores line ending suffix
+        state.send.send_hex = true;
+        state.send.text = "41 54".to_string();
+        assert_eq!(state.prepare_send_bytes(), Ok(vec![0x41, 0x54]));
+
+        state.cycle_send_line_ending();
+        assert_eq!(state.send.line_ending, SendLineEnding::None);
     }
 }
