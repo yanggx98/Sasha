@@ -75,7 +75,8 @@ impl RenderOnce for TabRail {
                     .overflow_y_scroll()
                     .pl_0()
                     .pr_1p5()
-                    .py_1()
+                    .pt(px(38.))
+                    .pb_1()
                     .gap_1()
                     .children(self.tabs.into_iter().map(move |tab| {
                         let tab_id = tab.id;

@@ -756,7 +756,8 @@ impl RenderOnce for StartPage {
             .items_center()
             .justify_center()
             .px_4()
-            .py_4()
+            .pt(px(38.))
+            .pb_4()
             .child(
                 v_flex()
                     .id("start-page-content")

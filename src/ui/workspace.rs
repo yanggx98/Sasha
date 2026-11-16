@@ -22,7 +22,7 @@ use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
 use crate::ui::send_card::SendCard;
 use crate::ui::start_page::{StartPage, StartPageState};
-use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
+use crate::ui::tab_rail::{TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1135,20 +1135,18 @@ impl SashaApp {
 
     fn build_top_bar(&self) -> impl IntoElement {
         div()
-            .relative()
-            .w_full()
+            .id("top-bar-overlay")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
             .h(px(34.))
-            .flex_shrink_0()
-            .bg(self.theme.bg_canvas)
-            .child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .w(TAB_RAIL_WIDTH)
-                    .h_full()
-                    .bg(self.theme.bg_strip),
-            )
+            .occlude()
+            .cursor_default()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                cx.stop_propagation();
+            })
             .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_b_0())
     }
 }
@@ -1221,12 +1219,9 @@ impl Render for SashaApp {
                         cx.stop_propagation();
                     }
                 }))
-                .child(self.build_top_bar())
                 .child(
                     h_flex()
-                        .flex_1()
-                        .min_h_0()
-                        .w_full()
+                        .size_full()
                         .child(
                             div()
                                 .flex_1()
@@ -1252,6 +1247,7 @@ impl Render for SashaApp {
                         )
                         .child(tab_rail),
                 )
+                .child(self.build_top_bar())
                 .into_any_element();
         }
 
@@ -1415,12 +1411,9 @@ impl Render for SashaApp {
                     _ => {}
                 }
             }))
-            .child(self.build_top_bar())
             .child(
                 h_flex()
-                    .flex_1()
-                    .min_h_0()
-                    .w_full()
+                    .size_full()
                     .child(
                         v_flex()
                             .id("workspace-main")
@@ -1494,6 +1487,7 @@ impl Render for SashaApp {
                     )
                     .child(tab_rail),
             )
+            .child(self.build_top_bar())
             .when_some(picker_overlay, |this, (kind, input)| {
                 this.child(
                     div()
