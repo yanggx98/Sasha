@@ -59,14 +59,14 @@ impl LogEntry {
         }
     }
 
-    /// Formats payload as UTF-8 text (trimming trailing `\r`/`\n`) or space-separated uppercase HEX bytes.
+    /// Formats payload as UTF-8 text (stripping `\0` and trailing `\r`/`\n`) or space-separated uppercase HEX bytes.
     pub fn format_payload(&self, hex_mode: bool) -> String {
         if hex_mode {
             format_hex_bytes(&self.bytes)
         } else {
             String::from_utf8_lossy(&self.bytes)
                 .trim_end_matches(&['\r', '\n'][..])
-                .to_string()
+                .replace('\0', "")
         }
     }
 }
@@ -396,6 +396,10 @@ mod tests {
         assert!(entry.is_simulated);
         assert_eq!(entry.format_payload(false), "OK");
         assert_eq!(entry.format_payload(true), "4F 4B");
+
+        let with_nul = LogEntry::new(2, "14:26:07.400", LogDirection::Rx, b"\0OK\r\n".to_vec());
+        assert_eq!(with_nul.format_payload(false), "OK");
+        assert_eq!(with_nul.format_payload(true), "00 4F 4B 0D 0A");
     }
 
     #[test]

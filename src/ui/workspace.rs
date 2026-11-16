@@ -53,8 +53,11 @@ pub struct SashaApp {
     _send_subscription: Option<Subscription>,
     send_error: Option<SharedString>,
     log_focus: FocusHandle,
-    log_scroll_handle: ScrollHandle,
+    log_list_state: ListState,
     last_log_count: usize,
+    last_tail_id: u64,
+    last_tail_len: usize,
+    last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
 }
 
@@ -95,8 +98,11 @@ impl SashaApp {
             _send_subscription: None,
             send_error: None,
             log_focus: cx.focus_handle(),
-            log_scroll_handle: ScrollHandle::new(),
+            log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             last_log_count: 0,
+            last_tail_id: 0,
+            last_tail_len: 0,
+            last_display_flags: (true, false),
             log_selection,
         }
     }
@@ -112,6 +118,9 @@ impl SashaApp {
             self.state.connection.is_connected(),
         );
         self.last_log_count = 0;
+        self.last_tail_id = 0;
+        self.last_tail_len = 0;
+        self.log_list_state.reset(0);
         self.log_selection = LogSelectionModel::new(
             self.state.receive.show_timestamp,
             self.state.receive.hex_mode,
@@ -609,9 +618,50 @@ impl SashaApp {
             .rx_auto_scroll
             .set(self.state.receive.auto_scroll);
         if self.state.receive.auto_scroll {
-            self.log_scroll_handle.scroll_to_bottom();
+            self.log_list_state.scroll_to_end();
         }
         cx.notify();
+    }
+
+    fn sync_log_list_state(&mut self) {
+        let log_count = self.state.logs.len();
+        let notice_count = usize::from(!self.state.simulated_notice.is_empty());
+        let total_items = log_count + notice_count;
+        let tail_id = self.state.logs.last().map_or(0, |e| e.id);
+        let tail_len = self.state.logs.last().map_or(0, |e| e.bytes.len());
+        let display_flags = (
+            self.state.receive.show_timestamp,
+            self.state.receive.hex_mode,
+        );
+        let content_changed = log_count != self.last_log_count
+            || tail_id != self.last_tail_id
+            || tail_len != self.last_tail_len;
+
+        if display_flags != self.last_display_flags
+            || log_count < self.last_log_count
+            || (log_count == self.last_log_count && tail_id != self.last_tail_id)
+        {
+            self.log_list_state.reset(total_items);
+        } else if log_count > self.last_log_count {
+            let start = self.last_log_count.saturating_sub(1);
+            let old_end = self.last_log_count + notice_count;
+            let new_count = total_items - start;
+            self.log_list_state.splice(start..old_end, new_count);
+        } else if tail_len != self.last_tail_len && log_count > 0 {
+            let last_ix = log_count - 1;
+            self.log_list_state.splice(last_ix..last_ix + 1, 1);
+        } else if self.log_list_state.item_count() != total_items {
+            self.log_list_state.reset(total_items);
+        }
+
+        if self.state.receive.auto_scroll && content_changed {
+            self.log_list_state.scroll_to_end();
+        }
+
+        self.last_log_count = log_count;
+        self.last_tail_id = tail_id;
+        self.last_tail_len = tail_len;
+        self.last_display_flags = display_flags;
     }
 
     pub fn clear_receive_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -913,10 +963,7 @@ impl Render for SashaApp {
         });
 
         let picker_overlay = self.state.active_picker.zip(self.picker_input.clone());
-        if self.state.receive.auto_scroll && self.state.logs.len() > self.last_log_count {
-            self.log_scroll_handle.scroll_to_bottom();
-        }
-        self.last_log_count = self.state.logs.len();
+        self.sync_log_list_state();
 
         v_flex()
             .id("sasha-root")
@@ -1004,7 +1051,7 @@ impl Render for SashaApp {
                         self.state.receive.clone(),
                         self.state.simulated_notice,
                         log_focus,
-                        self.log_scroll_handle.clone(),
+                        self.log_list_state.clone(),
                     )),
             )
             .child(ReceiveToolbar::new(

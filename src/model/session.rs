@@ -38,6 +38,8 @@ impl SimulatedConnectionState {
     }
 }
 
+pub const MAX_VISIBLE_LOGS: usize = 2000;
+
 /// Receive view display flags (independent from send card HEX flag).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceiveViewState {
@@ -226,6 +228,7 @@ impl SessionState {
         self.receive.paused = !self.receive.paused;
         if !self.receive.paused && !self.retained_while_paused.is_empty() {
             self.logs.append(&mut self.retained_while_paused);
+            self.trim_visible_logs();
         }
     }
 
@@ -241,6 +244,14 @@ impl SessionState {
             self.retained_while_paused.push(entry);
         } else {
             self.logs.push(entry);
+            self.trim_visible_logs();
+        }
+    }
+
+    fn trim_visible_logs(&mut self) {
+        if self.logs.len() > MAX_VISIBLE_LOGS {
+            let excess = self.logs.len() - MAX_VISIBLE_LOGS;
+            self.logs.drain(..excess);
         }
     }
 
