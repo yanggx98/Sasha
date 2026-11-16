@@ -1,3 +1,4 @@
+mod i18n;
 mod model;
 mod serial;
 mod ui;
@@ -5,6 +6,7 @@ mod ui;
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
 use gpui_kit::*;
 
+use crate::model::ConfigStore;
 use crate::ui::SashaApp;
 
 fn main() {
@@ -28,7 +30,11 @@ fn main() {
             ..TitleBar::window_options()
         };
 
-        open_window(options, cx, |_, cx| cx.new(SashaApp::new))
-            .expect("Failed to open Sasha window");
+        let config_store = cx.new(|_| ConfigStore::load_default());
+        open_window(options, cx, move |_, cx| {
+            let store = config_store.clone();
+            cx.new(move |cx| SashaApp::new(store, cx))
+        })
+        .expect("Failed to open Sasha window");
     });
 }

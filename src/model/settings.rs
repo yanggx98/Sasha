@@ -4,11 +4,19 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Locale;
+
 /// Default configuration file name stored in the application root directory.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
 
 /// Current schema version of [`AppConfig`].
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
+
+/// Default monospace font size (in logical pixels) for the receive log view.
+pub const DEFAULT_LOG_FONT_SIZE: u16 = 14;
+
+/// Preset font sizes exposed in the Settings View tab.
+pub const LOG_FONT_SIZE_PRESETS: [u16; 4] = [12, 13, 14, 15];
 
 /// Global application configuration persisted as `config.toml`.
 ///
@@ -20,12 +28,18 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 pub struct AppConfig {
     /// Configuration schema version for forward-compatible migrations.
     pub version: u32,
+    /// UI display language.
+    pub locale: Locale,
+    /// Monospace font size (px) used in the log view.
+    pub log_font_size: u16,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             version: CURRENT_CONFIG_VERSION,
+            locale: Locale::default(),
+            log_font_size: DEFAULT_LOG_FONT_SIZE,
         }
     }
 }
@@ -113,14 +127,19 @@ impl ConfigStore {
     }
 
     /// Mutates the configuration in memory and atomically persists it to disk.
-    #[allow(dead_code)]
     pub fn update(&mut self, mutate: impl FnOnce(&mut AppConfig)) -> Result<(), String> {
         mutate(&mut self.config);
+        migrate_config(&mut self.config);
+        self.save()
+    }
+
+    /// Resets the configuration to [`AppConfig::default()`] and persists it to disk.
+    pub fn reset_to_default(&mut self) -> Result<(), String> {
+        self.config = AppConfig::default();
         self.save()
     }
 
     /// Atomically writes the current configuration to `self.path`.
-    #[allow(dead_code)]
     pub fn save(&self) -> Result<(), String> {
         write_config_atomically(&self.path, &self.config)
     }
@@ -140,6 +159,7 @@ fn migrate_config(config: &mut AppConfig) {
     if config.version == 0 || config.version < CURRENT_CONFIG_VERSION {
         config.version = CURRENT_CONFIG_VERSION;
     }
+    config.log_font_size = config.log_font_size.clamp(10, 24);
 }
 
 fn backup_corrupted_file(path: &Path) -> std::io::Result<PathBuf> {

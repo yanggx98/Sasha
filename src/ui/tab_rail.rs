@@ -11,6 +11,7 @@ use crate::ui::theme::NanoTheme;
 pub type TabSelectCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type TabCloseCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
 pub type TabNewCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+pub type SettingsOpenCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Sidebar width leaves room for session names and their close buttons.
 pub const TAB_RAIL_WIDTH: Pixels = px(128.);
@@ -33,6 +34,7 @@ pub struct TabRail {
     on_select_tab: TabSelectCallback,
     on_close_tab: TabCloseCallback,
     on_new_tab: TabNewCallback,
+    on_open_settings: SettingsOpenCallback,
 }
 
 impl TabRail {
@@ -42,6 +44,7 @@ impl TabRail {
         on_select_tab: TabSelectCallback,
         on_close_tab: TabCloseCallback,
         on_new_tab: TabNewCallback,
+        on_open_settings: SettingsOpenCallback,
     ) -> Self {
         Self {
             theme,
@@ -49,6 +52,7 @@ impl TabRail {
             on_select_tab,
             on_close_tab,
             on_new_tab,
+            on_open_settings,
         }
     }
 }
@@ -59,6 +63,7 @@ impl RenderOnce for TabRail {
         let on_select_tab = self.on_select_tab;
         let on_close_tab = self.on_close_tab;
         let on_new_tab = self.on_new_tab;
+        let on_open_settings = self.on_open_settings;
 
         v_flex()
             .id("workspace-tab-rail")
@@ -177,6 +182,37 @@ impl RenderOnce for TabRail {
                             })
                             .child(Icon::new(LucideIcon::Plus).size(px(12.)))
                             .child("新建"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .id("tab-rail-footer")
+                    .flex_shrink_0()
+                    .w_full()
+                    .h(px(34.))
+                    .px_1p5()
+                    .items_center()
+                    .child(
+                        h_flex()
+                            .id("tab-rail-settings")
+                            .w_full()
+                            .h(px(26.))
+                            .pl_2()
+                            .pr_1()
+                            .items_center()
+                            .gap_1p5()
+                            .rounded(px(6.))
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .cursor_pointer()
+                            .tooltip(|window, cx| Tooltip::new("设置").build(window, cx))
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                on_open_settings(window, cx);
+                            })
+                            .child(Icon::new(LucideIcon::Settings).size(px(12.)))
+                            .child("设置"),
                     ),
             )
     }

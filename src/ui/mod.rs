@@ -4,6 +4,7 @@ pub mod motion;
 pub mod parameter_picker;
 pub mod receive_toolbar;
 pub mod send_card;
+pub mod settings_window;
 pub mod start_page;
 pub mod tab_rail;
 pub mod theme;

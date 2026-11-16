@@ -18,6 +18,7 @@ pub struct LogView {
     logs: Vec<LogEntry>,
     view_state: ReceiveViewState,
     simulated_notice: &'static str,
+    log_font_size: u16,
     focus: FocusHandle,
     list_state: ListState,
 }
@@ -28,6 +29,7 @@ impl LogView {
         logs: Vec<LogEntry>,
         view_state: ReceiveViewState,
         simulated_notice: &'static str,
+        log_font_size: u16,
         focus: FocusHandle,
         list_state: ListState,
     ) -> Self {
@@ -36,6 +38,7 @@ impl LogView {
             logs,
             view_state,
             simulated_notice,
+            log_font_size,
             focus,
             list_state,
         }
@@ -47,6 +50,7 @@ impl RenderOnce for LogView {
         let theme = self.theme;
         let show_timestamp = self.view_state.show_timestamp;
         let hex_mode = self.view_state.hex_mode;
+        let log_font_size = self.log_font_size;
         let focus = self.focus;
         let list_state = self.list_state;
         let logs = Rc::new(self.logs);
@@ -95,7 +99,7 @@ impl RenderOnce for LogView {
                             .when(index == 0, |this| this.pt_2())
                             .pb_1()
                             .font_family("Consolas")
-                            .text_sm()
+                            .text_size(px(log_font_size as f32))
                             .text_color(theme.text_primary)
                             .child(div().flex_1().min_w_0().child(LogLineText::new(
                                 ElementId::named_usize("log-line", entry.id as usize),

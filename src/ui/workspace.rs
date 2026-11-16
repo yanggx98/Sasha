@@ -21,6 +21,7 @@ use crate::ui::motion::UiMotionState;
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
 use crate::ui::send_card::SendCard;
+use crate::ui::settings_window::SettingsWindow;
 use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
@@ -196,8 +197,9 @@ pub struct SashaApp {
     active_tab_id: u64,
     next_tab_id: u64,
     theme: NanoTheme,
-    #[allow(dead_code)]
-    config_store: ConfigStore,
+    config_store: Entity<ConfigStore>,
+    settings_window: Option<AnyWindowHandle>,
+    _config_subscription: Subscription,
     picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
@@ -205,8 +207,8 @@ pub struct SashaApp {
 }
 
 impl SashaApp {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let config_store = ConfigStore::load_default();
+    pub fn new(config_store: Entity<ConfigStore>, cx: &mut Context<Self>) -> Self {
+        let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
         let initial_tab = SessionTab::new(1, cx);
         Self {
             tabs: vec![initial_tab],
@@ -214,6 +216,8 @@ impl SashaApp {
             next_tab_id: 2,
             theme: NanoTheme::default(),
             config_store,
+            settings_window: None,
+            _config_subscription,
             picker_port_presets: Vec::new(),
             picker_input: None,
             _picker_subscription: None,
@@ -1127,6 +1131,34 @@ impl SashaApp {
         cx.notify();
     }
 
+    fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.settings_window
+            && handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+        {
+            return;
+        }
+
+        let bounds = Bounds::centered(None, size(px(620.), px(460.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(520.), px(400.))),
+            is_resizable: true,
+            ..TitleBar::window_options()
+        };
+
+        let config_store = self.config_store.clone();
+        if let Ok((handle, _)) = open_window(options, cx, move |window, cx| {
+            let store = config_store.clone();
+            cx.new(move |cx| SettingsWindow::new(store, window, cx))
+        }) {
+            self.settings_window = Some(handle);
+        }
+    }
+
     fn build_tab_rail(&self, cx: &mut Context<Self>) -> TabRail {
         let weak = cx.entity().downgrade();
         let on_select_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
@@ -1140,6 +1172,10 @@ impl SashaApp {
         let on_new_tab = Rc::new(move |window: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.new_tab(window, cx));
         });
+        let weak = cx.entity().downgrade();
+        let on_open_settings = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.open_settings(window, cx));
+        });
 
         TabRail::new(
             self.theme,
@@ -1147,6 +1183,7 @@ impl SashaApp {
             on_select_tab,
             on_close_tab,
             on_new_tab,
+            on_open_settings,
         )
     }
 
@@ -1275,6 +1312,7 @@ impl Render for SashaApp {
             tab.log_selection.observe_log_len(log_len);
             tab.sync_log_list_state();
         }
+        let log_font_size = self.config_store.read(cx).config().log_font_size;
         let send_input = self.ensure_send_input(active_id, window, cx);
         let tab = self.active_tab();
         let log_focus = tab.log_focus.clone();
@@ -1453,6 +1491,7 @@ impl Render for SashaApp {
                                         logs,
                                         receive_state.clone(),
                                         simulated_notice,
+                                        log_font_size,
                                         log_focus,
                                         log_list_state,
                                     )),
