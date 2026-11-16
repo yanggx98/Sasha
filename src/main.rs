@@ -1,3 +1,5 @@
+rust_i18n::i18n!("locales", fallback = "zh-CN");
+
 mod i18n;
 mod model;
 mod serial;

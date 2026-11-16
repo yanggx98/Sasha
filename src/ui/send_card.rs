@@ -7,6 +7,7 @@ use gpui_kit::component::{Icon, Size, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{Locale, tr_shared};
 use crate::model::SendDraftState;
 use crate::ui::motion::{
     STATUS_TRANSITION_MS, TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color,
@@ -23,6 +24,7 @@ pub type SendActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(IntoElement)]
 pub struct SendCard {
     theme: NanoTheme,
+    locale: Locale,
     draft: SendDraftState,
     connected: bool,
     is_simulated: bool,
@@ -38,6 +40,7 @@ impl SendCard {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         draft: SendDraftState,
         connected: bool,
         is_simulated: bool,
@@ -50,6 +53,7 @@ impl SendCard {
     ) -> Self {
         Self {
             theme,
+            locale,
             draft,
             connected,
             is_simulated,
@@ -65,13 +69,15 @@ impl SendCard {
 
 impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let locale = self.locale;
         let on_toggle_display_hex = self.on_toggle_display_hex.clone();
         let on_submit = self.on_submit.clone();
-        let submit_tooltip: &'static str = match (self.is_simulated, self.connected) {
-            (true, true) => "发送（模拟）",
-            (true, false) => "模拟未连接，无法发送",
-            (false, true) => "发送",
-            (false, false) => "未连接，无法发送",
+        let hex_display_tooltip = tr_shared(locale, "tooltip.tx_hex_display");
+        let submit_tooltip = match (self.is_simulated, self.connected) {
+            (true, true) => tr_shared(locale, "send.btn_sim"),
+            (true, false) => tr_shared(locale, "send.btn_sim_disconnected"),
+            (false, true) => tr_shared(locale, "send.btn"),
+            (false, false) => tr_shared(locale, "send.btn_disconnected"),
         };
 
         let tx_display_hex_flag = TransitionFlag {
@@ -101,9 +107,8 @@ impl RenderOnce for SendCard {
                 .text_xs()
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
-                .tooltip(|window, cx| {
-                    Tooltip::new("HEX 显示切换（仅切换输入框显示，空格分隔两位十六进制）")
-                        .build(window, cx)
+                .tooltip(move |window, cx| {
+                    Tooltip::new(hex_display_tooltip.clone()).build(window, cx)
                 })
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     cx.stop_propagation();
@@ -144,7 +149,7 @@ impl RenderOnce for SendCard {
                 .rounded(px(8.))
                 .hover(move |s| s.bg(submit_hover_bg))
                 .cursor_pointer()
-                .tooltip(move |window, cx| Tooltip::new(submit_tooltip).build(window, cx))
+                .tooltip(move |window, cx| Tooltip::new(submit_tooltip.clone()).build(window, cx))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     cx.stop_propagation();
                     on_submit(window, cx);

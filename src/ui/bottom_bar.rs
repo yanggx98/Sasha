@@ -5,6 +5,7 @@ use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::Locale;
 use crate::model::{ActivePickerKind, SerialConfig, SessionCounters, SimulatedConnectionState};
 use crate::ui::motion::{STATUS_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
@@ -18,10 +19,11 @@ pub type ToggleConnectionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(IntoElement)]
 pub struct BottomBar {
     theme: NanoTheme,
+    locale: Locale,
     config: SerialConfig,
     connection: SimulatedConnectionState,
-    status_label: &'static str,
-    action_label: &'static str,
+    status_label: SharedString,
+    action_label: SharedString,
     connection_flag: TransitionFlag,
     counters: SessionCounters,
     active_picker: Option<ActivePickerKind>,
@@ -33,10 +35,11 @@ impl BottomBar {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         config: SerialConfig,
         connection: SimulatedConnectionState,
-        status_label: &'static str,
-        action_label: &'static str,
+        status_label: impl Into<SharedString>,
+        action_label: impl Into<SharedString>,
         connection_flag: TransitionFlag,
         counters: SessionCounters,
         active_picker: Option<ActivePickerKind>,
@@ -45,10 +48,11 @@ impl BottomBar {
     ) -> Self {
         Self {
             theme,
+            locale,
             config,
             connection,
-            status_label,
-            action_label,
+            status_label: status_label.into(),
+            action_label: action_label.into(),
             connection_flag,
             counters,
             active_picker,
@@ -116,7 +120,7 @@ impl RenderOnce for BottomBar {
                     on_toggle(window, cx);
                 })
                 .child(Icon::new(LucideIcon::Link2).size(px(13.)))
-                .child(div().text_xs().child(self.action_label)),
+                .child(div().text_xs().child(self.action_label.clone())),
             "param-connection-anim",
             conn_flag,
             STATUS_TRANSITION_MS,
@@ -130,7 +134,7 @@ impl RenderOnce for BottomBar {
                 .py_0p5()
                 .rounded(px(4.))
                 .text_xs()
-                .child(self.status_label),
+                .child(self.status_label.clone()),
             "sim-connection-status-anim",
             conn_flag,
             STATUS_TRANSITION_MS,
@@ -170,7 +174,7 @@ impl RenderOnce for BottomBar {
                     .child(self.param_item(
                         "param-parity",
                         ActivePickerKind::Parity,
-                        self.config.parity.label(),
+                        self.config.parity.label_for(self.locale),
                     ))
                     .child(self.param_item(
                         "param-stop-bits",

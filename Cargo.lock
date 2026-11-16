@@ -5933,6 +5933,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "gpui-pre",
+ "rust-i18n",
  "serde",
  "serialport",
  "toml 0.8.23",

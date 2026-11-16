@@ -6,9 +6,10 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::model::config::{BAUD_RATE_PRESETS, parse_baud_rate};
+use crate::i18n::{self, Locale, tr, tr_shared};
+use crate::model::config::{BAUD_RATE_PRESETS, parse_baud_rate_for};
 use crate::model::{DataBits, Parity, SerialConfig, StopBits};
-use crate::serial::{DetectedPort, enumerate_serial_ports};
+use crate::serial::{DetectedPort, enumerate_serial_ports_for};
 use crate::ui::theme::NanoTheme;
 
 pub type StartActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -48,7 +49,11 @@ pub struct StartPageState {
 impl StartPageState {
     /// Creates initial state by enumerating host serial ports.
     pub fn new() -> Self {
-        Self::new_with_ports(enumerate_serial_ports())
+        Self::new_for(Locale::ZhCn)
+    }
+
+    pub fn new_for(locale: Locale) -> Self {
+        Self::new_with_ports(enumerate_serial_ports_for(locale))
     }
 
     /// Creates state from an explicit port list (useful for deterministic unit tests).
@@ -107,8 +112,17 @@ impl StartPageState {
         self.connect_error = None;
     }
 
-    pub fn apply_custom_baud(&mut self, raw: &str) -> Result<u32, &'static str> {
-        match parse_baud_rate(raw) {
+    #[allow(dead_code)]
+    pub fn apply_custom_baud(&mut self, raw: &str) -> Result<u32, std::borrow::Cow<'static, str>> {
+        self.apply_custom_baud_for(raw, Locale::ZhCn)
+    }
+
+    pub fn apply_custom_baud_for(
+        &mut self,
+        raw: &str,
+        locale: Locale,
+    ) -> Result<u32, std::borrow::Cow<'static, str>> {
+        match parse_baud_rate_for(raw, locale) {
             Ok(val) => {
                 self.config.baud_rate = val;
                 self.baud_error = None;
@@ -142,6 +156,7 @@ impl Default for StartPageState {
 #[derive(IntoElement)]
 pub struct StartPage {
     theme: NanoTheme,
+    locale: Locale,
     state: StartPageState,
     manual_port_input: Entity<InputState>,
     baud_input: Entity<InputState>,
@@ -162,6 +177,7 @@ impl StartPage {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         state: StartPageState,
         manual_port_input: Entity<InputState>,
         baud_input: Entity<InputState>,
@@ -179,6 +195,7 @@ impl StartPage {
     ) -> Self {
         Self {
             theme,
+            locale,
             state,
             manual_port_input,
             baud_input,
@@ -196,7 +213,7 @@ impl StartPage {
         }
     }
 
-    fn current_badge(theme: NanoTheme) -> AnyElement {
+    fn current_badge(theme: NanoTheme, label: SharedString) -> AnyElement {
         h_flex()
             .flex_shrink_0()
             .items_center()
@@ -209,7 +226,7 @@ impl StartPage {
                     .size(px(12.))
                     .text_color(theme.accent_blue_hover),
             )
-            .child("当前")
+            .child(label)
             .into_any_element()
     }
 }
@@ -217,6 +234,8 @@ impl StartPage {
 impl RenderOnce for StartPage {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let theme = self.theme;
+        let locale = self.locale;
+        let badge_current = tr_shared(locale, "badge.current");
         let state = self.state;
 
         let on_refresh = self.on_refresh_ports.clone();
@@ -239,7 +258,7 @@ impl RenderOnce for StartPage {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_secondary)
-                            .child("串口设备"),
+                            .child(tr(locale, "start.ports_heading")),
                     )
                     .child(
                         h_flex()
@@ -258,7 +277,7 @@ impl RenderOnce for StartPage {
                                 on_refresh(window, cx);
                             })
                             .child(Icon::new(LucideIcon::RefreshCw).size(px(12.)))
-                            .child("刷新"),
+                            .child(tr(locale, "start.refresh")),
                     ),
             )
             .child(
@@ -279,7 +298,7 @@ impl RenderOnce for StartPage {
                                 .py_2()
                                 .text_xs()
                                 .text_color(theme.text_muted)
-                                .child("未检测到可用串口，请插入设备后点击刷新"),
+                                .child(tr(locale, "start.no_ports")),
                         )
                     })
                     .children(state.ports.iter().enumerate().map(|(idx, port)| {
@@ -332,7 +351,9 @@ impl RenderOnce for StartPage {
                                             .child(port.description.clone()),
                                     ),
                             )
-                            .when(is_selected, |this| this.child(Self::current_badge(theme)))
+                            .when(is_selected, |this| {
+                                this.child(Self::current_badge(theme, badge_current.clone()))
+                            })
                     }))
                     .child(
                         h_flex()
@@ -362,10 +383,10 @@ impl RenderOnce for StartPage {
                                     } else {
                                         theme.text_secondary
                                     })
-                                    .child("手动输入端口..."),
+                                    .child(tr(locale, "start.manual_port")),
                             )
                             .when(state.manual_port_mode, |this| {
-                                this.child(Self::current_badge(theme))
+                                this.child(Self::current_badge(theme, badge_current.clone()))
                             }),
                     )
                     .when(state.manual_port_mode, |this| {
@@ -395,7 +416,7 @@ impl RenderOnce for StartPage {
                     .text_xs()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
-                    .child("波特率"),
+                    .child(tr(locale, "start.baud_label")),
             )
             .child(
                 h_flex()
@@ -501,7 +522,9 @@ impl RenderOnce for StartPage {
                                             })
                                             .child(preset.to_string()),
                                     )
-                                    .when(is_current, |this| this.child(Self::current_badge(theme)))
+                                    .when(is_current, |this| {
+                                        this.child(Self::current_badge(theme, badge_current.clone()))
+                                    })
                             }),
                         )),
                 )
@@ -534,7 +557,7 @@ impl RenderOnce for StartPage {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_secondary)
-                            .child(format!("{frame_chevron} 帧格式（高级）")),
+                            .child(i18n::start_frame_header(locale, frame_chevron)),
                     )
                     .child(
                         div()
@@ -564,7 +587,7 @@ impl RenderOnce for StartPage {
                                     div()
                                         .text_xs()
                                         .text_color(theme.text_secondary)
-                                        .child("数据位"),
+                                        .child(tr(locale, "start.data_bits")),
                                 )
                                 .child(h_flex().items_center().gap_1().children(
                                     DataBits::ALL.iter().enumerate().map(|(idx, &bits)| {
@@ -608,7 +631,7 @@ impl RenderOnce for StartPage {
                                     div()
                                         .text_xs()
                                         .text_color(theme.text_secondary)
-                                        .child("校验位"),
+                                        .child(tr(locale, "start.parity")),
                                 )
                                 .child(h_flex().items_center().gap_1().children(
                                     Parity::ALL.iter().enumerate().map(|(idx, &parity)| {
@@ -638,7 +661,7 @@ impl RenderOnce for StartPage {
                                                     on_select(parity, window, cx);
                                                 },
                                             )
-                                            .child(parity.label())
+                                            .child(parity.label_for(locale))
                                     }),
                                 )),
                         )
@@ -652,7 +675,7 @@ impl RenderOnce for StartPage {
                                     div()
                                         .text_xs()
                                         .text_color(theme.text_secondary)
-                                        .child("停止位"),
+                                        .child(tr(locale, "start.stop_bits")),
                                 )
                                 .child(h_flex().items_center().gap_1().children(
                                     StopBits::ALL.iter().enumerate().map(|(idx, &stop_bits)| {
@@ -726,7 +749,7 @@ impl RenderOnce for StartPage {
                         cx.stop_propagation();
                         on_connect(window, cx);
                     })
-                    .child("连接并进入终端 →"),
+                    .child(tr(locale, "start.connect_btn")),
             )
             .child(
                 div()
@@ -742,7 +765,7 @@ impl RenderOnce for StartPage {
                         cx.stop_propagation();
                         on_enter_sim(window, cx);
                     })
-                    .child("先不连接，进入模拟会话"),
+                    .child(tr(locale, "start.sim_btn")),
             );
 
         div()
@@ -774,13 +797,13 @@ impl RenderOnce for StartPage {
                                     .text_lg()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(theme.text_primary)
-                                    .child("连接串口设备"),
+                                    .child(tr(locale, "start.title")),
                             )
                             .child(
                                 div()
                                     .text_xs()
                                     .text_color(theme.text_secondary)
-                                    .child("选择可用端口并确认通信参数"),
+                                    .child(tr(locale, "start.subtitle")),
                             ),
                     )
                     .child(port_section)

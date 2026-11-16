@@ -1,3 +1,7 @@
+use std::borrow::Cow;
+
+use crate::i18n::{Locale, tr};
+
 use super::log::format_hex_bytes;
 use super::{
     ActivePickerKind, LogDirection, LogEntry, SendPayloadError, SerialConfig, format_visible_logs,
@@ -23,17 +27,27 @@ impl SimulatedConnectionState {
         }
     }
 
-    pub fn status_label(self) -> &'static str {
+    #[allow(dead_code)]
+    pub fn status_label(self) -> Cow<'static, str> {
+        self.status_label_for(Locale::ZhCn)
+    }
+
+    pub fn status_label_for(self, locale: Locale) -> Cow<'static, str> {
         match self {
-            Self::Disconnected => "模拟未连接",
-            Self::Connected => "模拟已连接",
+            Self::Disconnected => tr(locale, "status.sim_disconnected"),
+            Self::Connected => tr(locale, "status.sim_connected"),
         }
     }
 
-    pub fn action_label(self) -> &'static str {
+    #[allow(dead_code)]
+    pub fn action_label(self) -> Cow<'static, str> {
+        self.action_label_for(Locale::ZhCn)
+    }
+
+    pub fn action_label_for(self, locale: Locale) -> Cow<'static, str> {
         match self {
-            Self::Disconnected => "模拟连接",
-            Self::Connected => "模拟断开",
+            Self::Disconnected => tr(locale, "status.action_sim_connect"),
+            Self::Connected => tr(locale, "status.action_sim_disconnect"),
         }
     }
 }
@@ -158,7 +172,9 @@ impl SessionState {
     /// Creates a clearly-labelled simulated demo session for UI skeleton verification.
     pub fn new_simulated_demo() -> Self {
         let tx_payload = b"AT+VERSION".to_vec();
-        let rx_payload_1 = b"+VERSION: NanoModem v1.2.3".to_vec();
+        let rx_payload_1 = concat!("+VERSION: Sasha v", env!("CARGO_PKG_VERSION"))
+            .as_bytes()
+            .to_vec();
         let rx_payload_2 = b"OK".to_vec();
 
         let tx_bytes = tx_payload.len() as u64;
@@ -214,27 +230,44 @@ impl SessionState {
         }
     }
 
+    /// Returns the localized simulated session notice (empty for real sessions).
+    pub fn simulated_notice_for(&self, locale: Locale) -> Cow<'static, str> {
+        if self.is_simulated_session {
+            tr(locale, "status.sim_notice")
+        } else {
+            Cow::Borrowed("")
+        }
+    }
+
     /// Returns the mode-aware connection status label (real vs. simulated).
     #[allow(dead_code)]
-    pub fn connection_status_label(&self) -> &'static str {
+    pub fn connection_status_label(&self) -> Cow<'static, str> {
+        self.connection_status_label_for(Locale::ZhCn)
+    }
+
+    pub fn connection_status_label_for(&self, locale: Locale) -> Cow<'static, str> {
         if self.is_simulated_session {
-            self.connection.status_label()
+            self.connection.status_label_for(locale)
         } else if self.connection.is_connected() {
-            "已连接"
+            tr(locale, "status.connected")
         } else {
-            "未连接"
+            tr(locale, "status.disconnected")
         }
     }
 
     /// Returns the mode-aware connection toggle button label (real vs. simulated).
     #[allow(dead_code)]
-    pub fn connection_action_label(&self) -> &'static str {
+    pub fn connection_action_label(&self) -> Cow<'static, str> {
+        self.connection_action_label_for(Locale::ZhCn)
+    }
+
+    pub fn connection_action_label_for(&self, locale: Locale) -> Cow<'static, str> {
         if self.is_simulated_session {
-            self.connection.action_label()
+            self.connection.action_label_for(locale)
         } else if self.connection.is_connected() {
-            "断开"
+            tr(locale, "status.action_disconnect")
         } else {
-            "连接"
+            tr(locale, "status.action_connect")
         }
     }
 
@@ -398,7 +431,15 @@ impl SessionState {
     /// When switching from HEX display to text, blocks the transition and preserves both
     /// `display_hex == true` and the original `text` if the HEX input is malformed or
     /// cannot be decoded as valid UTF-8.
-    pub fn toggle_send_display_hex(&mut self) -> Result<(), &'static str> {
+    #[allow(dead_code)]
+    pub fn toggle_send_display_hex(&mut self) -> Result<(), Cow<'static, str>> {
+        self.toggle_send_display_hex_for(Locale::ZhCn)
+    }
+
+    pub fn toggle_send_display_hex_for(
+        &mut self,
+        locale: Locale,
+    ) -> Result<(), Cow<'static, str>> {
         if self.send.display_hex {
             if self.send.text.trim().is_empty() {
                 self.send.text.clear();
@@ -408,17 +449,19 @@ impl SessionState {
 
             let bytes = match parse_hex_bytes(&self.send.text) {
                 Ok(bytes) => bytes,
-                Err(SendPayloadError::InvalidHex(msg)) => return Err(msg),
+                Err(SendPayloadError::InvalidHex(_)) => return Err(tr(locale, "err.invalid_hex")),
                 Err(SendPayloadError::EmptyInput) => {
                     self.send.text.clear();
                     self.send.display_hex = false;
                     return Ok(());
                 }
-                Err(SendPayloadError::Disconnected) => return Err("HEX 转换失败"),
+                Err(SendPayloadError::Disconnected) => {
+                    return Err(tr(locale, "err.hex_toggle_failed"));
+                }
             };
 
-            let text = String::from_utf8(bytes)
-                .map_err(|_| "HEX 字节无法解码为有效 UTF-8 文本，无法切换回文本模式")?;
+            let text =
+                String::from_utf8(bytes).map_err(|_| tr(locale, "err.hex_non_utf8"))?;
             self.send.text = text;
             self.send.display_hex = false;
             Ok(())

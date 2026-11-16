@@ -6,6 +6,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{self, Locale, tr, tr_shared};
 use crate::model::{ActivePickerKind, SerialConfig};
 use crate::ui::motion::animate_popover_enter;
 use crate::ui::theme::NanoTheme;
@@ -18,6 +19,7 @@ pub type SelectPresetCallback = Rc<dyn Fn(String, &mut Window, &mut App)>;
 #[derive(IntoElement)]
 pub struct ParameterPickerPopover {
     theme: NanoTheme,
+    locale: Locale,
     kind: ActivePickerKind,
     is_simulated: bool,
     port_presets: Vec<String>,
@@ -32,6 +34,7 @@ impl ParameterPickerPopover {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         kind: ActivePickerKind,
         is_simulated: bool,
         port_presets: Vec<String>,
@@ -43,6 +46,7 @@ impl ParameterPickerPopover {
     ) -> Self {
         Self {
             theme,
+            locale,
             kind,
             is_simulated,
             port_presets,
@@ -58,18 +62,19 @@ impl ParameterPickerPopover {
 impl RenderOnce for ParameterPickerPopover {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = self.theme;
-        let current_value = self.config.current_value_str(self.kind);
+        let locale = self.locale;
+        let current_value = self.config.current_value_str_for(self.kind, locale);
         let typed_value = self.input.read(cx).value().to_string();
         let trimmed_typed = typed_value.trim().to_string();
         let presets = if self.kind == ActivePickerKind::Port && !self.is_simulated {
             self.port_presets
         } else {
-            self.kind.presets()
+            self.kind.presets_for(locale)
         };
-        let title = if self.kind == ActivePickerKind::Port && !self.is_simulated {
-            "选择或输入端口"
+        let title: SharedString = if self.kind == ActivePickerKind::Port && !self.is_simulated {
+            tr_shared(locale, "picker.title_port")
         } else {
-            self.kind.title()
+            self.kind.title_for(locale).into()
         };
         let has_exact_preset = presets.iter().any(|p| p == &trimmed_typed);
         let input_border = if self.error.is_some() {
@@ -116,7 +121,7 @@ impl RenderOnce for ParameterPickerPopover {
                             .whitespace_nowrap()
                             .text_xs()
                             .text_color(theme.text_muted)
-                            .child("Enter 确认 · Esc 取消"),
+                            .child(tr(locale, "picker.hint_keys")),
                     ),
             )
             .child(
@@ -178,7 +183,7 @@ impl RenderOnce for ParameterPickerPopover {
                                         .min_w_0()
                                         .text_xs()
                                         .text_color(theme.text_primary)
-                                        .child(format!("应用输入值: {trimmed_typed}")),
+                                        .child(i18n::picker_apply_value(locale, &trimmed_typed)),
                                 )
                                 .child(
                                     div()
@@ -198,7 +203,7 @@ impl RenderOnce for ParameterPickerPopover {
                                 .py_1p5()
                                 .text_xs()
                                 .text_color(theme.text_muted)
-                                .child("未检测到可用串口，请在上方输入端口名"),
+                                .child(tr(locale, "picker.no_ports")),
                         )
                     })
                     .children(presets.into_iter().enumerate().map(|(idx, preset)| {
@@ -249,7 +254,7 @@ impl RenderOnce for ParameterPickerPopover {
                                                 .size(px(12.))
                                                 .text_color(theme.accent_blue_hover),
                                         )
-                                        .child("当前"),
+                                        .child(tr(locale, "badge.current")),
                                 )
                             })
                     })),

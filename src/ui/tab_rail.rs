@@ -6,6 +6,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{Locale, tr_shared};
 use crate::ui::theme::NanoTheme;
 
 pub type TabSelectCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
@@ -30,6 +31,7 @@ pub struct TabItem {
 #[derive(IntoElement)]
 pub struct TabRail {
     theme: NanoTheme,
+    locale: Locale,
     tabs: Vec<TabItem>,
     on_select_tab: TabSelectCallback,
     on_close_tab: TabCloseCallback,
@@ -40,6 +42,7 @@ pub struct TabRail {
 impl TabRail {
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         tabs: Vec<TabItem>,
         on_select_tab: TabSelectCallback,
         on_close_tab: TabCloseCallback,
@@ -48,6 +51,7 @@ impl TabRail {
     ) -> Self {
         Self {
             theme,
+            locale,
             tabs,
             on_select_tab,
             on_close_tab,
@@ -59,6 +63,10 @@ impl TabRail {
 
 impl RenderOnce for TabRail {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+        let new_tooltip = tr_shared(self.locale, "tab.new_tooltip");
+        let new_label = tr_shared(self.locale, "tab.new_label");
+        let settings_tooltip = tr_shared(self.locale, "tab.settings_tooltip");
+        let settings_label = tr_shared(self.locale, "tab.settings_label");
         let theme = self.theme;
         let on_select_tab = self.on_select_tab;
         let on_close_tab = self.on_close_tab;
@@ -173,15 +181,15 @@ impl RenderOnce for TabRail {
                             .text_color(theme.text_secondary)
                             .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             .cursor_pointer()
-                            .tooltip(|window, cx| {
-                                Tooltip::new("新建标签页 (Ctrl+T)").build(window, cx)
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(new_tooltip.clone()).build(window, cx)
                             })
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 on_new_tab(window, cx);
                             })
                             .child(Icon::new(LucideIcon::Plus).size(px(12.)))
-                            .child("新建"),
+                            .child(new_label),
                     ),
             )
             .child(
@@ -206,13 +214,15 @@ impl RenderOnce for TabRail {
                             .text_color(theme.text_secondary)
                             .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             .cursor_pointer()
-                            .tooltip(|window, cx| Tooltip::new("设置").build(window, cx))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(settings_tooltip.clone()).build(window, cx)
+                            })
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 on_open_settings(window, cx);
                             })
                             .child(Icon::new(LucideIcon::Settings).size(px(12.)))
-                            .child("设置"),
+                            .child(settings_label),
                     ),
             )
     }

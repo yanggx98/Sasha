@@ -7,6 +7,7 @@ use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{Locale, tr_shared};
 use crate::model::{LogDirection, LogEntry, ReceiveViewState, selectable_log_line};
 use crate::ui::theme::NanoTheme;
 
@@ -15,26 +16,30 @@ use crate::ui::theme::NanoTheme;
 #[derive(IntoElement)]
 pub struct LogView {
     theme: NanoTheme,
+    locale: Locale,
     logs: Vec<LogEntry>,
     view_state: ReceiveViewState,
-    simulated_notice: &'static str,
+    simulated_notice: SharedString,
     log_font_size: u16,
     focus: FocusHandle,
     list_state: ListState,
 }
 
 impl LogView {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         logs: Vec<LogEntry>,
         view_state: ReceiveViewState,
-        simulated_notice: &'static str,
+        simulated_notice: SharedString,
         log_font_size: u16,
         focus: FocusHandle,
         list_state: ListState,
     ) -> Self {
         Self {
             theme,
+            locale,
             logs,
             view_state,
             simulated_notice,
@@ -48,6 +53,7 @@ impl LogView {
 impl RenderOnce for LogView {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let theme = self.theme;
+        let sim_badge_text = tr_shared(self.locale, "status.log_sim_badge");
         let show_timestamp = self.view_state.show_timestamp;
         let hex_mode = self.view_state.hex_mode;
         let log_font_size = self.log_font_size;
@@ -109,12 +115,13 @@ impl RenderOnce for LogView {
                                 rgba(0x2563EB99).into(),
                             )))
                             .when(simulated, |this| {
+                                let badge = sim_badge_text.clone();
                                 this.child(
                                     div()
                                         .flex_shrink_0()
                                         .text_xs()
                                         .text_color(theme.text_muted)
-                                        .child("[模拟]"),
+                                        .child(badge),
                                 )
                             })
                             .into_any_element()

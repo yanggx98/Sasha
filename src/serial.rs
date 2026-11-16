@@ -7,6 +7,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::i18n::{
+    self, Locale, serial_action_clone_failed, serial_action_flush_failed,
+    serial_action_open_failed, serial_action_spawn_failed, serial_action_write_failed, tr,
+};
 use crate::model::{DataBits, Parity, SerialConfig, StopBits};
 
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
@@ -31,19 +35,28 @@ pub struct SerialConnection {
     port: Box<dyn serialport::SerialPort>,
     stop_flag: Arc<AtomicBool>,
     reader_handle: Option<JoinHandle<()>>,
+    locale: Locale,
 }
 
 impl SerialConnection {
     /// Opens a real serial port using `config` and starts a background reader thread.
     pub fn open(config: &SerialConfig) -> Result<(Self, Receiver<SerialEvent>), String> {
+        Self::open_for(config, Locale::ZhCn)
+    }
+
+    /// Opens a real serial port using `config` and `locale` for localized messages.
+    pub fn open_for(
+        config: &SerialConfig,
+        locale: Locale,
+    ) -> Result<(Self, Receiver<SerialEvent>), String> {
         let port_name = config.port.trim();
         if port_name.is_empty() {
-            return Err("端口名称不能为空".to_string());
+            return Err(tr(locale, "err.port_empty").into_owned());
         }
 
         let data_bits = map_data_bits(config.data_bits);
         let parity = map_parity(config.parity);
-        let stop_bits = map_stop_bits(config.stop_bits)?;
+        let stop_bits = map_stop_bits(config.stop_bits, locale)?;
 
         let port = serialport::new(port_name, config.baud_rate)
             .data_bits(data_bits)
@@ -51,11 +64,13 @@ impl SerialConnection {
             .stop_bits(stop_bits)
             .timeout(READ_TIMEOUT)
             .open()
-            .map_err(|err| format_serial_error("打开串口失败", port_name, &err))?;
+            .map_err(|err| {
+                format_serial_error(locale, &serial_action_open_failed(locale), port_name, &err)
+            })?;
 
-        let mut reader_port = port
-            .try_clone()
-            .map_err(|err| format_serial_error("初始化串口读取通道失败", port_name, &err))?;
+        let mut reader_port = port.try_clone().map_err(|err| {
+            format_serial_error(locale, &serial_action_clone_failed(locale), port_name, &err)
+        })?;
 
         let (tx, rx) = mpsc::channel();
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -82,7 +97,8 @@ impl SerialConnection {
                         Err(err) => {
                             if !stop_clone.load(Ordering::Acquire) {
                                 let _ = tx.send(SerialEvent::Disconnected(format_io_error(
-                                    "串口连接已断开",
+                                    locale,
+                                    &tr(locale, "serial.disconnected"),
                                     &err,
                                 )));
                             }
@@ -91,13 +107,14 @@ impl SerialConnection {
                     }
                 }
             })
-            .map_err(|err| format_io_error("启动串口读线程失败", &err))?;
+            .map_err(|err| format_io_error(locale, &serial_action_spawn_failed(locale), &err))?;
 
         Ok((
             Self {
                 port,
                 stop_flag,
                 reader_handle: Some(reader_handle),
+                locale,
             },
             rx,
         ))
@@ -105,12 +122,12 @@ impl SerialConnection {
 
     /// Writes `data` to the serial port and flushes the transmit buffer.
     pub fn write_bytes(&mut self, data: &[u8]) -> Result<(), String> {
-        self.port
-            .write_all(data)
-            .map_err(|err| format_io_error("串口写入失败", &err))?;
-        self.port
-            .flush()
-            .map_err(|err| format_io_error("串口刷新发送缓冲区失败", &err))?;
+        self.port.write_all(data).map_err(|err| {
+            format_io_error(self.locale, &serial_action_write_failed(self.locale), &err)
+        })?;
+        self.port.flush().map_err(|err| {
+            format_io_error(self.locale, &serial_action_flush_failed(self.locale), &err)
+        })?;
         Ok(())
     }
 
@@ -132,6 +149,10 @@ impl Drop for SerialConnection {
 /// Enumerates available host serial ports, sorted stably by port name.
 /// Returns an empty `Vec` if enumeration fails.
 pub fn enumerate_serial_ports() -> Vec<DetectedPort> {
+    enumerate_serial_ports_for(Locale::ZhCn)
+}
+
+pub fn enumerate_serial_ports_for(locale: Locale) -> Vec<DetectedPort> {
     let Ok(ports) = serialport::available_ports() else {
         return Vec::new();
     };
@@ -140,7 +161,7 @@ pub fn enumerate_serial_ports() -> Vec<DetectedPort> {
         .into_iter()
         .map(|info| DetectedPort {
             name: info.port_name,
-            description: describe_port_type(&info.port_type),
+            description: describe_port_type_for(&info.port_type, locale),
         })
         .collect();
 
@@ -150,20 +171,26 @@ pub fn enumerate_serial_ports() -> Vec<DetectedPort> {
 
 /// Formats a `serialport::SerialPortType` into a human-readable description.
 pub fn describe_port_type(port_type: &serialport::SerialPortType) -> String {
+    describe_port_type_for(port_type, Locale::ZhCn)
+}
+
+pub fn describe_port_type_for(port_type: &serialport::SerialPortType, locale: Locale) -> String {
     match port_type {
         serialport::SerialPortType::UsbPort(usb) => format_usb_description(
+            locale,
             usb.product.as_deref(),
             usb.manufacturer.as_deref(),
             usb.vid,
             usb.pid,
         ),
-        serialport::SerialPortType::PciPort => "PCI 串口设备".to_string(),
-        serialport::SerialPortType::BluetoothPort => "蓝牙串口设备".to_string(),
-        serialport::SerialPortType::Unknown => "串口设备".to_string(),
+        serialport::SerialPortType::PciPort => tr(locale, "serial.port_pci").into_owned(),
+        serialport::SerialPortType::BluetoothPort => tr(locale, "serial.port_bt").into_owned(),
+        serialport::SerialPortType::Unknown => tr(locale, "serial.port_unknown").into_owned(),
     }
 }
 
 fn format_usb_description(
+    locale: Locale,
     product: Option<&str>,
     manufacturer: Option<&str>,
     vid: u16,
@@ -181,8 +208,8 @@ fn format_usb_description(
             }
         }
         (Some(p), None) => p.to_string(),
-        (None, Some(m)) => format!("{m} USB 串口"),
-        (None, None) => format!("USB 串口 ({vid:04X}:{pid:04X})"),
+        (None, Some(m)) => i18n::serial_usb_mfg(locale, m),
+        (None, None) => i18n::serial_usb_vid_pid(locale, vid, pid),
     }
 }
 
@@ -203,37 +230,55 @@ fn map_parity(parity: Parity) -> serialport::Parity {
     }
 }
 
-fn map_stop_bits(stop_bits: StopBits) -> Result<serialport::StopBits, String> {
+fn map_stop_bits(stop_bits: StopBits, locale: Locale) -> Result<serialport::StopBits, String> {
     match stop_bits {
         StopBits::One => Ok(serialport::StopBits::One),
         StopBits::Two => Ok(serialport::StopBits::Two),
-        StopBits::OnePointFive => Err("当前串口驱动不支持 1.5 停止位，请选择 1 或 2".to_string()),
+        StopBits::OnePointFive => Err(tr(locale, "serial.unsupported_stop_bits").into_owned()),
     }
 }
 
-fn format_serial_error(action: &str, port_name: &str, err: &serialport::Error) -> String {
+fn format_serial_error(
+    locale: Locale,
+    action: &str,
+    port_name: &str,
+    err: &serialport::Error,
+) -> String {
     let detail = match err.kind() {
-        serialport::ErrorKind::NoDevice => "未找到指定串口设备".to_string(),
-        serialport::ErrorKind::InvalidInput => format!("串口参数无效（{}）", err.description),
-        serialport::ErrorKind::Io(kind) => describe_io_error_kind(kind, &err.description),
+        serialport::ErrorKind::NoDevice => tr(locale, "serial.err_no_device").into_owned(),
+        serialport::ErrorKind::InvalidInput => {
+            i18n::serial_err_invalid_input(locale, &err.description)
+        }
+        serialport::ErrorKind::Io(kind) => describe_io_error_kind(locale, kind, &err.description),
         serialport::ErrorKind::Unknown => err.description.clone(),
     };
-    format!("{action}（{port_name}）：{detail}")
+    i18n::serial_format_error(locale, action, port_name, &detail)
 }
 
-fn format_io_error(action: &str, err: &std::io::Error) -> String {
-    let detail = describe_io_error_kind(err.kind(), &err.to_string());
-    format!("{action}：{detail}")
+fn format_io_error(locale: Locale, action: &str, err: &std::io::Error) -> String {
+    let detail = describe_io_error_kind(locale, err.kind(), &err.to_string());
+    match locale {
+        Locale::ZhCn => format!("{action}：{detail}"),
+        Locale::EnUs => format!("{action}: {detail}"),
+    }
 }
 
-fn describe_io_error_kind(kind: std::io::ErrorKind, fallback: &str) -> String {
+fn describe_io_error_kind(
+    locale: Locale,
+    kind: std::io::ErrorKind,
+    fallback: &str,
+) -> String {
     match kind {
-        std::io::ErrorKind::PermissionDenied => "串口已被占用或无访问权限".to_string(),
-        std::io::ErrorKind::NotFound => "未找到指定串口设备".to_string(),
+        std::io::ErrorKind::PermissionDenied => {
+            tr(locale, "serial.err_permission_denied").into_owned()
+        }
+        std::io::ErrorKind::NotFound => tr(locale, "serial.err_no_device").into_owned(),
         std::io::ErrorKind::BrokenPipe
         | std::io::ErrorKind::ConnectionReset
-        | std::io::ErrorKind::ConnectionAborted => "设备已断开或句柄失效".to_string(),
-        std::io::ErrorKind::TimedOut => "操作超时".to_string(),
+        | std::io::ErrorKind::ConnectionAborted => {
+            tr(locale, "serial.err_disconnected_handle").into_owned()
+        }
+        std::io::ErrorKind::TimedOut => tr(locale, "serial.err_timeout").into_owned(),
         _ => fallback.to_string(),
     }
 }

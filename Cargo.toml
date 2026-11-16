@@ -2,10 +2,12 @@
 name = "sasha"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-only"
 
 [dependencies]
 chrono = "0.4"
 gpui-kit = "0.9.1"
+rust-i18n = "4"
 serde = { version = "1", features = ["derive"] }
 serialport = "4.10.1"
 toml = "0.8"

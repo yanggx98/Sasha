@@ -1,4 +1,7 @@
+use std::borrow::Cow;
 use std::fmt;
+
+use crate::i18n::{Locale, tr};
 
 /// Preset baud rates for the quick-select overlay (used by TASK-002).
 pub const BAUD_RATE_PRESETS: &[u32] = &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
@@ -17,27 +20,42 @@ pub enum ActivePickerKind {
 }
 
 impl ActivePickerKind {
-    pub fn title(self) -> &'static str {
+    #[allow(dead_code)]
+    pub fn title(self) -> Cow<'static, str> {
+        self.title_for(Locale::ZhCn)
+    }
+
+    pub fn title_for(self, locale: Locale) -> Cow<'static, str> {
         match self {
-            Self::Port => "选择或输入端口（模拟）",
-            Self::BaudRate => "选择或输入波特率",
-            Self::DataBits => "选择或输入数据位",
-            Self::Parity => "选择或输入校验位",
-            Self::StopBits => "选择或输入停止位",
+            Self::Port => tr(locale, "picker.title_port_sim"),
+            Self::BaudRate => tr(locale, "picker.title_baud"),
+            Self::DataBits => tr(locale, "picker.title_data_bits"),
+            Self::Parity => tr(locale, "picker.title_parity"),
+            Self::StopBits => tr(locale, "picker.title_stop_bits"),
         }
     }
 
-    pub fn placeholder(self) -> &'static str {
+    #[allow(dead_code)]
+    pub fn placeholder(self) -> Cow<'static, str> {
+        self.placeholder_for(Locale::ZhCn)
+    }
+
+    pub fn placeholder_for(self, locale: Locale) -> Cow<'static, str> {
         match self {
-            Self::Port => "输入端口名（如 COM3）或选择预设",
-            Self::BaudRate => "输入正整数波特率（如 230400）或选择预设",
-            Self::DataBits => "输入 5 / 6 / 7 / 8 或选择预设",
-            Self::Parity => "输入 无校验 / 奇校验 / 偶校验 或选择预设",
-            Self::StopBits => "输入 1 / 1.5 / 2 或选择预设",
+            Self::Port => tr(locale, "picker.placeholder_port"),
+            Self::BaudRate => tr(locale, "picker.placeholder_baud"),
+            Self::DataBits => tr(locale, "picker.placeholder_data_bits"),
+            Self::Parity => tr(locale, "picker.placeholder_parity"),
+            Self::StopBits => tr(locale, "picker.placeholder_stop_bits"),
         }
     }
 
+    #[allow(dead_code)]
     pub fn presets(self) -> Vec<String> {
+        self.presets_for(Locale::ZhCn)
+    }
+
+    pub fn presets_for(self, locale: Locale) -> Vec<String> {
         match self {
             Self::Port => SIMULATED_PORT_PRESETS
                 .iter()
@@ -48,7 +66,10 @@ impl ActivePickerKind {
                 .iter()
                 .map(|d| d.label().to_string())
                 .collect(),
-            Self::Parity => Parity::ALL.iter().map(|p| p.label().to_string()).collect(),
+            Self::Parity => Parity::ALL
+                .iter()
+                .map(|p| p.label_for(locale).to_string())
+                .collect(),
             Self::StopBits => StopBits::ALL
                 .iter()
                 .map(|s| s.label().to_string())
@@ -77,13 +98,18 @@ impl DataBits {
         }
     }
 
-    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+    #[allow(dead_code)]
+    pub fn parse(raw: &str) -> Result<Self, Cow<'static, str>> {
+        Self::parse_for(raw, Locale::ZhCn)
+    }
+
+    pub fn parse_for(raw: &str, locale: Locale) -> Result<Self, Cow<'static, str>> {
         match raw.trim() {
             "5" => Ok(Self::Five),
             "6" => Ok(Self::Six),
             "7" => Ok(Self::Seven),
             "8" => Ok(Self::Eight),
-            _ => Err("数据位仅支持 5、6、7、8"),
+            _ => Err(tr(locale, "err.data_bits")),
         }
     }
 }
@@ -104,27 +130,36 @@ pub enum Parity {
 impl Parity {
     pub const ALL: [Self; 3] = [Self::None, Self::Odd, Self::Even];
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> Cow<'static, str> {
+        self.label_for(Locale::ZhCn)
+    }
+
+    pub fn label_for(self, locale: Locale) -> Cow<'static, str> {
         match self {
-            Self::None => "无校验",
-            Self::Odd => "奇校验",
-            Self::Even => "偶校验",
+            Self::None => tr(locale, "parity.none"),
+            Self::Odd => tr(locale, "parity.odd"),
+            Self::Even => tr(locale, "parity.even"),
         }
     }
 
-    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+    #[allow(dead_code)]
+    pub fn parse(raw: &str) -> Result<Self, Cow<'static, str>> {
+        Self::parse_for(raw, Locale::ZhCn)
+    }
+
+    pub fn parse_for(raw: &str, locale: Locale) -> Result<Self, Cow<'static, str>> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "无校验" | "none" | "n" => Ok(Self::None),
             "奇校验" | "odd" | "o" => Ok(Self::Odd),
             "偶校验" | "even" | "e" => Ok(Self::Even),
-            _ => Err("校验位仅支持 无校验、奇校验、偶校验"),
+            _ => Err(tr(locale, "err.parity")),
         }
     }
 }
 
 impl fmt::Display for Parity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.label())
+        f.write_str(&self.label())
     }
 }
 
@@ -146,12 +181,17 @@ impl StopBits {
         }
     }
 
-    pub fn parse(raw: &str) -> Result<Self, &'static str> {
+    #[allow(dead_code)]
+    pub fn parse(raw: &str) -> Result<Self, Cow<'static, str>> {
+        Self::parse_for(raw, Locale::ZhCn)
+    }
+
+    pub fn parse_for(raw: &str, locale: Locale) -> Result<Self, Cow<'static, str>> {
         match raw.trim() {
             "1" => Ok(Self::One),
             "1.5" => Ok(Self::OnePointFive),
             "2" => Ok(Self::Two),
-            _ => Err("停止位仅支持 1、1.5、2"),
+            _ => Err(tr(locale, "err.stop_bits")),
         }
     }
 }
@@ -163,23 +203,33 @@ impl fmt::Display for StopBits {
 }
 
 /// Validates a simulated port name input.
-pub fn parse_port(raw: &str) -> Result<String, &'static str> {
+#[allow(dead_code)]
+pub fn parse_port(raw: &str) -> Result<String, Cow<'static, str>> {
+    parse_port_for(raw, Locale::ZhCn)
+}
+
+pub fn parse_port_for(raw: &str, locale: Locale) -> Result<String, Cow<'static, str>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("端口名称不能为空（如 COM3）");
+        return Err(tr(locale, "err.port_empty"));
     }
     Ok(trimmed.to_string())
 }
 
 /// Validates a baud rate input as a positive integer (`>= 1`).
-pub fn parse_baud_rate(raw: &str) -> Result<u32, &'static str> {
+#[allow(dead_code)]
+pub fn parse_baud_rate(raw: &str) -> Result<u32, Cow<'static, str>> {
+    parse_baud_rate_for(raw, Locale::ZhCn)
+}
+
+pub fn parse_baud_rate_for(raw: &str, locale: Locale) -> Result<u32, Cow<'static, str>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err("请输入正整数波特率（如 115200）");
+        return Err(tr(locale, "err.baud_empty"));
     }
     match trimmed.parse::<u32>() {
         Ok(val) if val > 0 => Ok(val),
-        _ => Err("波特率必须为正整数（如 115200 或 230400）"),
+        _ => Err(tr(locale, "err.baud_invalid")),
     }
 }
 
@@ -194,37 +244,52 @@ pub struct SerialConfig {
 }
 
 impl SerialConfig {
+    #[allow(dead_code)]
     pub fn current_value_str(&self, kind: ActivePickerKind) -> String {
+        self.current_value_str_for(kind, Locale::ZhCn)
+    }
+
+    pub fn current_value_str_for(&self, kind: ActivePickerKind, locale: Locale) -> String {
         match kind {
             ActivePickerKind::Port => self.port.clone(),
             ActivePickerKind::BaudRate => self.baud_rate.to_string(),
             ActivePickerKind::DataBits => self.data_bits.label().to_string(),
-            ActivePickerKind::Parity => self.parity.label().to_string(),
+            ActivePickerKind::Parity => self.parity.label_for(locale).to_string(),
             ActivePickerKind::StopBits => self.stop_bits.label().to_string(),
         }
     }
 
     /// Validates and applies a parameter value. Leaves `self` unchanged on error.
+    #[allow(dead_code)]
     pub fn apply_picker_value(
         &mut self,
         kind: ActivePickerKind,
         raw: &str,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), Cow<'static, str>> {
+        self.apply_picker_value_for(kind, raw, Locale::ZhCn)
+    }
+
+    pub fn apply_picker_value_for(
+        &mut self,
+        kind: ActivePickerKind,
+        raw: &str,
+        locale: Locale,
+    ) -> Result<(), Cow<'static, str>> {
         match kind {
             ActivePickerKind::Port => {
-                self.port = parse_port(raw)?;
+                self.port = parse_port_for(raw, locale)?;
             }
             ActivePickerKind::BaudRate => {
-                self.baud_rate = parse_baud_rate(raw)?;
+                self.baud_rate = parse_baud_rate_for(raw, locale)?;
             }
             ActivePickerKind::DataBits => {
-                self.data_bits = DataBits::parse(raw)?;
+                self.data_bits = DataBits::parse_for(raw, locale)?;
             }
             ActivePickerKind::Parity => {
-                self.parity = Parity::parse(raw)?;
+                self.parity = Parity::parse_for(raw, locale)?;
             }
             ActivePickerKind::StopBits => {
-                self.stop_bits = StopBits::parse(raw)?;
+                self.stop_bits = StopBits::parse_for(raw, locale)?;
             }
         }
         Ok(())

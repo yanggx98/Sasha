@@ -9,12 +9,13 @@ use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{Locale, tr, tr_shared};
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, LogSelectionModel, Parity, SendPayloadError,
     SessionState, StopBits, current_timestamp_hms_ms,
 };
-use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports};
+use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::ui::bottom_bar::BottomBar;
 use crate::ui::log_view::LogView;
 use crate::ui::motion::UiMotionState;
@@ -57,7 +58,7 @@ struct SessionTab {
 }
 
 impl SessionTab {
-    fn new(id: u64, cx: &mut Context<SashaApp>) -> Self {
+    fn new(id: u64, locale: Locale, cx: &mut Context<SashaApp>) -> Self {
         let state = SessionState::new_simulated_demo();
         let motion = UiMotionState::new(
             state.receive.hex_mode,
@@ -79,7 +80,7 @@ impl SessionTab {
             page: AppPage::Start,
             state,
             motion,
-            start_page: StartPageState::new(),
+            start_page: StartPageState::new_for(locale),
             start_manual_port_input: None,
             _start_manual_port_sub: None,
             start_baud_input: None,
@@ -99,11 +100,11 @@ impl SessionTab {
         }
     }
 
-    fn tab_item(&self, active_id: u64) -> TabItem {
+    fn tab_item(&self, active_id: u64, locale: Locale) -> TabItem {
         let title: SharedString = if self.page == AppPage::Start {
-            "新连接".into()
+            tr_shared(locale, "tab.new_connection")
         } else if self.state.is_simulated_session {
-            "模拟演示".into()
+            tr_shared(locale, "tab.simulated_demo")
         } else {
             self.state.config.port.clone().into()
         };
@@ -198,6 +199,7 @@ pub struct SashaApp {
     next_tab_id: u64,
     theme: NanoTheme,
     config_store: Entity<ConfigStore>,
+    last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
     _config_subscription: Subscription,
     picker_port_presets: Vec<String>,
@@ -209,19 +211,76 @@ pub struct SashaApp {
 impl SashaApp {
     pub fn new(config_store: Entity<ConfigStore>, cx: &mut Context<Self>) -> Self {
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
-        let initial_tab = SessionTab::new(1, cx);
+        let locale = config_store.read(cx).config().locale;
+        let initial_tab = SessionTab::new(1, locale, cx);
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
             next_tab_id: 2,
             theme: NanoTheme::default(),
             config_store,
+            last_locale: locale,
             settings_window: None,
             _config_subscription,
             picker_port_presets: Vec::new(),
             picker_input: None,
             _picker_subscription: None,
             picker_error: None,
+        }
+    }
+
+    fn current_locale(&self, cx: &App) -> Locale {
+        self.config_store.read(cx).config().locale
+    }
+
+    fn sync_placeholders_if_locale_changed(
+        &mut self,
+        locale: Locale,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.last_locale == locale {
+            return;
+        }
+        self.last_locale = locale;
+
+        for tab in &self.tabs {
+            if let Some(input) = &tab.start_manual_port_input {
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(
+                        tr(locale, "start.manual_port_placeholder"),
+                        window,
+                        cx,
+                    );
+                });
+            }
+            if let Some(input) = &tab.start_baud_input {
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(tr(locale, "start.baud_placeholder"), window, cx);
+                });
+            }
+            if let Some(input) = &tab.send_input {
+                let key = if tab.state.is_simulated_session {
+                    "send.placeholder_sim"
+                } else {
+                    "send.placeholder"
+                };
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(tr(locale, key), window, cx);
+                });
+            }
+        }
+
+        if let Some(input) = &self.picker_input {
+            let placeholder = self
+                .active_tab()
+                .state
+                .active_picker
+                .map(|k| k.placeholder_for(locale))
+                .unwrap_or_else(|| tr(locale, "picker.input_placeholder"));
+            input.update(cx, |state, cx| {
+                state.set_placeholder(placeholder, window, cx);
+            });
         }
     }
 
@@ -246,10 +305,10 @@ impl SashaApp {
         self.tabs.iter_mut().find(|t| t.id == tab_id)
     }
 
-    fn tab_items(&self) -> Vec<TabItem> {
+    fn tab_items(&self, locale: Locale) -> Vec<TabItem> {
         self.tabs
             .iter()
-            .map(|t| t.tab_item(self.active_tab_id))
+            .map(|t| t.tab_item(self.active_tab_id, locale))
             .collect()
     }
 
@@ -275,7 +334,8 @@ impl SashaApp {
         TextSelection::clear(window, cx);
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let tab = SessionTab::new(id, cx);
+        let locale = self.current_locale(cx);
+        let tab = SessionTab::new(id, locale, cx);
         self.tabs.push(tab);
         self.active_tab_id = id;
         cx.notify();
@@ -370,7 +430,8 @@ impl SashaApp {
             return existing;
         }
 
-        let entity = cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
+        let placeholder = tr(self.current_locale(cx), "start.manual_port_placeholder");
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let entity_for_sub = entity.clone();
         let sub = cx.subscribe_in(
             &entity,
@@ -412,9 +473,8 @@ impl SashaApp {
             return existing;
         }
 
-        let entity = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("输入正整数波特率（如 230400），回车确认")
-        });
+        let placeholder = tr(self.current_locale(cx), "start.baud_placeholder");
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let entity_for_sub = entity.clone();
         let sub = cx.subscribe_in(
             &entity,
@@ -430,8 +490,9 @@ impl SashaApp {
                 }
                 InputEvent::PressEnter { .. } => {
                     let raw = entity_for_sub.read(cx).value().to_string();
+                    let locale = this.current_locale(cx);
                     if let Some(tab) = this.tab_mut(tab_id) {
-                        let _ = tab.start_page.apply_custom_baud(&raw);
+                        let _ = tab.start_page.apply_custom_baud_for(&raw, locale);
                     }
                     cx.notify();
                 }
@@ -447,9 +508,10 @@ impl SashaApp {
     }
 
     fn refresh_start_ports(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
         self.active_tab_mut()
             .start_page
-            .refresh_ports(enumerate_serial_ports());
+            .refresh_ports(enumerate_serial_ports_for(locale));
         cx.notify();
     }
 
@@ -546,8 +608,9 @@ impl SashaApp {
             self.active_tab_mut().start_page.set_manual_port_value(&raw);
         }
 
+        let locale = self.current_locale(cx);
         let config = self.active_tab().start_page.config.clone();
-        match SerialConnection::open(&config) {
+        match SerialConnection::open_for(&config, locale) {
             Ok((conn, rx)) => {
                 let tab = self.active_tab_mut();
                 tab.disconnect_real_serial(None);
@@ -616,6 +679,7 @@ impl SashaApp {
                 if !rx_chunks.is_empty() || should_break {
                     let updated = this.update(cx, |app, cx| {
                         let is_active = app.active_tab_id == tab_id;
+                        let closed_msg = tr(app.current_locale(cx), "serial.rx_closed").into_owned();
                         let Some(tab) = app.tab_mut(tab_id) else {
                             return false;
                         };
@@ -630,7 +694,7 @@ impl SashaApp {
                             tab.disconnect_real_serial(Some(err));
                             cx.notify();
                         } else if channel_closed && tab.state.connection.is_connected() {
-                            tab.disconnect_real_serial(Some("串口读取通道已关闭".to_string()));
+                            tab.disconnect_real_serial(Some(closed_msg));
                             cx.notify();
                         } else if is_active {
                             cx.notify();
@@ -661,7 +725,8 @@ impl SashaApp {
             tab.disconnect_real_serial(None);
             tab.state.config.clone()
         };
-        match SerialConnection::open(&config) {
+        let locale = self.current_locale(cx);
+        match SerialConnection::open_for(&config, locale) {
             Ok((conn, rx)) => {
                 let tab = self.active_tab_mut();
                 tab.serial_conn = Some(conn);
@@ -715,10 +780,11 @@ impl SashaApp {
             .tab_mut(tab_id)
             .map(|t| (t.state.send.text.clone(), t.state.is_simulated_session))
             .unwrap_or_default();
+        let locale = self.current_locale(cx);
         let placeholder = if is_sim {
-            "输入发送内容（模拟）"
+            tr(locale, "send.placeholder_sim")
         } else {
-            "输入发送内容"
+            tr(locale, "send.placeholder")
         };
         let entity = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -797,8 +863,8 @@ impl SashaApp {
             return existing.clone();
         }
 
-        let entity =
-            cx.new(|cx| InputState::new(window, cx).placeholder("输入参数值或从下方选择预设"));
+        let placeholder = tr(self.current_locale(cx), "picker.input_placeholder");
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let sub = cx.subscribe_in(
             &entity,
             window,
@@ -830,18 +896,19 @@ impl SashaApp {
             return;
         }
 
+        let locale = self.current_locale(cx);
         let (is_sim, current_val) = {
             let tab = self.active_tab_mut();
             tab.state.active_picker = Some(kind);
             tab.motion.picker_open_epoch += 1;
             (
                 tab.state.is_simulated_session,
-                tab.state.config.current_value_str(kind),
+                tab.state.config.current_value_str_for(kind, locale),
             )
         };
         self.picker_error = None;
         if kind == ActivePickerKind::Port && !is_sim {
-            self.picker_port_presets = enumerate_serial_ports()
+            self.picker_port_presets = enumerate_serial_ports_for(locale)
                 .into_iter()
                 .map(|p| p.name)
                 .collect();
@@ -849,7 +916,7 @@ impl SashaApp {
 
         let input = self.ensure_picker_input(window, cx);
         input.update(cx, |state, cx| {
-            state.set_placeholder(kind.placeholder(), window, cx);
+            state.set_placeholder(kind.placeholder_for(locale), window, cx);
             state.set_value(current_val, window, cx);
             state.focus(window, cx);
             state.select_all(window, cx);
@@ -862,11 +929,12 @@ impl SashaApp {
             return;
         };
 
+        let locale = self.current_locale(cx);
         let result = self
             .active_tab_mut()
             .state
             .config
-            .apply_picker_value(kind, raw);
+            .apply_picker_value_for(kind, raw, locale);
         match result {
             Ok(()) => {
                 self.picker_error = None;
@@ -1023,7 +1091,8 @@ impl SashaApp {
             self.active_tab_mut().state.send.text = value;
         }
 
-        let res = self.active_tab_mut().state.toggle_send_display_hex();
+        let locale = self.current_locale(cx);
+        let res = self.active_tab_mut().state.toggle_send_display_hex_for(locale);
         match res {
             Ok(()) => {
                 let (display_hex, next_text) = {
@@ -1070,6 +1139,7 @@ impl SashaApp {
             self.active_tab_mut().state.send.text = value;
         }
 
+        let locale = self.current_locale(cx);
         let is_simulated = self.active_tab().state.is_simulated_session;
         if is_simulated {
             let res = self
@@ -1082,13 +1152,13 @@ impl SashaApp {
                 }
                 Err(SendPayloadError::Disconnected) => {
                     self.active_tab_mut().send_error =
-                        Some("模拟未连接：请先点击底栏“模拟连接”".into());
+                        Some(tr_shared(locale, "err.send_sim_disconnected"));
                 }
                 Err(SendPayloadError::EmptyInput) => {
-                    self.active_tab_mut().send_error = Some("发送内容为空，未提交".into());
+                    self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_empty"));
                 }
-                Err(SendPayloadError::InvalidHex(msg)) => {
-                    self.active_tab_mut().send_error = Some(msg.into());
+                Err(SendPayloadError::InvalidHex(_)) => {
+                    self.active_tab_mut().send_error = Some(tr_shared(locale, "err.invalid_hex"));
                 }
             }
             cx.notify();
@@ -1112,20 +1182,20 @@ impl SashaApp {
                     }
                 } else {
                     self.handle_serial_disconnected(
-                        Some("串口未连接：请先点击底栏“连接”".to_string()),
+                        Some(tr(locale, "err.send_disconnected").into_owned()),
                         cx,
                     );
                     return;
                 }
             }
             Err(SendPayloadError::Disconnected) => {
-                self.active_tab_mut().send_error = Some("串口未连接：请先点击底栏“连接”".into());
+                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_disconnected"));
             }
             Err(SendPayloadError::EmptyInput) => {
-                self.active_tab_mut().send_error = Some("发送内容为空，未提交".into());
+                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_empty"));
             }
-            Err(SendPayloadError::InvalidHex(msg)) => {
-                self.active_tab_mut().send_error = Some(msg.into());
+            Err(SendPayloadError::InvalidHex(_)) => {
+                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.invalid_hex"));
             }
         }
         cx.notify();
@@ -1177,9 +1247,11 @@ impl SashaApp {
             let _ = weak.update(cx, |this, cx| this.open_settings(window, cx));
         });
 
+        let locale = self.current_locale(cx);
         TabRail::new(
             self.theme,
-            self.tab_items(),
+            locale,
+            self.tab_items(locale),
             on_select_tab,
             on_close_tab,
             on_new_tab,
@@ -1208,6 +1280,8 @@ impl SashaApp {
 
 impl Render for SashaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = self.current_locale(cx);
+        self.sync_placeholders_if_locale_changed(locale, window, cx);
         let tab_rail = self.build_tab_rail(cx);
         let active_id = self.active_tab_id;
 
@@ -1284,6 +1358,7 @@ impl Render for SashaApp {
                                 .h_full()
                                 .child(StartPage::new(
                                     self.theme,
+                                    locale,
                                     start_page_state,
                                     manual_port_input,
                                     baud_input,
@@ -1319,7 +1394,7 @@ impl Render for SashaApp {
         let log_list_state = tab.log_list_state.clone();
         let logs = tab.state.logs.clone();
         let receive_state = tab.state.receive.clone();
-        let simulated_notice = tab.state.simulated_notice;
+        let simulated_notice = tab.state.simulated_notice_for(locale);
         let send_state = tab.state.send.clone();
         let motion = tab.motion;
         let is_connected = tab.state.connection.is_connected();
@@ -1327,8 +1402,8 @@ impl Render for SashaApp {
         let send_error = tab.send_error.clone();
         let config = tab.state.config.clone();
         let connection = tab.state.connection;
-        let conn_status_label = tab.state.connection_status_label();
-        let conn_action_label = tab.state.connection_action_label();
+        let conn_status_label = tab.state.connection_status_label_for(locale);
+        let conn_action_label = tab.state.connection_action_label_for(locale);
         let counters = tab.state.counters;
         let active_picker = tab.state.active_picker;
         let picker_overlay = active_picker.zip(self.picker_input.clone());
@@ -1488,9 +1563,10 @@ impl Render for SashaApp {
                                     .w_full()
                                     .child(LogView::new(
                                         self.theme,
+                                        locale,
                                         logs,
                                         receive_state.clone(),
-                                        simulated_notice,
+                                        simulated_notice.into(),
                                         log_font_size,
                                         log_focus,
                                         log_list_state,
@@ -1498,6 +1574,7 @@ impl Render for SashaApp {
                             )
                             .child(ReceiveToolbar::new(
                                 self.theme,
+                                locale,
                                 receive_state,
                                 send_state.send_hex,
                                 send_state.line_ending,
@@ -1525,6 +1602,7 @@ impl Render for SashaApp {
                                     .mt(px(-12.))
                                     .child(SendCard::new(
                                         self.theme,
+                                        locale,
                                         send_state,
                                         is_connected,
                                         is_simulated,
@@ -1538,6 +1616,7 @@ impl Render for SashaApp {
                             )
                             .child(BottomBar::new(
                                 self.theme,
+                                locale,
                                 config,
                                 connection,
                                 conn_status_label,
@@ -1564,6 +1643,7 @@ impl Render for SashaApp {
                         .justify_center()
                         .child(ParameterPickerPopover::new(
                             self.theme,
+                            locale,
                             kind,
                             is_simulated,
                             self.picker_port_presets.clone(),

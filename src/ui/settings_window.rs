@@ -1,15 +1,29 @@
+use std::sync::{Arc, OnceLock};
+
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::i18n::{self, Locale, tr, tr_shared};
 use crate::model::ConfigStore;
 use crate::model::settings::LOG_FONT_SIZE_PRESETS;
 use crate::ui::theme::NanoTheme;
 
 const HEADER_HEIGHT: Pixels = px(38.);
-const APP_AUTHOR: &str = "yanggx98 <yanggx98@outlook.com>";
+const APP_AUTHOR: &str = "yanggx98";
 const GITHUB_URL: &str = "https://github.com/yanggx98/Sasha";
+
+fn app_icon() -> Arc<Image> {
+    static ICON: OnceLock<Arc<Image>> = OnceLock::new();
+    ICON.get_or_init(|| {
+        Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            include_bytes!("../../assets/icons/sasha-arrows-transparent.png").to_vec(),
+        ))
+    })
+    .clone()
+}
 
 /// Top-level tabs inside [`SettingsWindow`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,19 +44,19 @@ impl SettingsTab {
         }
     }
 
-    fn label(self) -> &'static str {
+    fn label(self, locale: Locale) -> SharedString {
         match self {
-            Self::General => "常规",
-            Self::View => "视图",
-            Self::About => "关于",
+            Self::General => tr_shared(locale, "settings.tab_general"),
+            Self::View => tr_shared(locale, "settings.tab_view"),
+            Self::About => tr_shared(locale, "settings.tab_about"),
         }
     }
 
-    fn subtitle(self) -> &'static str {
+    fn subtitle(self, locale: Locale) -> SharedString {
         match self {
-            Self::General => "General Settings",
-            Self::View => "View Settings",
-            Self::About => "About Sasha",
+            Self::General => tr_shared(locale, "settings.tab_general_sub"),
+            Self::View => tr_shared(locale, "settings.tab_view_sub"),
+            Self::About => tr_shared(locale, "settings.tab_about_sub"),
         }
     }
 
@@ -88,6 +102,20 @@ impl SettingsWindow {
         }
     }
 
+    fn current_locale(&self, cx: &App) -> Locale {
+        self.config_store.read(cx).config().locale
+    }
+
+    fn set_locale(&mut self, locale: Locale, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.locale = locale);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
     fn set_log_font_size(&mut self, size: u16, cx: &mut Context<Self>) {
         let result = self.config_store.update(cx, |store, cx| {
             let res = store.update(|cfg| cfg.log_font_size = size);
@@ -115,6 +143,7 @@ impl SettingsWindow {
     fn render_tab_button(&self, tab: SettingsTab, cx: &mut Context<Self>) -> AnyElement {
         let is_active = self.active_tab == tab;
         let theme = self.theme;
+        let locale = self.current_locale(cx);
 
         h_flex()
             .id(tab.id())
@@ -147,11 +176,11 @@ impl SettingsWindow {
                 }),
             )
             .child(Icon::new(tab.icon()).size(px(12.)))
-            .child(tab.label())
+            .child(tab.label(locale))
             .into_any_element()
     }
 
-    fn render_section_header(&self, tab: SettingsTab) -> impl IntoElement {
+    fn render_section_header(&self, tab: SettingsTab, locale: Locale) -> impl IntoElement {
         v_flex()
             .w_full()
             .pb_3()
@@ -163,20 +192,20 @@ impl SettingsWindow {
                     .text_base()
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(self.theme.text_primary)
-                    .child(tab.label()),
+                    .child(tab.label(locale)),
             )
             .child(
                 div()
                     .font_family("Consolas")
                     .text_xs()
                     .text_color(self.theme.text_muted)
-                    .child(tab.subtitle()),
+                    .child(tab.subtitle(locale)),
             )
     }
 
     fn render_setting_row(
         &self,
-        title: &'static str,
+        title: impl Into<SharedString>,
         description: impl Into<SharedString>,
         control: AnyElement,
     ) -> AnyElement {
@@ -198,7 +227,7 @@ impl SettingsWindow {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(self.theme.text_primary)
-                            .child(title),
+                            .child(title.into()),
                     )
                     .child(
                         div()
@@ -214,7 +243,7 @@ impl SettingsWindow {
     fn flat_action_button(
         &self,
         id: &'static str,
-        label: &'static str,
+        label: impl Into<SharedString>,
         on_click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -236,16 +265,52 @@ impl SettingsWindow {
                     on_click(this, window, cx);
                 }),
             )
-            .child(label)
+            .child(label.into())
             .into_any_element()
     }
 
     fn render_general_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = self.current_locale(cx);
+        let theme = self.theme;
         let path_text = self.config_store.read(cx).path().display().to_string();
+
+        let language_picker = h_flex()
+            .p_0p5()
+            .rounded(px(6.))
+            .bg(theme.bg_card)
+            .gap_0p5()
+            .children(Locale::ALL.into_iter().enumerate().map(|(idx, candidate)| {
+                let is_selected = locale == candidate;
+                div()
+                    .id(ElementId::named_usize("settings-locale", idx))
+                    .px_2p5()
+                    .py_1()
+                    .rounded(px(4.))
+                    .text_xs()
+                    .cursor_pointer()
+                    .when(is_selected, |this| {
+                        this.bg(theme.bg_toggle_active)
+                            .text_color(theme.accent_blue_hover)
+                            .font_weight(FontWeight::MEDIUM)
+                    })
+                    .when(!is_selected, |this| {
+                        this.text_color(theme.text_secondary)
+                            .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.set_locale(candidate, cx);
+                        }),
+                    )
+                    .child(candidate.native_name())
+            }))
+            .into_any_element();
 
         let copy_btn = self.flat_action_button(
             "settings-copy-config-path",
-            "复制路径",
+            tr_shared(locale, "settings.copy_path"),
             |this, _, cx| {
                 let path = this.config_store.read(cx).path().display().to_string();
                 this.copy_text(&path, cx);
@@ -255,23 +320,33 @@ impl SettingsWindow {
 
         let reset_btn = self.flat_action_button(
             "settings-reset-defaults",
-            "恢复默认",
+            tr_shared(locale, "settings.reset_btn"),
             |this, _, cx| this.reset_defaults(cx),
             cx,
         );
 
         v_flex()
             .w_full()
-            .child(self.render_section_header(SettingsTab::General))
-            .child(self.render_setting_row("配置文件位置", path_text, copy_btn))
+            .child(self.render_section_header(SettingsTab::General, locale))
             .child(self.render_setting_row(
-                "恢复默认设置",
-                "将所有全局配置重置为初始默认值并立即写入 config.toml",
+                tr_shared(locale, "settings.language_title"),
+                tr_shared(locale, "settings.language_desc"),
+                language_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.config_path_title"),
+                path_text,
+                copy_btn,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.reset_title"),
+                tr_shared(locale, "settings.reset_desc"),
                 reset_btn,
             ))
     }
 
     fn render_view_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = self.current_locale(cx);
         let current_size = self.config_store.read(cx).config().log_font_size;
         let theme = self.theme;
 
@@ -283,7 +358,10 @@ impl SettingsWindow {
             .children(LOG_FONT_SIZE_PRESETS.into_iter().map(|preset| {
                 let is_selected = current_size == preset;
                 div()
-                    .id(ElementId::named_usize("settings-font-size", preset as usize))
+                    .id(ElementId::named_usize(
+                        "settings-font-size",
+                        preset as usize,
+                    ))
                     .px_2p5()
                     .py_1()
                     .rounded(px(4.))
@@ -316,47 +394,41 @@ impl SettingsWindow {
             .bg(theme.bg_card)
             .text_xs()
             .text_color(theme.text_secondary)
-            .child("Dark")
+            .child(tr(locale, "settings.theme_dark"))
             .into_any_element();
 
         v_flex()
             .w_full()
-            .child(self.render_section_header(SettingsTab::View))
+            .child(self.render_section_header(SettingsTab::View, locale))
             .child(self.render_setting_row(
-                "日志字号",
-                "控制主窗口接收/发送日志区的等宽字体大小，修改后立即生效",
+                tr_shared(locale, "settings.font_size_title"),
+                tr_shared(locale, "settings.font_size_desc"),
                 font_size_picker,
             ))
-            .child(self.render_setting_row("界面主题", "当前使用深色主题", theme_badge))
-    }
-
-    fn flat_info_badge(&self, text: impl Into<SharedString>) -> AnyElement {
-        div()
-            .px_3()
-            .py_1()
-            .rounded(px(6.))
-            .bg(self.theme.bg_card)
-            .text_xs()
-            .text_color(self.theme.text_secondary)
-            .child(text.into())
-            .into_any_element()
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.theme_title"),
+                tr_shared(locale, "settings.theme_desc"),
+                theme_badge,
+            ))
     }
 
     fn render_about_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = self.current_locale(cx);
         let version = format!("v{}", env!("CARGO_PKG_VERSION"));
         let copy_github_btn = self.flat_action_button(
             "settings-copy-github",
-            "复制地址",
+            tr_shared(locale, "settings.copy_url"),
             |this, _, cx| this.copy_text(GITHUB_URL, cx),
             cx,
         );
         let open_github_btn = self.flat_action_button(
             "settings-open-github",
-            "打开仓库",
+            tr_shared(locale, "settings.open_repo"),
             |_, _, cx| cx.open_url(GITHUB_URL),
             cx,
         );
         let github_actions = h_flex()
+            .justify_center()
             .gap_1p5()
             .child(open_github_btn)
             .child(copy_github_btn)
@@ -364,23 +436,86 @@ impl SettingsWindow {
 
         v_flex()
             .w_full()
-            .child(self.render_section_header(SettingsTab::About))
-            .child(self.render_setting_row(
-                "版本号",
-                "当前构建版本",
-                self.flat_info_badge(version),
-            ))
-            .child(self.render_setting_row(
-                "作者",
-                APP_AUTHOR,
-                self.flat_action_button(
-                    "settings-copy-author",
-                    "复制邮箱",
-                    |this, _, cx| this.copy_text("yanggx98@outlook.com", cx),
-                    cx,
-                ),
-            ))
-            .child(self.render_setting_row("GitHub 地址", GITHUB_URL, github_actions))
+            .child(
+                v_flex()
+                    .id("settings-about-brand")
+                    .w_full()
+                    .items_center()
+                    .pt_2()
+                    .pb_5()
+                    .gap_1()
+                    .child(img(app_icon()).size(px(64.)).flex_shrink_0())
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(self.theme.text_primary)
+                            .child("Sasha"),
+                    )
+                    .child(
+                        div()
+                            .font_family("Consolas")
+                            .text_xs()
+                            .text_color(self.theme.text_muted)
+                            .child(version),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .w_full()
+                    .items_center()
+                    .pt_2()
+                    .gap_3()
+                    .text_xs()
+                    .text_color(self.theme.text_muted)
+                    .child(
+                        h_flex()
+                            .gap_1p5()
+                            .child(tr(locale, "settings.built_with"))
+                            .child(self.about_project_link(
+                                "about-gpui-kit",
+                                "GPUI-KIT",
+                                "https://github.com/longbridge/gpui-kit",
+                            ))
+                            .child("·")
+                            .child(self.about_project_link(
+                                "about-gpui",
+                                "GPUI",
+                                "https://github.com/zed-industries/zed/tree/main/crates/gpui",
+                            )),
+                    )
+                    .child(
+                        v_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(tr(locale, "settings.ai_assisted"))
+                            .child("DeepSeek · Grok · ChatGPT · Gemini"),
+                    )
+                    .child(
+                        div().child(format!(
+                            "{} {}",
+                            tr(locale, "settings.created_by"),
+                            APP_AUTHOR
+                        )),
+                    )
+                    .child(div().mt_3().child(github_actions)),
+            )
+    }
+
+    fn about_project_link(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        url: &'static str,
+    ) -> AnyElement {
+        div()
+            .id(id)
+            .cursor_pointer()
+            .text_color(self.theme.text_secondary)
+            .hover(|style| style.text_color(self.theme.accent_blue_hover))
+            .on_click(move |_, _, cx| cx.open_url(url))
+            .child(label)
+            .into_any_element()
     }
 
     fn build_top_bar(&self) -> impl IntoElement {
@@ -396,13 +531,18 @@ impl SettingsWindow {
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 gpui_kit::base::GlobalState::suppress_text_selection(cx);
             })
-            .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_b_0())
+            .child(
+                TitleBar::new()
+                    .bg(gpui_kit::transparent_black())
+                    .border_b_0(),
+            )
     }
 }
 
 impl Render for SettingsWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
+        let locale = self.current_locale(cx);
         let save_error = self.save_error.clone();
 
         v_flex()
@@ -447,7 +587,7 @@ impl Render for SettingsWindow {
                                 .bg(theme.error_bg)
                                 .text_xs()
                                 .text_color(theme.error_text)
-                                .child(format!("保存配置失败: {err}")),
+                                .child(i18n::settings_save_error(locale, &err)),
                         )
                     })
                     .child(match self.active_tab {

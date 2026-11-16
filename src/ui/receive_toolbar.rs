@@ -5,6 +5,7 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::*;
 
+use crate::i18n::{Locale, tr_shared};
 use crate::model::{ReceiveViewState, SendLineEnding};
 use crate::ui::motion::{TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
@@ -19,6 +20,7 @@ pub type ToolbarActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 #[derive(IntoElement)]
 pub struct ReceiveToolbar {
     theme: NanoTheme,
+    locale: Locale,
     state: ReceiveViewState,
     send_hex: bool,
     line_ending: SendLineEnding,
@@ -42,6 +44,7 @@ impl ReceiveToolbar {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
+        locale: Locale,
         state: ReceiveViewState,
         send_hex: bool,
         line_ending: SendLineEnding,
@@ -62,6 +65,7 @@ impl ReceiveToolbar {
     ) -> Self {
         Self {
             theme,
+            locale,
             state,
             send_hex,
             line_ending,
@@ -85,7 +89,7 @@ impl ReceiveToolbar {
     fn tool_button(
         &self,
         id: &'static str,
-        tooltip: &'static str,
+        tooltip: SharedString,
         toggle_flag: Option<TransitionFlag>,
         on_click: ToolbarActionCallback,
         content: AnyElement,
@@ -106,7 +110,7 @@ impl ReceiveToolbar {
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
-            .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 cx.stop_propagation();
                 on_click(window, cx);
@@ -131,7 +135,7 @@ impl ReceiveToolbar {
         &self,
         id: &'static str,
         label: &'static str,
-        tooltip: &'static str,
+        tooltip: SharedString,
         toggle_flag: Option<TransitionFlag>,
         on_click: ToolbarActionCallback,
     ) -> AnyElement {
@@ -142,7 +146,7 @@ impl ReceiveToolbar {
         &self,
         id: &'static str,
         icon: LucideIcon,
-        tooltip: &'static str,
+        tooltip: SharedString,
         toggle_flag: Option<TransitionFlag>,
         on_click: ToolbarActionCallback,
     ) -> AnyElement {
@@ -175,12 +179,13 @@ impl RenderOnce for ReceiveToolbar {
             .border_1()
             .border_b_0()
             .border_color(self.theme.border_card);
+        let locale = self.locale;
         div().w_full().flex_shrink_0().px_4().child(
             strip
                 .child(self.text_tool_button(
                     "rx-tool-hex",
                     "H↓",
-                    "HEX 显示切换",
+                    tr_shared(locale, "tooltip.rx_hex"),
                     Some(TransitionFlag {
                         active: self.state.hex_mode,
                         epoch: self.rx_hex_flag.epoch,
@@ -190,7 +195,7 @@ impl RenderOnce for ReceiveToolbar {
                 .child(self.icon_tool_button(
                     "rx-tool-timestamp",
                     LucideIcon::Clock,
-                    "时间戳显示切换",
+                    tr_shared(locale, "tooltip.rx_timestamp"),
                     Some(TransitionFlag {
                         active: self.state.show_timestamp,
                         epoch: self.rx_timestamp_flag.epoch,
@@ -201,7 +206,7 @@ impl RenderOnce for ReceiveToolbar {
                 .child(self.icon_tool_button(
                     "rx-tool-pause",
                     LucideIcon::Pause,
-                    "暂停/恢复接收显示",
+                    tr_shared(locale, "tooltip.rx_pause"),
                     Some(TransitionFlag {
                         active: self.state.paused,
                         epoch: self.rx_pause_flag.epoch,
@@ -211,7 +216,7 @@ impl RenderOnce for ReceiveToolbar {
                 .child(self.icon_tool_button(
                     "rx-tool-auto-scroll",
                     LucideIcon::ArrowDownToLine,
-                    "自动滚动到底部",
+                    tr_shared(locale, "tooltip.rx_autoscroll"),
                     Some(TransitionFlag {
                         active: self.state.auto_scroll,
                         epoch: self.rx_auto_scroll_flag.epoch,
@@ -221,14 +226,14 @@ impl RenderOnce for ReceiveToolbar {
                 .child(self.icon_tool_button(
                     "rx-tool-clear",
                     LucideIcon::Trash,
-                    "清空当前显示日志",
+                    tr_shared(locale, "tooltip.rx_clear"),
                     None,
                     self.on_clear.clone(),
                 ))
                 .child(self.icon_tool_button(
                     "rx-tool-save",
                     LucideIcon::Download,
-                    "保存当前显示日志",
+                    tr_shared(locale, "tooltip.rx_save"),
                     None,
                     self.on_save.clone(),
                 ))
@@ -236,7 +241,7 @@ impl RenderOnce for ReceiveToolbar {
                 .child(self.text_tool_button(
                     "tx-tool-send-hex",
                     "H↑",
-                    "HEX 发送切换（发送时按十六进制解析）",
+                    tr_shared(locale, "tooltip.tx_hex_send"),
                     Some(TransitionFlag {
                         active: self.send_hex,
                         epoch: self.tx_send_hex_flag.epoch,
@@ -247,9 +252,9 @@ impl RenderOnce for ReceiveToolbar {
                     "tx-tool-line-ending",
                     self.line_ending.label(),
                     match self.line_ending {
-                        SendLineEnding::None => "发送自动换行：关（点击切换为 \\r\\n）",
-                        SendLineEnding::CrLf => "发送自动换行：\\r\\n（点击切换为 \\n）",
-                        SendLineEnding::Lf => "发送自动换行：\\n（点击关闭）",
+                        SendLineEnding::None => tr_shared(locale, "tooltip.line_ending_none"),
+                        SendLineEnding::CrLf => tr_shared(locale, "tooltip.line_ending_crlf"),
+                        SendLineEnding::Lf => tr_shared(locale, "tooltip.line_ending_lf"),
                     },
                     Some(TransitionFlag {
                         active: self.line_ending.is_active(),
