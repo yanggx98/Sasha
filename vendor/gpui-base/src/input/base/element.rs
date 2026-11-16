@@ -3803,6 +3803,10 @@ impl<M: InputModeKind> Element for TextElement<M> {
             )
         };
         let focused = focus_handle.is_focused(window);
+        let hide_placeholder = {
+            let state = self.state.read(cx);
+            focused && state.hide_placeholder_on_focus && state.text.len() == 0
+        };
         let bounds = prepaint.bounds;
         let text_align = prepaint.last_layout.text_align;
 
@@ -3979,14 +3983,16 @@ impl<M: InputModeKind> Element for TextElement<M> {
             );
 
             // Paint the actual line
-            _ = line.paint(
-                p,
-                line_height,
-                text_align,
-                Some(prepaint.last_layout.content_width),
-                window,
-                cx,
-            );
+            if !hide_placeholder {
+                _ = line.paint(
+                    p,
+                    line_height,
+                    text_align,
+                    Some(prepaint.last_layout.content_width),
+                    window,
+                    cx,
+                );
+            }
             offset_y += line.size(line_height).height;
 
             if Some(row) == prepaint.current_row {

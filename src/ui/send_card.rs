@@ -3,7 +3,7 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::input::{Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::component::{Icon, Size, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -193,6 +193,10 @@ impl RenderOnce for SendCard {
                             div()
                                 .flex_1()
                                 .min_w_0()
+                                // The card already supplies the content inset;
+                                // cancel the textarea's extra leading padding.
+                                .ml(-Size::default().input_px())
+                                .mt(-Size::default().input_py())
                                 .text_sm()
                                 .text_color(self.theme.text_primary)
                                 .child(

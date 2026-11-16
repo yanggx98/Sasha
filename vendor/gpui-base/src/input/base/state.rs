@@ -473,6 +473,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(super) cursor_surrounding_lines: Option<usize>,
     pub(super) caret_width: Pixels,
     pub(super) caret_gap: Pixels,
+    pub(super) hide_placeholder_on_focus: bool,
     pub(super) blink_cursor: Entity<BlinkCursor>,
     pub(super) loading: bool,
     /// The cursors and selections.
@@ -988,6 +989,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             cursor_surrounding_lines: None,
             caret_width: CURSOR_WIDTH,
             caret_gap: px(0.),
+            hide_placeholder_on_focus: false,
             blink_cursor,
             undo_manager,
             inline_tokens: None,
@@ -1616,6 +1618,12 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     pub(super) fn caret_span(&self) -> Pixels {
         self.caret_width + self.caret_gap
+    }
+
+    /// Hide this input's placeholder while focused, without changing its text or layout.
+    pub fn hide_placeholder_on_focus(mut self, hide: bool) -> Self {
+        self.hide_placeholder_on_focus = hide;
+        self
     }
 
     /// Minimum number of lines the cursor is kept clear of the viewport's

@@ -21,6 +21,9 @@ The focused upstream diff is recorded in `gpui-base-caret.patch` beside this fil
 
 Sasha configures only its send textarea with `caret_style(px(4.), px(2.))`.
 There is no application-side caret overlay or second blink timer.
+The send textarea also opts into `hide_placeholder_on_focus(true)`: its hint
+is hidden while focused and reappears when empty and unfocused. No placeholder
+offset or extra whitespace is added.
 
 ## Validation and upgrades
 
