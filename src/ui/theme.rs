@@ -5,12 +5,10 @@ use gpui_kit::{Hsla, rgb, rgba};
 pub struct NanoTheme {
     /// Canvas shared by the immersive title bar and the log area (`#0D1117`).
     pub bg_canvas: Hsla,
-    /// Bottom bar surface, a slight step above the canvas (`#10161D`).
-    pub bg_bottom_bar: Hsla,
-    /// Single 1px bottom-bar top edge (`#171D25`). Darker than a bright rule.
-    pub border_bottom_divider: Hsla,
     /// Elevated surface for the floating send card.
     pub bg_card: Hsla,
+    /// Recessed surface for the receive toolbar strip tucked under the send card.
+    pub bg_strip: Hsla,
     /// Elevated surface for the top-center parameter picker popover.
     pub bg_popover: Hsla,
     /// Subtle hover background for interactive icon/text controls.
@@ -45,9 +43,8 @@ impl Default for NanoTheme {
     fn default() -> Self {
         Self {
             bg_canvas: rgb(0x0D1117).into(),
-            bg_bottom_bar: rgb(0x10161D).into(),
-            border_bottom_divider: rgb(0x171D25).into(),
             bg_card: rgb(0x161B22).into(),
+            bg_strip: rgb(0x0A0E13).into(),
             bg_popover: rgb(0x1C2128).into(),
             bg_hover: rgba(0xFFFFFF12).into(),
             bg_toggle_active: rgba(0x2F81F724).into(),

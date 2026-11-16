@@ -148,9 +148,6 @@ impl RenderOnce for BottomBar {
             .px_3()
             .items_center()
             .justify_between()
-            .bg(self.theme.bg_bottom_bar)
-            .border_t_1()
-            .border_color(self.theme.border_bottom_divider)
             .child(
                 h_flex()
                     .items_center()

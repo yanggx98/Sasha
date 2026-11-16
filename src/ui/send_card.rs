@@ -157,64 +157,66 @@ impl RenderOnce for SendCard {
             },
         );
 
-        div()
-            .flex_shrink_0()
-            .w_full()
-            .px_3()
-            .pb_1()
-            .child(
-                v_flex()
-                    .id("floating-send-card")
-                    .w_full()
-                    .min_h(px(96.))
-                    .justify_between()
-                    .px_3()
-                    .py_2()
-                    .gap_1p5()
-                    .rounded(px(12.))
-                    .bg(self.theme.bg_card)
-                    .border_1()
-                    .border_color(if self.error.is_some() {
-                        self.theme.error_text
-                    } else {
-                        self.theme.border_card
-                    })
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .items_start()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .text_color(self.theme.text_primary)
-                                    .child(
-                                        Textarea::new(&self.input)
-                                            .appearance(false)
-                                            .bordered(false)
-                                            .h(px(52.)),
-                                    ),
-                            )
-                            .child(hex_toggle_btn),
-                    )
-                    .when_some(self.error, |this, err| {
-                        this.child(
+        div().flex_shrink_0().w_full().px_3().pb_1().child(
+            v_flex()
+                .id("floating-send-card")
+                .w_full()
+                .min_h(px(96.))
+                .justify_between()
+                .px_3()
+                .py_2()
+                .gap_1p5()
+                .rounded(px(12.))
+                .bg(self.theme.bg_card)
+                .shadow(vec![BoxShadow {
+                    color: gpui_kit::black().opacity(0.55),
+                    offset: point(px(0.), px(-4.)),
+                    blur_radius: px(12.),
+                    spread_radius: px(0.),
+                    inset: false,
+                }])
+                .border_1()
+                .border_color(if self.error.is_some() {
+                    self.theme.error_text
+                } else {
+                    self.theme.border_card
+                })
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_start()
+                        .justify_between()
+                        .gap_2()
+                        .child(
                             div()
-                                .id("send-card-error")
-                                .w_full()
-                                .px_2()
-                                .py_1()
-                                .rounded(px(6.))
-                                .bg(self.theme.error_bg)
-                                .text_xs()
-                                .text_color(self.theme.error_text)
-                                .child(err),
+                                .flex_1()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(self.theme.text_primary)
+                                .child(
+                                    Textarea::new(&self.input)
+                                        .appearance(false)
+                                        .bordered(false)
+                                        .h(px(52.)),
+                                ),
                         )
-                    })
-                    .child(h_flex().w_full().justify_end().child(submit_btn)),
-            )
+                        .child(hex_toggle_btn),
+                )
+                .when_some(self.error, |this, err| {
+                    this.child(
+                        div()
+                            .id("send-card-error")
+                            .w_full()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(6.))
+                            .bg(self.theme.error_bg)
+                            .text_xs()
+                            .text_color(self.theme.error_text)
+                            .child(err),
+                    )
+                })
+                .child(h_flex().w_full().justify_end().child(submit_btn)),
+        )
     }
 }

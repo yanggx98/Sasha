@@ -6,9 +6,7 @@ use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::*;
 
 use crate::model::ReceiveViewState;
-use crate::ui::motion::{
-    TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color, transparent_like,
-};
+use crate::ui::motion::{TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
 
 pub type ToolbarActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -73,9 +71,12 @@ impl ReceiveToolbar {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(26.))
-            .rounded_full()
-            .hover(|s| s.bg(self.theme.bg_hover).text_color(self.theme.text_primary))
+            .size(px(22.))
+            .rounded(px(6.))
+            .hover(|s| {
+                s.bg(self.theme.bg_hover)
+                    .text_color(self.theme.text_primary)
+            })
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
             .cursor_pointer()
@@ -88,18 +89,15 @@ impl ReceiveToolbar {
 
         match toggle_flag {
             Some(flag) => {
-                let (bg_from, bg_to) = flag.color_pair(
-                    transparent_like(self.theme.bg_toggle_active),
-                    self.theme.bg_toggle_active,
-                );
                 let (fg_from, fg_to) =
                     flag.color_pair(self.theme.text_secondary, self.theme.accent_blue_hover);
                 animate_toggle_colors(base, id, flag, TOGGLE_TRANSITION_MS, move |el, delta| {
-                    el.bg(lerp_color(bg_from, bg_to, delta))
-                        .text_color(lerp_color(fg_from, fg_to, delta))
+                    el.text_color(lerp_color(fg_from, fg_to, delta))
                 })
             }
-            None => base.text_color(self.theme.text_secondary).into_any_element(),
+            None => base
+                .text_color(self.theme.text_secondary)
+                .into_any_element(),
         }
     }
 
@@ -134,57 +132,70 @@ impl ReceiveToolbar {
 
 impl RenderOnce for ReceiveToolbar {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        h_flex()
+        // Recessed "drawer" strip tucked underneath the send card: inset from the
+        // card edges, darker surface, rounded top. The lower part is covered by
+        // the send card (which overlaps it via a negative top margin).
+        let strip = h_flex()
             .id("receive-toolbar")
             .w_full()
-            .justify_end()
+            .justify_start()
             .items_center()
-            .px_3()
-            .py(px(2.))
+            .px_2()
+            .pt(px(4.))
+            .pb(px(16.))
             .gap_1()
-            .child(self.text_tool_button(
-                "rx-tool-hex",
-                "H",
-                "HEX 显示切换",
-                Some(TransitionFlag {
-                    active: self.state.hex_mode,
-                    epoch: self.rx_hex_flag.epoch,
-                }),
-                self.on_toggle_hex.clone(),
-            ))
-            .child(self.icon_tool_button(
-                "rx-tool-timestamp",
-                LucideIcon::Clock,
-                "时间戳显示切换",
-                Some(TransitionFlag {
-                    active: self.state.show_timestamp,
-                    epoch: self.rx_timestamp_flag.epoch,
-                }),
-                self.on_toggle_timestamp.clone(),
-            ))
-            .child(self.icon_tool_button(
-                "rx-tool-pause",
-                LucideIcon::Pause,
-                "暂停/恢复接收显示",
-                Some(TransitionFlag {
-                    active: self.state.paused,
-                    epoch: self.rx_pause_flag.epoch,
-                }),
-                self.on_toggle_pause.clone(),
-            ))
-            .child(self.icon_tool_button(
-                "rx-tool-clear",
-                LucideIcon::Trash,
-                "清空当前显示日志",
-                None,
-                self.on_clear.clone(),
-            ))
-            .child(self.icon_tool_button(
-                "rx-tool-save",
-                LucideIcon::Download,
-                "保存当前显示日志",
-                None,
-                self.on_save.clone(),
-            ))
+            .rounded_t(px(10.))
+            .bg(self.theme.bg_strip)
+            .border_1()
+            .border_b_0()
+            .border_color(self.theme.border_card);
+        div().w_full().flex_shrink_0().px_4().child(
+            strip
+                .child(self.text_tool_button(
+                    "rx-tool-hex",
+                    "H",
+                    "HEX 显示切换",
+                    Some(TransitionFlag {
+                        active: self.state.hex_mode,
+                        epoch: self.rx_hex_flag.epoch,
+                    }),
+                    self.on_toggle_hex.clone(),
+                ))
+                .child(self.icon_tool_button(
+                    "rx-tool-timestamp",
+                    LucideIcon::Clock,
+                    "时间戳显示切换",
+                    Some(TransitionFlag {
+                        active: self.state.show_timestamp,
+                        epoch: self.rx_timestamp_flag.epoch,
+                    }),
+                    self.on_toggle_timestamp.clone(),
+                ))
+                .child(div().w(px(1.)).h(px(14.)).mx_1().bg(self.theme.border_card))
+                .child(self.icon_tool_button(
+                    "rx-tool-pause",
+                    LucideIcon::Pause,
+                    "暂停/恢复接收显示",
+                    Some(TransitionFlag {
+                        active: self.state.paused,
+                        epoch: self.rx_pause_flag.epoch,
+                    }),
+                    self.on_toggle_pause.clone(),
+                ))
+                .child(self.icon_tool_button(
+                    "rx-tool-clear",
+                    LucideIcon::Trash,
+                    "清空当前显示日志",
+                    None,
+                    self.on_clear.clone(),
+                ))
+                .child(self.icon_tool_button(
+                    "rx-tool-save",
+                    LucideIcon::Download,
+                    "保存当前显示日志",
+                    None,
+                    self.on_save.clone(),
+                )),
+        )
     }
 }

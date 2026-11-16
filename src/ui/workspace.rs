@@ -119,8 +119,7 @@ impl SashaApp {
             return existing.clone();
         }
 
-        let entity =
-            cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
         let entity_for_sub = entity.clone();
         let sub = cx.subscribe_in(
             &entity,
@@ -426,7 +425,10 @@ impl SashaApp {
                             entity_for_sub.update(cx, |state, cx| {
                                 state.set_value(formatted, window, cx);
                                 state.set_cursor_position(
-                                    gpui_kit::component::input::Position::new(0, next_cursor as u32),
+                                    gpui_kit::component::input::Position::new(
+                                        0,
+                                        next_cursor as u32,
+                                    ),
                                     window,
                                     cx,
                                 );
@@ -767,9 +769,10 @@ impl Render for SashaApp {
                 let _ = weak.update(cx, |this, cx| this.toggle_start_frame_expanded(cx));
             });
             let weak = cx.entity().downgrade();
-            let on_select_data_bits = Rc::new(move |bits: DataBits, _: &mut Window, cx: &mut App| {
-                let _ = weak.update(cx, |this, cx| this.select_start_data_bits(bits, cx));
-            });
+            let on_select_data_bits =
+                Rc::new(move |bits: DataBits, _: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.select_start_data_bits(bits, cx));
+                });
             let weak = cx.entity().downgrade();
             let on_select_parity = Rc::new(move |parity: Parity, _: &mut Window, cx: &mut App| {
                 let _ = weak.update(cx, |this, cx| this.select_start_parity(parity, cx));
@@ -933,10 +936,9 @@ impl Render for SashaApp {
                         cx.stop_propagation();
                     }
                     "enter" => {
-                        let input_focused = this
-                            .picker_input
-                            .as_ref()
-                            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                        let input_focused = this.picker_input.as_ref().is_some_and(|input| {
+                            input.read(cx).focus_handle(cx).is_focused(window)
+                        });
                         if !input_focused {
                             this.apply_picker_input(cx);
                             cx.stop_propagation();
@@ -945,25 +947,16 @@ impl Render for SashaApp {
                     _ => {}
                 }
             }))
-            .child(AppTitleBar::new(self.theme, self.state.is_simulated_session))
+            .child(AppTitleBar::new(
+                self.theme,
+                self.state.is_simulated_session,
+            ))
             .child(
                 v_flex()
                     .id("receive-area")
                     .flex_1()
                     .min_h_0()
                     .w_full()
-                    .child(ReceiveToolbar::new(
-                        self.theme,
-                        self.state.receive.clone(),
-                        self.motion.rx_hex,
-                        self.motion.rx_timestamp,
-                        self.motion.rx_pause,
-                        on_rx_hex,
-                        on_rx_timestamp,
-                        on_rx_pause,
-                        on_rx_clear,
-                        on_rx_save,
-                    ))
                     .child(LogView::new(
                         self.theme,
                         self.state.logs.clone(),
@@ -972,18 +965,38 @@ impl Render for SashaApp {
                         log_focus,
                     )),
             )
-            .child(SendCard::new(
+            .child(ReceiveToolbar::new(
                 self.theme,
-                self.state.send.clone(),
-                self.state.connection.is_connected(),
-                self.state.is_simulated_session,
-                self.motion.tx_hex,
-                self.motion.connection,
-                send_input,
-                self.send_error.clone(),
-                on_tx_hex,
-                on_tx_submit,
+                self.state.receive.clone(),
+                self.motion.rx_hex,
+                self.motion.rx_timestamp,
+                self.motion.rx_pause,
+                on_rx_hex,
+                on_rx_timestamp,
+                on_rx_pause,
+                on_rx_clear,
+                on_rx_save,
             ))
+            // The send card overlaps the strip's lower edge so the strip reads as
+            // a drawer tucked underneath it.
+            .child(
+                div()
+                    .w_full()
+                    .flex_shrink_0()
+                    .mt(px(-12.))
+                    .child(SendCard::new(
+                        self.theme,
+                        self.state.send.clone(),
+                        self.state.connection.is_connected(),
+                        self.state.is_simulated_session,
+                        self.motion.tx_hex,
+                        self.motion.connection,
+                        send_input,
+                        self.send_error.clone(),
+                        on_tx_hex,
+                        on_tx_submit,
+                    )),
+            )
             .child(BottomBar::new(
                 self.theme,
                 self.state.config.clone(),
