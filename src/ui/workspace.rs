@@ -63,7 +63,8 @@ impl SashaApp {
             state.receive.hex_mode,
             state.receive.show_timestamp,
             state.receive.paused,
-            state.send.hex_mode,
+            state.send.display_hex,
+            state.send.send_hex,
             state.connection.is_connected(),
         );
         let log_selection = LogSelectionModel::new(
@@ -100,7 +101,8 @@ impl SashaApp {
             self.state.receive.hex_mode,
             self.state.receive.show_timestamp,
             self.state.receive.paused,
-            self.state.send.hex_mode,
+            self.state.send.display_hex,
+            self.state.send.send_hex,
             self.state.connection.is_connected(),
         );
         self.log_selection = LogSelectionModel::new(
@@ -417,7 +419,7 @@ impl SashaApp {
             move |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
                     let raw = entity_for_sub.read(cx).value().to_string();
-                    if this.state.send.hex_mode {
+                    if this.state.send.display_hex {
                         let cursor = entity_for_sub.read(cx).cursor();
                         let (formatted, next_cursor) = format_hex_input_with_cursor(&raw, cursor);
                         if formatted != raw {
@@ -653,14 +655,16 @@ impl SashaApp {
         cx.notify();
     }
 
-    pub fn toggle_send_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn toggle_send_display_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(input) = &self.send_input {
             self.state.send.text = input.read(cx).value().to_string();
         }
 
-        match self.state.toggle_send_hex() {
+        match self.state.toggle_send_display_hex() {
             Ok(()) => {
-                self.motion.tx_hex.set(self.state.send.hex_mode);
+                self.motion
+                    .tx_display_hex
+                    .set(self.state.send.display_hex);
                 self.send_error = None;
                 if let Some(input) = &self.send_input {
                     let next_text = self.state.send.text.clone();
@@ -673,6 +677,13 @@ impl SashaApp {
                 self.send_error = Some(err.into());
             }
         }
+        cx.notify();
+    }
+
+    pub fn toggle_send_format_hex(&mut self, cx: &mut Context<Self>) {
+        self.state.toggle_send_format_hex();
+        self.motion.tx_send_hex.set(self.state.send.send_hex);
+        self.send_error = None;
         cx.notify();
     }
 
@@ -867,8 +878,12 @@ impl Render for SashaApp {
         });
 
         let weak = cx.entity().downgrade();
-        let on_tx_hex = Rc::new(move |window: &mut Window, cx: &mut App| {
-            let _ = weak.update(cx, |this, cx| this.toggle_send_hex(window, cx));
+        let on_tx_display_hex = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_send_display_hex(window, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_tx_send_hex = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_send_format_hex(cx));
         });
         let weak = cx.entity().downgrade();
         let on_tx_submit = Rc::new(move |_: &mut Window, cx: &mut App| {
@@ -968,14 +983,17 @@ impl Render for SashaApp {
             .child(ReceiveToolbar::new(
                 self.theme,
                 self.state.receive.clone(),
+                self.state.send.send_hex,
                 self.motion.rx_hex,
                 self.motion.rx_timestamp,
                 self.motion.rx_pause,
+                self.motion.tx_send_hex,
                 on_rx_hex,
                 on_rx_timestamp,
                 on_rx_pause,
                 on_rx_clear,
                 on_rx_save,
+                on_tx_send_hex,
             ))
             // The send card overlaps the strip's lower edge so the strip reads as
             // a drawer tucked underneath it.
@@ -989,11 +1007,11 @@ impl Render for SashaApp {
                         self.state.send.clone(),
                         self.state.connection.is_connected(),
                         self.state.is_simulated_session,
-                        self.motion.tx_hex,
+                        self.motion.tx_display_hex,
                         self.motion.connection,
                         send_input,
                         self.send_error.clone(),
-                        on_tx_hex,
+                        on_tx_display_hex,
                         on_tx_submit,
                     )),
             )

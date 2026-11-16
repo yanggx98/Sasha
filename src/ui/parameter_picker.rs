@@ -130,11 +130,7 @@ impl RenderOnce for ParameterPickerPopover {
                     .bg(theme.bg_canvas)
                     .border_1()
                     .border_color(input_border)
-                    .child(
-                        Input::new(&self.input)
-                            .appearance(false)
-                            .cleanable(true),
-                    ),
+                    .child(Input::new(&self.input).appearance(false).cleanable(true)),
             )
             .when_some(self.error, |this, err| {
                 this.child(
@@ -194,20 +190,17 @@ impl RenderOnce for ParameterPickerPopover {
                                 ),
                         )
                     })
-                    .when(
-                        presets.is_empty() && trimmed_typed.is_empty(),
-                        |this| {
-                            this.child(
-                                div()
-                                    .w_full()
-                                    .px_2()
-                                    .py_1p5()
-                                    .text_xs()
-                                    .text_color(theme.text_muted)
-                                    .child("未检测到可用串口，请在上方输入端口名"),
-                            )
-                        },
-                    )
+                    .when(presets.is_empty() && trimmed_typed.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .w_full()
+                                .px_2()
+                                .py_1p5()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child("未检测到可用串口，请在上方输入端口名"),
+                        )
+                    })
                     .children(presets.into_iter().enumerate().map(|(idx, preset)| {
                         let is_current = preset == current_value;
                         let preset_for_click = preset.clone();

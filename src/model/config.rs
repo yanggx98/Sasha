@@ -1,9 +1,7 @@
 use std::fmt;
 
 /// Preset baud rates for the quick-select overlay (used by TASK-002).
-pub const BAUD_RATE_PRESETS: &[u32] = &[
-    9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
-];
+pub const BAUD_RATE_PRESETS: &[u32] = &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 
 /// Preset simulated serial ports (used by TASK-002).
 pub const SIMULATED_PORT_PRESETS: &[&str] = &["COM1", "COM3", "COM4", "COM7"];
@@ -276,7 +274,10 @@ mod tests {
     #[test]
     fn apply_picker_value_preserves_original_on_invalid_input() {
         let mut cfg = SerialConfig::default();
-        assert!(cfg.apply_picker_value(ActivePickerKind::BaudRate, "0").is_err());
+        assert!(
+            cfg.apply_picker_value(ActivePickerKind::BaudRate, "0")
+                .is_err()
+        );
         assert_eq!(cfg.baud_rate, 115200);
 
         assert!(
@@ -285,7 +286,10 @@ mod tests {
         );
         assert_eq!(cfg.baud_rate, 230400);
 
-        assert!(cfg.apply_picker_value(ActivePickerKind::Port, "  ").is_err());
+        assert!(
+            cfg.apply_picker_value(ActivePickerKind::Port, "  ")
+                .is_err()
+        );
         assert_eq!(cfg.port, "COM3");
 
         assert!(

@@ -20,14 +20,17 @@ pub type ToolbarActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 pub struct ReceiveToolbar {
     theme: NanoTheme,
     state: ReceiveViewState,
+    send_hex: bool,
     rx_hex_flag: TransitionFlag,
     rx_timestamp_flag: TransitionFlag,
     rx_pause_flag: TransitionFlag,
+    tx_send_hex_flag: TransitionFlag,
     on_toggle_hex: ToolbarActionCallback,
     on_toggle_timestamp: ToolbarActionCallback,
     on_toggle_pause: ToolbarActionCallback,
     on_clear: ToolbarActionCallback,
     on_save: ToolbarActionCallback,
+    on_toggle_send_hex: ToolbarActionCallback,
 }
 
 impl ReceiveToolbar {
@@ -35,26 +38,32 @@ impl ReceiveToolbar {
     pub fn new(
         theme: NanoTheme,
         state: ReceiveViewState,
+        send_hex: bool,
         rx_hex_flag: TransitionFlag,
         rx_timestamp_flag: TransitionFlag,
         rx_pause_flag: TransitionFlag,
+        tx_send_hex_flag: TransitionFlag,
         on_toggle_hex: ToolbarActionCallback,
         on_toggle_timestamp: ToolbarActionCallback,
         on_toggle_pause: ToolbarActionCallback,
         on_clear: ToolbarActionCallback,
         on_save: ToolbarActionCallback,
+        on_toggle_send_hex: ToolbarActionCallback,
     ) -> Self {
         Self {
             theme,
             state,
+            send_hex,
             rx_hex_flag,
             rx_timestamp_flag,
             rx_pause_flag,
+            tx_send_hex_flag,
             on_toggle_hex,
             on_toggle_timestamp,
             on_toggle_pause,
             on_clear,
             on_save,
+            on_toggle_send_hex,
         }
     }
 
@@ -195,6 +204,17 @@ impl RenderOnce for ReceiveToolbar {
                     "保存当前显示日志",
                     None,
                     self.on_save.clone(),
+                ))
+                .child(div().w(px(1.)).h(px(14.)).mx_1().bg(self.theme.border_card))
+                .child(self.text_tool_button(
+                    "tx-tool-send-hex",
+                    "H",
+                    "HEX 发送切换（发送时按十六进制解析）",
+                    Some(TransitionFlag {
+                        active: self.send_hex,
+                        epoch: self.tx_send_hex_flag.epoch,
+                    }),
+                    self.on_toggle_send_hex.clone(),
                 )),
         )
     }

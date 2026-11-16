@@ -74,7 +74,8 @@ pub struct UiMotionState {
     pub rx_hex: TransitionFlag,
     pub rx_timestamp: TransitionFlag,
     pub rx_pause: TransitionFlag,
-    pub tx_hex: TransitionFlag,
+    pub tx_display_hex: TransitionFlag,
+    pub tx_send_hex: TransitionFlag,
     pub connection: TransitionFlag,
     pub picker_open_epoch: u64,
 }
@@ -84,14 +85,16 @@ impl UiMotionState {
         rx_hex: bool,
         rx_timestamp: bool,
         rx_pause: bool,
-        tx_hex: bool,
+        tx_display_hex: bool,
+        tx_send_hex: bool,
         connected: bool,
     ) -> Self {
         Self {
             rx_hex: TransitionFlag::new(rx_hex),
             rx_timestamp: TransitionFlag::new(rx_timestamp),
             rx_pause: TransitionFlag::new(rx_pause),
-            tx_hex: TransitionFlag::new(tx_hex),
+            tx_display_hex: TransitionFlag::new(tx_display_hex),
+            tx_send_hex: TransitionFlag::new(tx_send_hex),
             connection: TransitionFlag::new(connected),
             picker_open_epoch: 0,
         }

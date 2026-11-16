@@ -64,52 +64,53 @@ impl RenderOnce for LogView {
                     .font_family("Consolas")
                     .text_sm()
                     .text_color(theme.text_primary)
-                    .children(self.logs.into_iter().enumerate().map(move |(index, entry)| {
-                        let tag_color = match entry.direction {
-                            LogDirection::Rx => theme.rx_green,
-                            LogDirection::Tx => theme.tx_blue,
-                            LogDirection::System => theme.text_muted,
-                        };
-                        let line = selectable_log_line(&entry, show_timestamp, hex_mode);
-                        let mut highlights = Vec::new();
-                        if let Some(timestamp) = line.timestamp_bytes.clone() {
-                            highlights.push((timestamp, color_highlight(theme.text_muted)));
-                        }
-                        highlights.push((
-                            line.tag_bytes.clone(),
-                            HighlightStyle {
-                                color: Some(tag_color),
-                                font_weight: Some(FontWeight::MEDIUM),
-                                ..Default::default()
-                            },
-                        ));
-                        let simulated = entry.is_simulated;
+                    .children(
+                        self.logs
+                            .into_iter()
+                            .enumerate()
+                            .map(move |(index, entry)| {
+                                let tag_color = match entry.direction {
+                                    LogDirection::Rx => theme.rx_green,
+                                    LogDirection::Tx => theme.tx_blue,
+                                    LogDirection::System => theme.text_muted,
+                                };
+                                let line = selectable_log_line(&entry, show_timestamp, hex_mode);
+                                let mut highlights = Vec::new();
+                                if let Some(timestamp) = line.timestamp_bytes.clone() {
+                                    highlights.push((timestamp, color_highlight(theme.text_muted)));
+                                }
+                                highlights.push((
+                                    line.tag_bytes.clone(),
+                                    HighlightStyle {
+                                        color: Some(tag_color),
+                                        font_weight: Some(FontWeight::MEDIUM),
+                                        ..Default::default()
+                                    },
+                                ));
+                                let simulated = entry.is_simulated;
 
-                        h_flex()
-                            .w_full()
-                            .items_baseline()
-                            .gap_2()
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    LogLineText::new(
+                                h_flex()
+                                    .w_full()
+                                    .items_baseline()
+                                    .gap_2()
+                                    .child(div().flex_1().min_w_0().child(LogLineText::new(
                                         ElementId::named_usize("log-line", entry.id as usize),
                                         line.text,
                                         highlights,
                                         index as u64,
                                         rgba(0x2563EB99).into(),
-                                    ),
-                                ),
-                            )
-                            .when(simulated, |this| {
-                                this.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .text_color(theme.text_muted)
-                                        .child("[模拟]"),
-                                )
-                            })
-                    }))
+                                    )))
+                                    .when(simulated, |this| {
+                                        this.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_xs()
+                                                .text_color(theme.text_muted)
+                                                .child("[模拟]"),
+                                        )
+                                    })
+                            }),
+                    )
                     .when(!self.simulated_notice.is_empty(), |this| {
                         this.child(
                             div()
@@ -238,9 +239,7 @@ impl Element for LogLineText {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         self.styled = StyledText::new(self.text.clone()).with_highlights(self.highlights.clone());
-        let (layout_id, ()) = self
-            .styled
-            .request_layout(id, inspector_id, window, cx);
+        let (layout_id, ()) = self.styled.request_layout(id, inspector_id, window, cx);
         let text = self.text.clone();
         let handle = match id {
             Some(global_id) => window.with_element_state(
@@ -294,8 +293,10 @@ impl Element for LogLineText {
     ) {
         let layout = self.styled.layout().clone();
         let projection = handle.update_runs(
-            &[TextSelectionRun::new(self.text.clone(), layout.clone(), bounds)
-                .with_document_order(self.document_order)],
+            &[
+                TextSelectionRun::new(self.text.clone(), layout.clone(), bounds)
+                    .with_document_order(self.document_order),
+            ],
             cx,
         );
         for range in projection.ranges().iter().flatten().cloned() {

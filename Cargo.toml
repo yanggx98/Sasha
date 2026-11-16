@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = "0.4"
 gpui-kit = "0.9.1"
 serialport = "4.10.1"

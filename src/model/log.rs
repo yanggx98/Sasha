@@ -128,14 +128,14 @@ pub fn format_hex_input_with_cursor(raw: &str, cursor_utf8_offset: usize) -> (St
         formatted.push(' ');
     }
 
-    let next_cursor = if keep_trailing_space && hex_before_cursor == n && cursor_after_trailing_space
-    {
-        formatted.len()
-    } else if hex_before_cursor == 0 {
-        0
-    } else {
-        hex_before_cursor + (hex_before_cursor - 1) / 2
-    };
+    let next_cursor =
+        if keep_trailing_space && hex_before_cursor == n && cursor_after_trailing_space {
+            formatted.len()
+        } else if hex_before_cursor == 0 {
+            0
+        } else {
+            hex_before_cursor + (hex_before_cursor - 1) / 2
+        };
 
     (formatted, next_cursor)
 }
@@ -381,18 +381,9 @@ impl LogSelectionModel {
     }
 }
 
-/// Returns a `HH:MM:SS.mmm` UTC timestamp string for new simulated log entries.
+/// Returns a `HH:MM:SS.mmm` local system timestamp string for new log entries.
 pub fn current_timestamp_hms_ms() -> String {
-    let duration = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let total_secs = duration.as_secs();
-    let millis = duration.subsec_millis();
-    let secs_of_day = total_secs % 86_400;
-    let hours = secs_of_day / 3_600;
-    let minutes = (secs_of_day % 3_600) / 60;
-    let seconds = secs_of_day % 60;
-    format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+    chrono::Local::now().format("%H:%M:%S%.3f").to_string()
 }
 
 #[cfg(test)]
@@ -409,7 +400,10 @@ mod tests {
 
     #[test]
     fn parses_strict_space_separated_hex_pairs() {
-        assert_eq!(parse_hex_bytes("41 54 0d 0A"), Ok(vec![0x41, 0x54, 0x0D, 0x0A]));
+        assert_eq!(
+            parse_hex_bytes("41 54 0d 0A"),
+            Ok(vec![0x41, 0x54, 0x0D, 0x0A])
+        );
         assert_eq!(parse_hex_bytes("  ff  00 "), Ok(vec![0xFF, 0x00]));
         assert_eq!(parse_hex_bytes("   "), Err(SendPayloadError::EmptyInput));
         assert!(matches!(
@@ -445,10 +439,7 @@ mod tests {
             format_visible_logs(&logs, true, false),
             "[14:26:07.285] TX AT\n[14:26:07.343] RX OK"
         );
-        assert_eq!(
-            format_visible_logs(&logs, false, false),
-            "TX AT\nRX OK"
-        );
+        assert_eq!(format_visible_logs(&logs, false, false), "TX AT\nRX OK");
         assert_eq!(
             format_visible_logs(&logs, true, true),
             "[14:26:07.285] TX 41 54\n[14:26:07.343] RX 4F 4B"
@@ -460,13 +451,23 @@ mod tests {
     }
 
     fn chinese_rx() -> LogEntry {
-        LogEntry::new_simulated(1, "14:26:07.343", LogDirection::Rx, "数据".as_bytes().to_vec())
+        LogEntry::new_simulated(
+            1,
+            "14:26:07.343",
+            LogDirection::Rx,
+            "数据".as_bytes().to_vec(),
+        )
     }
 
     #[test]
     fn selectable_line_matches_save_text_and_skips_simulated_decoration() {
         let logs = vec![
-            LogEntry::new_simulated(1, "14:26:07.285", LogDirection::Tx, "数据".as_bytes().to_vec()),
+            LogEntry::new_simulated(
+                1,
+                "14:26:07.285",
+                LogDirection::Tx,
+                "数据".as_bytes().to_vec(),
+            ),
             LogEntry::new_simulated(2, "14:26:07.343", LogDirection::Rx, vec![0x0A, 0xFF]),
         ];
         let notice = "* 模拟会话（无真实串口硬件）";
@@ -486,7 +487,10 @@ mod tests {
         let text_line = selectable_log_line(&logs[0], true, false);
         assert_eq!(text_line.text, "[14:26:07.285] TX 数据");
         assert_eq!(
-            text_line.timestamp_bytes.as_ref().map(|range| &text_line.text[range.clone()]),
+            text_line
+                .timestamp_bytes
+                .as_ref()
+                .map(|range| &text_line.text[range.clone()]),
             Some("[14:26:07.285]")
         );
         assert_eq!(&text_line.text[text_line.tag_bytes.clone()], "TX");
@@ -500,7 +504,10 @@ mod tests {
         let hex_line = selectable_log_line(&logs[0], true, true);
         assert_eq!(hex_line.text, "[14:26:07.285] TX E6 95 B0 E6 8D AE");
         assert!(!hex_line.text.contains("数据"));
-        assert_eq!(&hex_line.text[hex_line.payload_bytes.clone()], "E6 95 B0 E6 8D AE");
+        assert_eq!(
+            &hex_line.text[hex_line.payload_bytes.clone()],
+            "E6 95 B0 E6 8D AE"
+        );
     }
 
     #[test]
@@ -520,8 +527,14 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &lines,
-                LogTextPoint { line: 0, char_index: data_char },
-                LogTextPoint { line: 0, char_index: data_char + 1 },
+                LogTextPoint {
+                    line: 0,
+                    char_index: data_char
+                },
+                LogTextPoint {
+                    line: 0,
+                    char_index: data_char + 1
+                },
             )
             .as_deref(),
             Some("数")
@@ -532,8 +545,14 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &lines,
-                LogTextPoint { line: 0, char_index: rx_char },
-                LogTextPoint { line: 0, char_index: rx_char + 2 },
+                LogTextPoint {
+                    line: 0,
+                    char_index: rx_char
+                },
+                LogTextPoint {
+                    line: 0,
+                    char_index: rx_char + 2
+                },
             )
             .as_deref(),
             Some("RX")
@@ -544,8 +563,14 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &lines,
-                LogTextPoint { line: 0, char_index: 0 },
-                LogTextPoint { line: 0, char_index: timestamp_chars },
+                LogTextPoint {
+                    line: 0,
+                    char_index: 0
+                },
+                LogTextPoint {
+                    line: 0,
+                    char_index: timestamp_chars
+                },
             )
             .as_deref(),
             Some("[14:26:07.343]")
@@ -555,8 +580,14 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &[hidden.text.as_str()],
-                LogTextPoint { line: 0, char_index: 0 },
-                LogTextPoint { line: 0, char_index: usize::MAX },
+                LogTextPoint {
+                    line: 0,
+                    char_index: 0
+                },
+                LogTextPoint {
+                    line: 0,
+                    char_index: usize::MAX
+                },
             )
             .as_deref(),
             Some("RX 数据")
@@ -569,7 +600,10 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &[hex.text.as_str()],
-                LogTextPoint { line: 0, char_index: payload_char },
+                LogTextPoint {
+                    line: 0,
+                    char_index: payload_char
+                },
                 LogTextPoint {
                     line: 0,
                     char_index: payload_char + first_byte_chars,
@@ -581,7 +615,10 @@ mod tests {
 
         let cross = selected_log_text(
             &lines,
-            LogTextPoint { line: 0, char_index: data_char },
+            LogTextPoint {
+                line: 0,
+                char_index: data_char,
+            },
             LogTextPoint {
                 line: 1,
                 char_index: lines[1].find("AB").unwrap() + 1,
@@ -608,11 +645,17 @@ mod tests {
         assert_eq!(model.clipboard_after_copy("KEEP"), "KEEP");
 
         model.set_selected_text("RX E6 95 B0");
-        assert!(model.sync_display(false, true, 2), "timestamp switch clears");
+        assert!(
+            model.sync_display(false, true, 2),
+            "timestamp switch clears"
+        );
         assert_eq!(model.clipboard_after_copy("KEEP"), "KEEP");
 
         model.set_selected_text("RX");
-        assert!(!model.sync_display(false, true, 4), "append keeps selection");
+        assert!(
+            !model.sync_display(false, true, 4),
+            "append keeps selection"
+        );
         assert_eq!(model.copy_payload().as_deref(), Some("RX"));
         model.observe_log_len(4);
 
@@ -624,18 +667,21 @@ mod tests {
         assert_eq!(
             selected_log_text(
                 &[] as &[&str],
-                LogTextPoint { line: 0, char_index: 0 },
-                LogTextPoint { line: 0, char_index: 4 },
+                LogTextPoint {
+                    line: 0,
+                    char_index: 0
+                },
+                LogTextPoint {
+                    line: 0,
+                    char_index: 4
+                },
             ),
             None
         );
         assert_eq!(copied_log_text(""), None);
         assert_eq!(clipboard_after_log_copy("KEEP", None), "KEEP");
         assert_eq!(clipboard_after_log_copy("KEEP", Some("")), "KEEP");
-        assert_eq!(
-            clipboard_after_log_copy("KEEP", Some("RX 数据")),
-            "RX 数据"
-        );
+        assert_eq!(clipboard_after_log_copy("KEEP", Some("RX 数据")), "RX 数据");
     }
 
     #[test]
@@ -679,9 +725,20 @@ mod tests {
             format_hex_input_with_cursor("41A 54", 3),
             ("41 A5 4".into(), 4)
         );
-        assert_eq!(
-            format_hex_input_with_cursor("4154", 2),
-            ("41 54".into(), 2)
-        );
+        assert_eq!(format_hex_input_with_cursor("4154", 2), ("41 54".into(), 2));
+    }
+
+    #[test]
+    fn current_timestamp_hms_ms_formats_hh_mm_ss_mmm() {
+        let ts = current_timestamp_hms_ms();
+        let bytes = ts.as_bytes();
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(bytes[2], b':');
+        assert_eq!(bytes[5], b':');
+        assert_eq!(bytes[8], b'.');
+        assert!(bytes[0..2].iter().all(u8::is_ascii_digit));
+        assert!(bytes[3..5].iter().all(u8::is_ascii_digit));
+        assert!(bytes[6..8].iter().all(u8::is_ascii_digit));
+        assert!(bytes[9..12].iter().all(u8::is_ascii_digit));
     }
 }

@@ -57,17 +57,22 @@ impl Default for ReceiveViewState {
 }
 
 /// Floating send card state (independent from receive HEX flag).
+///
+/// `display_hex` controls only how `text` is displayed/converted in the input box,
+/// whereas `send_hex` controls only whether `text` is parsed as HEX bytes on send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendDraftState {
     pub text: String,
-    pub hex_mode: bool,
+    pub display_hex: bool,
+    pub send_hex: bool,
 }
 
 impl Default for SendDraftState {
     fn default() -> Self {
         Self {
             text: String::new(),
-            hex_mode: false,
+            display_hex: false,
+            send_hex: false,
         }
     }
 }
@@ -122,7 +127,8 @@ impl SessionState {
             receive: ReceiveViewState::default(),
             send: SendDraftState {
                 text: "AT+VERSION".to_string(),
-                hex_mode: false,
+                display_hex: false,
+                send_hex: false,
             },
             counters: SessionCounters { rx_bytes, tx_bytes },
             logs: vec![
@@ -254,7 +260,11 @@ impl SessionState {
 
     /// Returns the exact text currently visible in `LogView` for Save As export.
     pub fn visible_log_export_text(&self) -> String {
-        format_visible_logs(&self.logs, self.receive.show_timestamp, self.receive.hex_mode)
+        format_visible_logs(
+            &self.logs,
+            self.receive.show_timestamp,
+            self.receive.hex_mode,
+        )
     }
 
     /// Appends received bytes (used by real serial backend) with streaming `\n` line framing,
@@ -321,17 +331,18 @@ impl SessionState {
         seq
     }
 
-    /// Toggles send card HEX mode independently from receive HEX display, converting
-    /// `self.send.text` between UTF-8 text and space-separated uppercase HEX bytes.
+    /// Toggles send input box HEX display mode independently from `send.send_hex` and
+    /// `receive.hex_mode`, converting `self.send.text` between UTF-8 text and
+    /// space-separated uppercase HEX bytes.
     ///
-    /// When switching from HEX to text, blocks the transition and preserves both
-    /// `hex_mode == true` and the original `text` if the HEX input is malformed or
+    /// When switching from HEX display to text, blocks the transition and preserves both
+    /// `display_hex == true` and the original `text` if the HEX input is malformed or
     /// cannot be decoded as valid UTF-8.
-    pub fn toggle_send_hex(&mut self) -> Result<(), &'static str> {
-        if self.send.hex_mode {
+    pub fn toggle_send_display_hex(&mut self) -> Result<(), &'static str> {
+        if self.send.display_hex {
             if self.send.text.trim().is_empty() {
                 self.send.text.clear();
-                self.send.hex_mode = false;
+                self.send.display_hex = false;
                 return Ok(());
             }
 
@@ -340,7 +351,7 @@ impl SessionState {
                 Err(SendPayloadError::InvalidHex(msg)) => return Err(msg),
                 Err(SendPayloadError::EmptyInput) => {
                     self.send.text.clear();
-                    self.send.hex_mode = false;
+                    self.send.display_hex = false;
                     return Ok(());
                 }
                 Err(SendPayloadError::Disconnected) => return Err("HEX 转换失败"),
@@ -349,22 +360,29 @@ impl SessionState {
             let text = String::from_utf8(bytes)
                 .map_err(|_| "HEX 字节无法解码为有效 UTF-8 文本，无法切换回文本模式")?;
             self.send.text = text;
-            self.send.hex_mode = false;
+            self.send.display_hex = false;
             Ok(())
         } else {
             self.send.text = format_hex_bytes(self.send.text.as_bytes());
-            self.send.hex_mode = true;
+            self.send.display_hex = true;
             Ok(())
         }
     }
 
-    /// Validates connection, non-empty draft, and HEX syntax without mutating state.
+    /// Toggles whether outgoing payloads are parsed as HEX (`self.send.send_hex`)
+    /// without modifying `self.send.text` or `self.send.display_hex`.
+    pub fn toggle_send_format_hex(&mut self) {
+        self.send.send_hex = !self.send.send_hex;
+    }
+
+    /// Validates connection, non-empty draft, and HEX syntax (when `send.send_hex` is
+    /// enabled) without mutating state.
     pub fn prepare_send_bytes(&self) -> Result<Vec<u8>, SendPayloadError> {
         if !self.connection.is_connected() {
             return Err(SendPayloadError::Disconnected);
         }
 
-        if self.send.hex_mode {
+        if self.send.send_hex {
             parse_hex_bytes(&self.send.text)
         } else if self.send.text.is_empty() {
             Err(SendPayloadError::EmptyInput)
@@ -406,26 +424,59 @@ mod tests {
         assert!(state.simulated_notice.contains("模拟"));
         assert!(!state.logs.is_empty());
         assert!(state.logs.iter().all(|entry| entry.is_simulated));
-        assert!(SimulatedConnectionState::Disconnected.status_label().contains("模拟"));
-        assert!(SimulatedConnectionState::Connected.status_label().contains("模拟"));
-        assert!(SimulatedConnectionState::Disconnected.action_label().contains("模拟"));
-        assert!(SimulatedConnectionState::Connected.action_label().contains("模拟"));
+        assert!(
+            SimulatedConnectionState::Disconnected
+                .status_label()
+                .contains("模拟")
+        );
+        assert!(
+            SimulatedConnectionState::Connected
+                .status_label()
+                .contains("模拟")
+        );
+        assert!(
+            SimulatedConnectionState::Disconnected
+                .action_label()
+                .contains("模拟")
+        );
+        assert!(
+            SimulatedConnectionState::Connected
+                .action_label()
+                .contains("模拟")
+        );
     }
 
     #[test]
     fn receive_and_send_hex_states_are_independent() {
         let mut state = SessionState::new_simulated_demo();
         assert!(!state.receive.hex_mode);
-        assert!(!state.send.hex_mode);
+        assert!(!state.send.display_hex);
+        assert!(!state.send.send_hex);
 
-        state.receive.hex_mode = true;
+        state.toggle_receive_hex();
         assert!(state.receive.hex_mode);
-        assert!(!state.send.hex_mode);
+        assert!(!state.send.display_hex);
+        assert!(!state.send.send_hex);
 
-        state.send.hex_mode = true;
-        state.receive.hex_mode = false;
+        state.send.text = "AT".to_string();
+        state.toggle_send_display_hex().unwrap();
+        assert!(state.receive.hex_mode);
+        assert!(state.send.display_hex);
+        assert!(!state.send.send_hex);
+        assert_eq!(state.send.text, "41 54");
+
+        state.toggle_send_format_hex();
+        assert!(state.receive.hex_mode);
+        assert!(state.send.display_hex);
+        assert!(state.send.send_hex);
+        assert_eq!(state.send.text, "41 54");
+
+        state.toggle_receive_hex();
+        state.toggle_send_display_hex().unwrap();
         assert!(!state.receive.hex_mode);
-        assert!(state.send.hex_mode);
+        assert!(!state.send.display_hex);
+        assert!(state.send.send_hex);
+        assert_eq!(state.send.text, "AT");
     }
 
     #[test]
@@ -471,7 +522,7 @@ mod tests {
         // 2. Connect and send UTF-8 text while paused
         state.toggle_simulated_connection();
         state.send.text = "AT+VERSION".to_string();
-        state.send.hex_mode = false;
+        state.send.send_hex = false;
         let tx1 = state
             .submit_send_with_timestamp("14:26:08.200")
             .expect("TX text should submit while paused");
@@ -483,7 +534,7 @@ mod tests {
         let rx2_expected = "SIM_RX_02: 数据".as_bytes().to_vec();
 
         // 4. Second TX in HEX mode while paused
-        state.toggle_send_hex().unwrap();
+        state.toggle_send_format_hex();
         state.send.text = "0A FF".to_string();
         let tx2 = state
             .submit_send_with_timestamp("14:26:08.400")
@@ -584,7 +635,7 @@ mod tests {
         assert_eq!(state.counters.tx_bytes, initial_tx);
 
         // Invalid HEX: error, no submission, no counter change.
-        state.toggle_send_hex().unwrap();
+        state.toggle_send_format_hex();
         state.send.text = "4142".to_string();
         assert!(matches!(
             state.submit_send_with_timestamp("14:26:10.002"),
@@ -601,7 +652,7 @@ mod tests {
         let initial_tx = state.counters.tx_bytes;
 
         // UTF-8 text without newline appended.
-        state.send.hex_mode = false;
+        state.send.send_hex = false;
         state.send.text = "你好".to_string();
         let submitted_utf8 = state
             .submit_send_with_timestamp("14:26:11.000")
@@ -610,10 +661,13 @@ mod tests {
         assert_eq!(submitted_utf8.len(), 6);
         assert_eq!(state.send.text, "你好");
         assert_eq!(state.counters.tx_bytes, initial_tx + 6);
-        assert_eq!(state.logs.last().unwrap().bytes, vec![0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD]);
+        assert_eq!(
+            state.logs.last().unwrap().bytes,
+            vec![0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD]
+        );
 
         // Valid space-separated HEX bytes.
-        state.toggle_send_hex().unwrap();
+        state.toggle_send_format_hex();
         state.send.text = "0A FF 1b".to_string();
         let submitted_hex = state
             .submit_send_with_timestamp("14:26:11.100")
@@ -625,79 +679,83 @@ mod tests {
     }
 
     #[test]
-    fn toggle_send_hex_converts_ascii_utf8_and_empty_bidirectionally() {
+    fn toggle_send_display_hex_converts_ascii_utf8_and_empty_bidirectionally() {
         let mut state = SessionState::new_simulated_demo();
 
         // ASCII: text -> hex -> text
-        state.send.hex_mode = false;
+        state.send.display_hex = false;
         state.send.text = "AT+VERSION".to_string();
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(state.send.display_hex);
+        assert!(!state.send.send_hex);
         assert_eq!(state.send.text, "41 54 2B 56 45 52 53 49 4F 4E");
 
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(!state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(!state.send.display_hex);
+        assert!(!state.send.send_hex);
         assert_eq!(state.send.text, "AT+VERSION");
 
         // Chinese UTF-8: text -> hex -> text
         state.send.text = "数据".to_string();
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(state.send.display_hex);
         assert_eq!(state.send.text, "E6 95 B0 E6 8D AE");
 
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(!state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(!state.send.display_hex);
         assert_eq!(state.send.text, "数据");
 
         // Lowercase / extra spaces in HEX -> text
-        state.send.hex_mode = true;
+        state.send.display_hex = true;
         state.send.text = "  e6  95 b0 ".to_string();
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(!state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(!state.send.display_hex);
         assert_eq!(state.send.text, "数");
 
         // Empty string: text -> hex -> text
         state.send.text.clear();
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(state.send.display_hex);
         assert_eq!(state.send.text, "");
 
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(!state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(!state.send.display_hex);
         assert_eq!(state.send.text, "");
 
         // Whitespace-only in HEX -> clears to "" and switches to text
-        state.send.hex_mode = true;
+        state.send.display_hex = true;
         state.send.text = "   ".to_string();
-        assert_eq!(state.toggle_send_hex(), Ok(()));
-        assert!(!state.send.hex_mode);
+        assert_eq!(state.toggle_send_display_hex(), Ok(()));
+        assert!(!state.send.display_hex);
         assert_eq!(state.send.text, "");
     }
 
     #[test]
-    fn toggle_send_hex_blocks_invalid_hex_and_non_utf8_bytes() {
+    fn toggle_send_display_hex_blocks_invalid_hex_and_non_utf8_bytes() {
         let mut state = SessionState::new_simulated_demo();
-        state.send.hex_mode = true;
+        state.send.display_hex = true;
+        state.send.send_hex = true;
 
         // Odd-length token
         state.send.text = "41 5".to_string();
-        let err = state.toggle_send_hex().unwrap_err();
+        let err = state.toggle_send_display_hex().unwrap_err();
         assert!(err.contains("HEX"));
-        assert!(state.send.hex_mode);
+        assert!(state.send.display_hex);
+        assert!(state.send.send_hex);
         assert_eq!(state.send.text, "41 5");
 
         // Unseparated pair
         state.send.text = "4142".to_string();
-        let err = state.toggle_send_hex().unwrap_err();
+        let err = state.toggle_send_display_hex().unwrap_err();
         assert!(err.contains("HEX"));
-        assert!(state.send.hex_mode);
+        assert!(state.send.display_hex);
         assert_eq!(state.send.text, "4142");
 
         // Non-UTF-8 bytes
         state.send.text = "FF 00".to_string();
-        let err = state.toggle_send_hex().unwrap_err();
+        let err = state.toggle_send_display_hex().unwrap_err();
         assert!(err.contains("UTF-8"));
-        assert!(state.send.hex_mode);
+        assert!(state.send.display_hex);
         assert_eq!(state.send.text, "FF 00");
     }
 
@@ -747,10 +805,13 @@ mod tests {
 
         // Empty text fails.
         state.send.text.clear();
-        assert_eq!(state.prepare_send_bytes(), Err(SendPayloadError::EmptyInput));
+        assert_eq!(
+            state.prepare_send_bytes(),
+            Err(SendPayloadError::EmptyInput)
+        );
 
         // Invalid HEX fails without mutating state.
-        state.send.hex_mode = true;
+        state.send.send_hex = true;
         state.send.text = "4142".to_string();
         assert!(matches!(
             state.prepare_send_bytes(),
@@ -760,7 +821,9 @@ mod tests {
 
         // Valid HEX prepares bytes without mutating counters or logs.
         state.send.text = "41 54".to_string();
-        let prepared = state.prepare_send_bytes().expect("valid HEX should prepare");
+        let prepared = state
+            .prepare_send_bytes()
+            .expect("valid HEX should prepare");
         assert_eq!(prepared, b"AT");
         assert!(state.logs.is_empty());
         assert_eq!(state.counters.tx_bytes, 0);
@@ -859,5 +922,41 @@ mod tests {
         assert_eq!(state.logs.len(), 3);
         assert_eq!(state.logs[1].bytes, b"partial3");
         assert_eq!(state.logs[2].bytes, b"reconnected\n");
+    }
+
+    #[test]
+    fn display_hex_and_send_hex_operate_independently() {
+        let mut state = SessionState::new_real_session(SerialConfig::default(), true);
+
+        // a) display_hex = true, send_hex = false -> sends UTF-8 bytes of current input text ("41 54")
+        state.send.text = "AT".to_string();
+        state.toggle_send_display_hex().unwrap();
+        assert!(state.send.display_hex);
+        assert!(!state.send.send_hex);
+        assert_eq!(state.send.text, "41 54");
+        assert_eq!(state.prepare_send_bytes(), Ok(b"41 54".to_vec()));
+
+        // b) display_hex = false, send_hex = true -> parses current input text as HEX
+        state.toggle_send_display_hex().unwrap();
+        state.toggle_send_format_hex();
+        assert!(!state.send.display_hex);
+        assert!(state.send.send_hex);
+        assert_eq!(state.send.text, "AT");
+
+        state.send.text = "41 54".to_string();
+        assert_eq!(state.prepare_send_bytes(), Ok(vec![0x41, 0x54]));
+
+        state.send.text = "4142".to_string();
+        assert!(matches!(
+            state.prepare_send_bytes(),
+            Err(SendPayloadError::InvalidHex(_))
+        ));
+
+        // Toggling send_hex does not alter display_hex, text, or receive.hex_mode
+        state.toggle_send_format_hex();
+        assert!(!state.send.send_hex);
+        assert!(!state.send.display_hex);
+        assert!(!state.receive.hex_mode);
+        assert_eq!(state.send.text, "4142");
     }
 }

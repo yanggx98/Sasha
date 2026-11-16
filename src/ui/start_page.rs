@@ -25,7 +25,12 @@ pub fn format_frame_summary(data_bits: DataBits, parity: Parity, stop_bits: Stop
         Parity::Odd => "O",
         Parity::Even => "E",
     };
-    format!("{}-{}-{}", data_bits.label(), parity_code, stop_bits.label())
+    format!(
+        "{}-{}-{}",
+        data_bits.label(),
+        parity_code,
+        stop_bits.label()
+    )
 }
 
 /// Pure UI state for the startup serial connection page.
@@ -340,7 +345,9 @@ impl RenderOnce for StartPage {
                             .px_2p5()
                             .py_1()
                             .rounded(px(6.))
-                            .when(state.manual_port_mode, |this| this.bg(theme.bg_toggle_active))
+                            .when(state.manual_port_mode, |this| {
+                                this.bg(theme.bg_toggle_active)
+                            })
                             .hover(|s| s.bg(theme.bg_hover))
                             .cursor_pointer()
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -419,12 +426,7 @@ impl RenderOnce for StartPage {
                             .text_color(theme.text_primary)
                             .child(state.config.baud_rate.to_string()),
                     )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_secondary)
-                            .child("▾"),
-                    ),
+                    .child(div().text_xs().text_color(theme.text_secondary).child("▾")),
             )
             .when(state.baud_dropdown_open, |this| {
                 let baud_border = if state.baud_error.is_some() {
@@ -469,44 +471,39 @@ impl RenderOnce for StartPage {
                                     .child(err),
                             )
                         })
-                        .child(
-                            v_flex()
-                                .w_full()
-                                .gap_0p5()
-                                .children(BAUD_RATE_PRESETS.iter().enumerate().map(|(idx, &preset)| {
-                                    let is_current = preset == state.config.baud_rate;
-                                    let on_select = self.on_select_baud.clone();
+                        .child(v_flex().w_full().gap_0p5().children(
+                            BAUD_RATE_PRESETS.iter().enumerate().map(|(idx, &preset)| {
+                                let is_current = preset == state.config.baud_rate;
+                                let on_select = self.on_select_baud.clone();
 
-                                    h_flex()
-                                        .id(("start-baud-preset", idx))
-                                        .w_full()
-                                        .min_h(px(26.))
-                                        .items_center()
-                                        .justify_between()
-                                        .px_2()
-                                        .rounded(px(6.))
-                                        .when(is_current, |this| this.bg(theme.bg_toggle_active))
-                                        .hover(|s| s.bg(theme.bg_hover))
-                                        .cursor_pointer()
-                                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            on_select(preset, window, cx);
-                                        })
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(if is_current {
-                                                    theme.text_primary
-                                                } else {
-                                                    theme.text_secondary
-                                                })
-                                                .child(preset.to_string()),
-                                        )
-                                        .when(is_current, |this| {
-                                            this.child(Self::current_badge(theme))
-                                        })
-                                })),
-                        ),
+                                h_flex()
+                                    .id(("start-baud-preset", idx))
+                                    .w_full()
+                                    .min_h(px(26.))
+                                    .items_center()
+                                    .justify_between()
+                                    .px_2()
+                                    .rounded(px(6.))
+                                    .when(is_current, |this| this.bg(theme.bg_toggle_active))
+                                    .hover(|s| s.bg(theme.bg_hover))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        on_select(preset, window, cx);
+                                    })
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(if is_current {
+                                                theme.text_primary
+                                            } else {
+                                                theme.text_secondary
+                                            })
+                                            .child(preset.to_string()),
+                                    )
+                                    .when(is_current, |this| this.child(Self::current_badge(theme)))
+                            }),
+                        )),
                 )
             });
 
@@ -569,40 +566,37 @@ impl RenderOnce for StartPage {
                                         .text_color(theme.text_secondary)
                                         .child("数据位"),
                                 )
-                                .child(
-                                    h_flex().items_center().gap_1().children(
-                                        DataBits::ALL.iter().enumerate().map(|(idx, &bits)| {
-                                            let selected = state.config.data_bits == bits;
-                                            let on_select = self.on_select_data_bits.clone();
-                                            div()
-                                                .id(("start-data-bits", idx))
-                                                .px_2p5()
-                                                .py_1()
-                                                .rounded(px(6.))
-                                                .text_xs()
-                                                .when(selected, |this| {
-                                                    this.bg(theme.bg_toggle_active)
-                                                        .text_color(theme.accent_blue_hover)
-                                                })
-                                                .when(!selected, |this| {
-                                                    this.text_color(theme.text_secondary)
-                                                })
-                                                .hover(|s| {
-                                                    s.bg(theme.bg_hover)
-                                                        .text_color(theme.text_primary)
-                                                })
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, window, cx| {
-                                                        cx.stop_propagation();
-                                                        on_select(bits, window, cx);
-                                                    },
-                                                )
-                                                .child(bits.label())
-                                        }),
-                                    ),
-                                ),
+                                .child(h_flex().items_center().gap_1().children(
+                                    DataBits::ALL.iter().enumerate().map(|(idx, &bits)| {
+                                        let selected = state.config.data_bits == bits;
+                                        let on_select = self.on_select_data_bits.clone();
+                                        div()
+                                            .id(("start-data-bits", idx))
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded(px(6.))
+                                            .text_xs()
+                                            .when(selected, |this| {
+                                                this.bg(theme.bg_toggle_active)
+                                                    .text_color(theme.accent_blue_hover)
+                                            })
+                                            .when(!selected, |this| {
+                                                this.text_color(theme.text_secondary)
+                                            })
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    on_select(bits, window, cx);
+                                                },
+                                            )
+                                            .child(bits.label())
+                                    }),
+                                )),
                         )
                         .child(
                             h_flex()
@@ -616,40 +610,37 @@ impl RenderOnce for StartPage {
                                         .text_color(theme.text_secondary)
                                         .child("校验位"),
                                 )
-                                .child(
-                                    h_flex().items_center().gap_1().children(
-                                        Parity::ALL.iter().enumerate().map(|(idx, &parity)| {
-                                            let selected = state.config.parity == parity;
-                                            let on_select = self.on_select_parity.clone();
-                                            div()
-                                                .id(("start-parity", idx))
-                                                .px_2p5()
-                                                .py_1()
-                                                .rounded(px(6.))
-                                                .text_xs()
-                                                .when(selected, |this| {
-                                                    this.bg(theme.bg_toggle_active)
-                                                        .text_color(theme.accent_blue_hover)
-                                                })
-                                                .when(!selected, |this| {
-                                                    this.text_color(theme.text_secondary)
-                                                })
-                                                .hover(|s| {
-                                                    s.bg(theme.bg_hover)
-                                                        .text_color(theme.text_primary)
-                                                })
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, window, cx| {
-                                                        cx.stop_propagation();
-                                                        on_select(parity, window, cx);
-                                                    },
-                                                )
-                                                .child(parity.label())
-                                        }),
-                                    ),
-                                ),
+                                .child(h_flex().items_center().gap_1().children(
+                                    Parity::ALL.iter().enumerate().map(|(idx, &parity)| {
+                                        let selected = state.config.parity == parity;
+                                        let on_select = self.on_select_parity.clone();
+                                        div()
+                                            .id(("start-parity", idx))
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded(px(6.))
+                                            .text_xs()
+                                            .when(selected, |this| {
+                                                this.bg(theme.bg_toggle_active)
+                                                    .text_color(theme.accent_blue_hover)
+                                            })
+                                            .when(!selected, |this| {
+                                                this.text_color(theme.text_secondary)
+                                            })
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    on_select(parity, window, cx);
+                                                },
+                                            )
+                                            .child(parity.label())
+                                    }),
+                                )),
                         )
                         .child(
                             h_flex()
@@ -663,40 +654,37 @@ impl RenderOnce for StartPage {
                                         .text_color(theme.text_secondary)
                                         .child("停止位"),
                                 )
-                                .child(
-                                    h_flex().items_center().gap_1().children(
-                                        StopBits::ALL.iter().enumerate().map(|(idx, &stop_bits)| {
-                                            let selected = state.config.stop_bits == stop_bits;
-                                            let on_select = self.on_select_stop_bits.clone();
-                                            div()
-                                                .id(("start-stop-bits", idx))
-                                                .px_2p5()
-                                                .py_1()
-                                                .rounded(px(6.))
-                                                .text_xs()
-                                                .when(selected, |this| {
-                                                    this.bg(theme.bg_toggle_active)
-                                                        .text_color(theme.accent_blue_hover)
-                                                })
-                                                .when(!selected, |this| {
-                                                    this.text_color(theme.text_secondary)
-                                                })
-                                                .hover(|s| {
-                                                    s.bg(theme.bg_hover)
-                                                        .text_color(theme.text_primary)
-                                                })
-                                                .cursor_pointer()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, window, cx| {
-                                                        cx.stop_propagation();
-                                                        on_select(stop_bits, window, cx);
-                                                    },
-                                                )
-                                                .child(stop_bits.label())
-                                        }),
-                                    ),
-                                ),
+                                .child(h_flex().items_center().gap_1().children(
+                                    StopBits::ALL.iter().enumerate().map(|(idx, &stop_bits)| {
+                                        let selected = state.config.stop_bits == stop_bits;
+                                        let on_select = self.on_select_stop_bits.clone();
+                                        div()
+                                            .id(("start-stop-bits", idx))
+                                            .px_2p5()
+                                            .py_1()
+                                            .rounded(px(6.))
+                                            .text_xs()
+                                            .when(selected, |this| {
+                                                this.bg(theme.bg_toggle_active)
+                                                    .text_color(theme.accent_blue_hover)
+                                            })
+                                            .when(!selected, |this| {
+                                                this.text_color(theme.text_secondary)
+                                            })
+                                            .hover(|s| {
+                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
+                                            })
+                                            .cursor_pointer()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                move |_, window, cx| {
+                                                    cx.stop_propagation();
+                                                    on_select(stop_bits, window, cx);
+                                                },
+                                            )
+                                            .child(stop_bits.label())
+                                    }),
+                                )),
                         ),
                 )
             });

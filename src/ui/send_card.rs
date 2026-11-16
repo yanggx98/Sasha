@@ -17,19 +17,20 @@ use crate::ui::theme::NanoTheme;
 pub type SendActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Bottom floating send card (REQ-004, REQ-011).
-/// Only exposes the top-right `H` mode toggle and bottom-right send button,
-/// with no extra send settings or resize handles.
+/// Exposes the top-right `H` display toggle (controls input HEX formatting only;
+/// send encoding is controlled independently in the bottom bar) and bottom-right
+/// send button, with no extra send settings or resize handles.
 #[derive(IntoElement)]
 pub struct SendCard {
     theme: NanoTheme,
     draft: SendDraftState,
     connected: bool,
     is_simulated: bool,
-    tx_hex_flag: TransitionFlag,
+    tx_display_hex_flag: TransitionFlag,
     connection_flag: TransitionFlag,
     input: Entity<TextareaState>,
     error: Option<SharedString>,
-    on_toggle_hex: SendActionCallback,
+    on_toggle_display_hex: SendActionCallback,
     on_submit: SendActionCallback,
 }
 
@@ -40,11 +41,11 @@ impl SendCard {
         draft: SendDraftState,
         connected: bool,
         is_simulated: bool,
-        tx_hex_flag: TransitionFlag,
+        tx_display_hex_flag: TransitionFlag,
         connection_flag: TransitionFlag,
         input: Entity<TextareaState>,
         error: Option<SharedString>,
-        on_toggle_hex: SendActionCallback,
+        on_toggle_display_hex: SendActionCallback,
         on_submit: SendActionCallback,
     ) -> Self {
         Self {
@@ -52,11 +53,11 @@ impl SendCard {
             draft,
             connected,
             is_simulated,
-            tx_hex_flag,
+            tx_display_hex_flag,
             connection_flag,
             input,
             error,
-            on_toggle_hex,
+            on_toggle_display_hex,
             on_submit,
         }
     }
@@ -64,7 +65,7 @@ impl SendCard {
 
 impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let on_toggle_hex = self.on_toggle_hex.clone();
+        let on_toggle_display_hex = self.on_toggle_display_hex.clone();
         let on_submit = self.on_submit.clone();
         let submit_tooltip: &'static str = match (self.is_simulated, self.connected) {
             (true, true) => "发送（模拟）",
@@ -73,16 +74,16 @@ impl RenderOnce for SendCard {
             (false, false) => "未连接，无法发送",
         };
 
-        let tx_hex_flag = TransitionFlag {
-            active: self.draft.hex_mode,
-            epoch: self.tx_hex_flag.epoch,
+        let tx_display_hex_flag = TransitionFlag {
+            active: self.draft.display_hex,
+            epoch: self.tx_display_hex_flag.epoch,
         };
-        let (hex_bg_from, hex_bg_to) = tx_hex_flag.color_pair(
+        let (hex_bg_from, hex_bg_to) = tx_display_hex_flag.color_pair(
             transparent_like(self.theme.bg_toggle_active),
             self.theme.bg_toggle_active,
         );
         let (hex_fg_from, hex_fg_to) =
-            tx_hex_flag.color_pair(self.theme.text_secondary, self.theme.accent_blue_hover);
+            tx_display_hex_flag.color_pair(self.theme.text_secondary, self.theme.accent_blue_hover);
 
         let hex_toggle_btn = animate_toggle_colors(
             div()
@@ -101,15 +102,16 @@ impl RenderOnce for SendCard {
                 .font_weight(FontWeight::SEMIBOLD)
                 .cursor_pointer()
                 .tooltip(|window, cx| {
-                    Tooltip::new("HEX 发送切换（空格分隔两位十六进制）").build(window, cx)
+                    Tooltip::new("HEX 显示切换（仅切换输入框显示，空格分隔两位十六进制）")
+                        .build(window, cx)
                 })
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     cx.stop_propagation();
-                    on_toggle_hex(window, cx);
+                    on_toggle_display_hex(window, cx);
                 })
                 .child("H"),
             "send-card-hex-toggle",
-            tx_hex_flag,
+            tx_display_hex_flag,
             TOGGLE_TRANSITION_MS,
             move |el, delta| {
                 el.bg(lerp_color(hex_bg_from, hex_bg_to, delta))
