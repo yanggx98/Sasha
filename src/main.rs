@@ -1,4 +1,5 @@
 mod model;
+mod serial;
 mod ui;
 
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};

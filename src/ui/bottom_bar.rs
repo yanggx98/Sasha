@@ -14,12 +14,14 @@ pub type ToggleConnectionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Bottom parameter & status bar (REQ-005, REQ-011).
 /// Directly displays clickable port, baud rate, data bits, parity, stop bits,
-/// simulated connection action/status, and RX/TX byte counters.
+/// connection action/status, and RX/TX byte counters.
 #[derive(IntoElement)]
 pub struct BottomBar {
     theme: NanoTheme,
     config: SerialConfig,
     connection: SimulatedConnectionState,
+    status_label: &'static str,
+    action_label: &'static str,
     connection_flag: TransitionFlag,
     counters: SessionCounters,
     active_picker: Option<ActivePickerKind>,
@@ -33,6 +35,8 @@ impl BottomBar {
         theme: NanoTheme,
         config: SerialConfig,
         connection: SimulatedConnectionState,
+        status_label: &'static str,
+        action_label: &'static str,
         connection_flag: TransitionFlag,
         counters: SessionCounters,
         active_picker: Option<ActivePickerKind>,
@@ -43,6 +47,8 @@ impl BottomBar {
             theme,
             config,
             connection,
+            status_label,
+            action_label,
             connection_flag,
             counters,
             active_picker,
@@ -110,7 +116,7 @@ impl RenderOnce for BottomBar {
                     on_toggle(window, cx);
                 })
                 .child(Icon::new(LucideIcon::Link2).size(px(13.)))
-                .child(div().text_xs().child(self.connection.action_label())),
+                .child(div().text_xs().child(self.action_label)),
             "param-connection-anim",
             conn_flag,
             STATUS_TRANSITION_MS,
@@ -124,7 +130,7 @@ impl RenderOnce for BottomBar {
                 .py_0p5()
                 .rounded(px(4.))
                 .text_xs()
-                .child(self.connection.status_label()),
+                .child(self.status_label),
             "sim-connection-status-anim",
             conn_flag,
             STATUS_TRANSITION_MS,

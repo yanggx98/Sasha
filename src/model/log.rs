@@ -29,6 +29,21 @@ pub struct LogEntry {
 }
 
 impl LogEntry {
+    pub fn new(
+        id: u64,
+        timestamp: impl Into<String>,
+        direction: LogDirection,
+        bytes: impl Into<Vec<u8>>,
+    ) -> Self {
+        Self {
+            id,
+            timestamp: timestamp.into(),
+            direction,
+            bytes: bytes.into(),
+            is_simulated: false,
+        }
+    }
+
     pub fn new_simulated(
         id: u64,
         timestamp: impl Into<String>,
@@ -47,15 +62,80 @@ impl LogEntry {
     /// Formats payload as UTF-8 text or space-separated uppercase HEX bytes.
     pub fn format_payload(&self, hex_mode: bool) -> String {
         if hex_mode {
-            self.bytes
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect::<Vec<_>>()
-                .join(" ")
+            format_hex_bytes(&self.bytes)
         } else {
             String::from_utf8_lossy(&self.bytes).into_owned()
         }
     }
+}
+
+/// Formats bytes as space-separated uppercase 2-digit HEX pairs (e.g. `"41 54"`).
+pub fn format_hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Formats send input in HEX mode into uppercase 2-digit space-separated groups
+/// (e.g. `"4154"` -> `"41 54"`, `"4Edddd"` -> `"4E DD DD"`), preserving a single
+/// trailing space after an even-length group so users can type or backspace spaces
+/// naturally, and computes the updated UTF-8 byte cursor offset.
+pub fn format_hex_input_with_cursor(raw: &str, cursor_utf8_offset: usize) -> (String, usize) {
+    let clamped_cursor = cursor_utf8_offset.min(raw.len());
+    let mut hex_chars = Vec::new();
+    let mut hex_before_cursor = 0usize;
+    let mut last_hex_end = 0usize;
+    let mut trailing_space_after_last_hex = false;
+    let mut cursor_after_trailing_space = false;
+
+    for (idx, ch) in raw.char_indices() {
+        let ch_end = idx + ch.len_utf8();
+        if ch.is_ascii_hexdigit() {
+            hex_chars.push(ch.to_ascii_uppercase());
+            if idx < clamped_cursor {
+                hex_before_cursor += 1;
+            }
+            last_hex_end = ch_end;
+            trailing_space_after_last_hex = false;
+            cursor_after_trailing_space = false;
+        } else if ch == ' ' && !hex_chars.is_empty() {
+            trailing_space_after_last_hex = true;
+            if idx < clamped_cursor && idx >= last_hex_end {
+                cursor_after_trailing_space = true;
+            }
+        }
+    }
+
+    let n = hex_chars.len();
+    if n == 0 {
+        return (String::new(), 0);
+    }
+
+    let mut formatted = String::with_capacity(n + n / 2 + 1);
+    for (i, ch) in hex_chars.iter().enumerate() {
+        if i > 0 && i % 2 == 0 {
+            formatted.push(' ');
+        }
+        formatted.push(*ch);
+    }
+
+    let keep_trailing_space = n % 2 == 0 && trailing_space_after_last_hex;
+    if keep_trailing_space {
+        formatted.push(' ');
+    }
+
+    let next_cursor = if keep_trailing_space && hex_before_cursor == n && cursor_after_trailing_space
+    {
+        formatted.len()
+    } else if hex_before_cursor == 0 {
+        0
+    } else {
+        hex_before_cursor + (hex_before_cursor - 1) / 2
+    };
+
+    (formatted, next_cursor)
 }
 
 /// Errors that can prevent simulated TX submission.
@@ -553,6 +633,53 @@ mod tests {
         assert_eq!(
             clipboard_after_log_copy("KEEP", Some("RX 数据")),
             "RX 数据"
+        );
+    }
+
+    #[test]
+    fn formats_hex_input_with_auto_grouping_trailing_space_and_cursor() {
+        // Empty and whitespace-only
+        assert_eq!(format_hex_input_with_cursor("", 0), ("".into(), 0));
+        assert_eq!(format_hex_input_with_cursor("   ", 2), ("".into(), 0));
+
+        // Continuous typing / pasting auto-groups every 2 hex chars and uppercases
+        assert_eq!(format_hex_input_with_cursor("415", 3), ("41 5".into(), 4));
+        assert_eq!(format_hex_input_with_cursor("4154", 4), ("41 54".into(), 5));
+        assert_eq!(
+            format_hex_input_with_cursor("4Edddd", 6),
+            ("4E DD DD".into(), 8)
+        );
+
+        // Trailing space preserved after an even-length group, dropped after odd group or backspace
+        assert_eq!(format_hex_input_with_cursor("41 ", 3), ("41 ".into(), 3));
+        assert_eq!(format_hex_input_with_cursor("41  ", 4), ("41 ".into(), 3));
+        assert_eq!(format_hex_input_with_cursor("41 ", 2), ("41 ".into(), 2));
+        assert_eq!(format_hex_input_with_cursor("41", 2), ("41".into(), 2));
+        assert_eq!(format_hex_input_with_cursor("415 ", 4), ("41 5".into(), 4));
+
+        // Invalid character at end keeps cursor at end (does not jump to 0)
+        assert_eq!(
+            format_hex_input_with_cursor("41 54z", 6),
+            ("41 54".into(), 5)
+        );
+        assert_eq!(
+            format_hex_input_with_cursor("41 54中文", "41 54中文".len()),
+            ("41 54".into(), 5)
+        );
+        assert_eq!(format_hex_input_with_cursor("41 z", 4), ("41 ".into(), 3));
+
+        // Middle insertion / deletion keeps cursor accurately positioned
+        assert_eq!(
+            format_hex_input_with_cursor("4z154", 2),
+            ("41 54".into(), 1)
+        );
+        assert_eq!(
+            format_hex_input_with_cursor("41A 54", 3),
+            ("41 A5 4".into(), 4)
+        );
+        assert_eq!(
+            format_hex_input_with_cursor("4154", 2),
+            ("41 54".into(), 2)
         );
     }
 }

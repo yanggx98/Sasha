@@ -1,4 +1,6 @@
 use std::rc::Rc;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::Duration;
 
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
@@ -7,24 +9,43 @@ use gpui_kit::component::v_flex;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
-    ActivePickerKind, LogSelectionModel, SendPayloadError, SessionState, current_timestamp_hms_ms,
+    ActivePickerKind, DataBits, LogSelectionModel, Parity, SendPayloadError, SessionState,
+    StopBits, current_timestamp_hms_ms,
 };
+use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports};
 use crate::ui::bottom_bar::BottomBar;
 use crate::ui::log_view::LogView;
 use crate::ui::motion::UiMotionState;
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
 use crate::ui::send_card::SendCard;
+use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::theme::NanoTheme;
 use crate::ui::title_bar::AppTitleBar;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppPage {
+    Start,
+    Workspace,
+}
 
 /// Root single-session application view.
 /// Owns `SessionState` as the shared state boundary for TASK-002 and TASK-003.
 pub struct SashaApp {
+    pub page: AppPage,
     pub state: SessionState,
     pub theme: NanoTheme,
     motion: UiMotionState,
+    start_page: StartPageState,
+    start_manual_port_input: Option<Entity<InputState>>,
+    _start_manual_port_sub: Option<Subscription>,
+    start_baud_input: Option<Entity<InputState>>,
+    _start_baud_sub: Option<Subscription>,
+    serial_conn: Option<SerialConnection>,
+    serial_rx_task: Option<Task<()>>,
+    picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
     picker_error: Option<SharedString>,
@@ -51,9 +72,18 @@ impl SashaApp {
             state.logs.len(),
         );
         Self {
+            page: AppPage::Start,
             state,
             theme: NanoTheme::default(),
             motion,
+            start_page: StartPageState::new(),
+            start_manual_port_input: None,
+            _start_manual_port_sub: None,
+            start_baud_input: None,
+            _start_baud_sub: None,
+            serial_conn: None,
+            serial_rx_task: None,
+            picker_port_presets: Vec::new(),
             picker_input: None,
             _picker_subscription: None,
             picker_error: None,
@@ -62,6 +92,302 @@ impl SashaApp {
             send_error: None,
             log_focus: cx.focus_handle(),
             log_selection,
+        }
+    }
+
+    fn sync_motion_and_selection_from_state(&mut self) {
+        self.motion = UiMotionState::new(
+            self.state.receive.hex_mode,
+            self.state.receive.show_timestamp,
+            self.state.receive.paused,
+            self.state.send.hex_mode,
+            self.state.connection.is_connected(),
+        );
+        self.log_selection = LogSelectionModel::new(
+            self.state.receive.show_timestamp,
+            self.state.receive.hex_mode,
+            self.state.logs.len(),
+        );
+    }
+
+    fn ensure_start_manual_port_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = &self.start_manual_port_input {
+            return existing.clone();
+        }
+
+        let entity =
+            cx.new(|cx| InputState::new(window, cx).placeholder("输入端口名（如 COM3）"));
+        let entity_for_sub = entity.clone();
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    this.start_page.set_manual_port_value(&raw);
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } => {
+                    this.connect_from_start_page(cx);
+                }
+                _ => {}
+            },
+        );
+
+        self.start_manual_port_input = Some(entity.clone());
+        self._start_manual_port_sub = Some(sub);
+        entity
+    }
+
+    fn ensure_start_baud_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = &self.start_baud_input {
+            return existing.clone();
+        }
+
+        let entity = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("输入正整数波特率（如 230400），回车确认")
+        });
+        let entity_for_sub = entity.clone();
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    if this.start_page.baud_error.is_some() {
+                        this.start_page.baud_error = None;
+                        cx.notify();
+                    }
+                }
+                InputEvent::PressEnter { .. } => {
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    let _ = this.start_page.apply_custom_baud(&raw);
+                    cx.notify();
+                }
+                _ => {}
+            },
+        );
+
+        self.start_baud_input = Some(entity.clone());
+        self._start_baud_sub = Some(sub);
+        entity
+    }
+
+    fn refresh_start_ports(&mut self, cx: &mut Context<Self>) {
+        self.start_page.refresh_ports(enumerate_serial_ports());
+        cx.notify();
+    }
+
+    fn select_start_port(&mut self, port_name: String, cx: &mut Context<Self>) {
+        self.start_page.select_detected_port(port_name);
+        cx.notify();
+    }
+
+    fn enable_start_manual_port(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_page.enable_manual_port();
+        let current_port = self.start_page.config.port.clone();
+        let input = self.ensure_start_manual_port_input(window, cx);
+        input.update(cx, |state, cx| {
+            if !current_port.is_empty() && state.value().is_empty() {
+                state.set_value(current_port, window, cx);
+            }
+            state.focus(window, cx);
+            state.select_all(window, cx);
+        });
+        let value = input.read(cx).value().to_string();
+        self.start_page.set_manual_port_value(&value);
+        cx.notify();
+    }
+
+    fn toggle_start_baud_dropdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.start_page.baud_dropdown_open = !self.start_page.baud_dropdown_open;
+        self.start_page.baud_error = None;
+        if self.start_page.baud_dropdown_open {
+            let current_baud = self.start_page.config.baud_rate.to_string();
+            let input = self.ensure_start_baud_input(window, cx);
+            input.update(cx, |state, cx| {
+                state.set_value(current_baud, window, cx);
+                state.focus(window, cx);
+                state.select_all(window, cx);
+            });
+        }
+        cx.notify();
+    }
+
+    fn select_start_baud(&mut self, baud: u32, cx: &mut Context<Self>) {
+        self.start_page.select_baud_preset(baud);
+        cx.notify();
+    }
+
+    fn toggle_start_frame_expanded(&mut self, cx: &mut Context<Self>) {
+        self.start_page.frame_expanded = !self.start_page.frame_expanded;
+        cx.notify();
+    }
+
+    fn select_start_data_bits(&mut self, bits: DataBits, cx: &mut Context<Self>) {
+        self.start_page.config.data_bits = bits;
+        cx.notify();
+    }
+
+    fn select_start_parity(&mut self, parity: Parity, cx: &mut Context<Self>) {
+        self.start_page.config.parity = parity;
+        cx.notify();
+    }
+
+    fn select_start_stop_bits(&mut self, stop_bits: StopBits, cx: &mut Context<Self>) {
+        self.start_page.config.stop_bits = stop_bits;
+        cx.notify();
+    }
+
+    fn connect_from_start_page(&mut self, cx: &mut Context<Self>) {
+        if self.start_page.manual_port_mode
+            && let Some(input) = &self.start_manual_port_input
+        {
+            let raw = input.read(cx).value().to_string();
+            self.start_page.set_manual_port_value(&raw);
+        }
+
+        match SerialConnection::open(&self.start_page.config) {
+            Ok((conn, rx)) => {
+                self.disconnect_real_serial(None, cx);
+                self.state = SessionState::new_real_session(self.start_page.config.clone(), true);
+                self.sync_motion_and_selection_from_state();
+                self.send_input = None;
+                self._send_subscription = None;
+                self.send_error = None;
+                self.start_page.connect_error = None;
+                self.serial_conn = Some(conn);
+                self.page = AppPage::Workspace;
+                self.start_serial_rx_loop(rx, cx);
+                cx.notify();
+            }
+            Err(err) => {
+                self.start_page.connect_error = Some(err);
+                cx.notify();
+            }
+        }
+    }
+
+    fn enter_simulated_from_start_page(&mut self, cx: &mut Context<Self>) {
+        self.disconnect_real_serial(None, cx);
+        self.state = SessionState::new_simulated_demo();
+        self.sync_motion_and_selection_from_state();
+        self.send_input = None;
+        self._send_subscription = None;
+        self.send_error = None;
+        self.page = AppPage::Workspace;
+        cx.notify();
+    }
+
+    fn start_serial_rx_loop(&mut self, rx: Receiver<SerialEvent>, cx: &mut Context<Self>) {
+        self.serial_rx_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+
+                let mut rx_chunks: Vec<Vec<u8>> = Vec::new();
+                let mut disconnected_err: Option<String> = None;
+                let mut channel_closed = false;
+
+                loop {
+                    match rx.try_recv() {
+                        Ok(SerialEvent::Rx(bytes)) => rx_chunks.push(bytes),
+                        Ok(SerialEvent::Disconnected(err)) => {
+                            disconnected_err = Some(err);
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            channel_closed = true;
+                            break;
+                        }
+                    }
+                }
+
+                let should_break = disconnected_err.is_some() || channel_closed;
+                if !rx_chunks.is_empty() || should_break {
+                    let updated = this.update(cx, |app, cx| {
+                        if !rx_chunks.is_empty() {
+                            let ts = current_timestamp_hms_ms();
+                            for chunk in rx_chunks {
+                                app.state.append_rx_bytes(&chunk, &ts);
+                            }
+                            app.log_selection.observe_log_len(app.state.logs.len());
+                        }
+                        if let Some(err) = disconnected_err {
+                            app.handle_serial_disconnected(Some(err), cx);
+                        } else if channel_closed && app.state.connection.is_connected() {
+                            app.handle_serial_disconnected(
+                                Some("串口读取通道已关闭".to_string()),
+                                cx,
+                            );
+                        } else {
+                            cx.notify();
+                        }
+                    });
+                    if updated.is_err() {
+                        break;
+                    }
+                }
+
+                if should_break {
+                    break;
+                }
+            }
+        }));
+    }
+
+    fn connect_real_serial(&mut self, cx: &mut Context<Self>) {
+        self.disconnect_real_serial(None, cx);
+        match SerialConnection::open(&self.state.config) {
+            Ok((conn, rx)) => {
+                self.serial_conn = Some(conn);
+                self.state.set_connected(true);
+                self.motion.connection.set(true);
+                self.send_error = None;
+                self.start_serial_rx_loop(rx, cx);
+            }
+            Err(err) => {
+                self.state.set_connected(false);
+                self.motion.connection.set(false);
+                self.send_error = Some(err.into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn disconnect_real_serial(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.serial_rx_task = None;
+        if let Some(mut conn) = self.serial_conn.take() {
+            conn.close();
+        }
+        self.state.set_connected(false);
+        self.motion.connection.set(false);
+        if let Some(err) = error {
+            self.send_error = Some(err.into());
+        }
+        cx.notify();
+    }
+
+    fn handle_serial_disconnected(&mut self, error: Option<String>, cx: &mut Context<Self>) {
+        self.disconnect_real_serial(error, cx);
+    }
+
+    fn toggle_connection(&mut self, cx: &mut Context<Self>) {
+        if self.state.is_simulated_session {
+            self.toggle_simulated_connection(cx);
+        } else if self.state.connection.is_connected() {
+            self.disconnect_real_serial(None, cx);
+        } else {
+            self.connect_real_serial(cx);
         }
     }
 
@@ -75,18 +401,44 @@ impl SashaApp {
         }
 
         let initial_text = self.state.send.text.clone();
+        let placeholder = if self.state.is_simulated_session {
+            "输入发送内容（模拟）"
+        } else {
+            "输入发送内容"
+        };
         let entity = cx.new(|cx| {
             TextareaState::new(window, cx)
-                .placeholder("输入发送内容（模拟）")
+                .placeholder(placeholder)
                 .default_value(initial_text)
         });
         let entity_for_sub = entity.clone();
         let sub = cx.subscribe_in(
             &entity,
             window,
-            move |this, _, event: &InputEvent, _window, cx| match event {
+            move |this, _, event: &InputEvent, window, cx| match event {
                 InputEvent::Change => {
-                    this.state.send.text = entity_for_sub.read(cx).value().to_string();
+                    let raw = entity_for_sub.read(cx).value().to_string();
+                    if this.state.send.hex_mode {
+                        let cursor = entity_for_sub.read(cx).cursor();
+                        let (formatted, next_cursor) = format_hex_input_with_cursor(&raw, cursor);
+                        if formatted != raw {
+                            this.state.send.text = formatted.clone();
+                            entity_for_sub.update(cx, |state, cx| {
+                                state.set_value(formatted, window, cx);
+                                state.set_cursor_position(
+                                    gpui_kit::component::input::Position::new(0, next_cursor as u32),
+                                    window,
+                                    cx,
+                                );
+                            });
+                            if this.send_error.is_some() {
+                                this.send_error = None;
+                            }
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    this.state.send.text = raw;
                     if this.send_error.is_some() {
                         this.send_error = None;
                     }
@@ -124,11 +476,9 @@ impl SashaApp {
                 InputEvent::PressEnter { .. } => {
                     this.apply_picker_input(cx);
                 }
-                InputEvent::Change => {
-                    if this.picker_error.is_some() {
-                        this.picker_error = None;
-                        cx.notify();
-                    }
+                InputEvent::Change if this.picker_error.is_some() => {
+                    this.picker_error = None;
+                    cx.notify();
                 }
                 _ => {}
             },
@@ -153,6 +503,12 @@ impl SashaApp {
         self.state.active_picker = Some(kind);
         self.motion.picker_open_epoch += 1;
         self.picker_error = None;
+        if kind == ActivePickerKind::Port && !self.state.is_simulated_session {
+            self.picker_port_presets = enumerate_serial_ports()
+                .into_iter()
+                .map(|p| p.name)
+                .collect();
+        }
 
         let current_val = self.state.config.current_value_str(kind);
         let input = self.ensure_picker_input(window, cx);
@@ -174,6 +530,10 @@ impl SashaApp {
             Ok(()) => {
                 self.state.active_picker = None;
                 self.picker_error = None;
+                if !self.state.is_simulated_session && self.state.connection.is_connected() {
+                    self.disconnect_real_serial(None, cx);
+                    return;
+                }
             }
             Err(err) => {
                 self.picker_error = Some(err.into());
@@ -291,10 +651,26 @@ impl SashaApp {
         cx.notify();
     }
 
-    pub fn toggle_send_hex(&mut self, cx: &mut Context<Self>) {
-        self.state.toggle_send_hex();
-        self.motion.tx_hex.set(self.state.send.hex_mode);
-        self.send_error = None;
+    pub fn toggle_send_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(input) = &self.send_input {
+            self.state.send.text = input.read(cx).value().to_string();
+        }
+
+        match self.state.toggle_send_hex() {
+            Ok(()) => {
+                self.motion.tx_hex.set(self.state.send.hex_mode);
+                self.send_error = None;
+                if let Some(input) = &self.send_input {
+                    let next_text = self.state.send.text.clone();
+                    input.update(cx, |state, cx| {
+                        state.set_value(next_text, window, cx);
+                    });
+                }
+            }
+            Err(err) => {
+                self.send_error = Some(err.into());
+            }
+        }
         cx.notify();
     }
 
@@ -303,15 +679,51 @@ impl SashaApp {
             self.state.send.text = input.read(cx).value().to_string();
         }
 
-        match self
-            .state
-            .submit_send_with_timestamp(current_timestamp_hms_ms())
-        {
-            Ok(_) => {
-                self.send_error = None;
+        if self.state.is_simulated_session {
+            match self
+                .state
+                .submit_send_with_timestamp(current_timestamp_hms_ms())
+            {
+                Ok(_) => {
+                    self.send_error = None;
+                }
+                Err(SendPayloadError::Disconnected) => {
+                    self.send_error = Some("模拟未连接：请先点击底栏“模拟连接”".into());
+                }
+                Err(SendPayloadError::EmptyInput) => {
+                    self.send_error = Some("发送内容为空，未提交".into());
+                }
+                Err(SendPayloadError::InvalidHex(msg)) => {
+                    self.send_error = Some(msg.into());
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        match self.state.prepare_send_bytes() {
+            Ok(bytes) => {
+                if let Some(conn) = self.serial_conn.as_mut() {
+                    match conn.write_bytes(&bytes) {
+                        Ok(()) => {
+                            self.state
+                                .record_tx_bytes(&bytes, &current_timestamp_hms_ms());
+                            self.send_error = None;
+                        }
+                        Err(err) => {
+                            self.send_error = Some(err.into());
+                        }
+                    }
+                } else {
+                    self.handle_serial_disconnected(
+                        Some("串口未连接：请先点击底栏“连接”".to_string()),
+                        cx,
+                    );
+                    return;
+                }
             }
             Err(SendPayloadError::Disconnected) => {
-                self.send_error = Some("模拟未连接：请先点击底栏“模拟连接”".into());
+                self.send_error = Some("串口未连接：请先点击底栏“连接”".into());
             }
             Err(SendPayloadError::EmptyInput) => {
                 self.send_error = Some("发送内容为空，未提交".into());
@@ -326,6 +738,83 @@ impl SashaApp {
 
 impl Render for SashaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.page == AppPage::Start {
+            let manual_port_input = self.ensure_start_manual_port_input(window, cx);
+            let baud_input = self.ensure_start_baud_input(window, cx);
+
+            let weak = cx.entity().downgrade();
+            let on_refresh_ports = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.refresh_start_ports(cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_select_port = Rc::new(move |port: String, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.select_start_port(port, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_enable_manual_port = Rc::new(move |window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.enable_start_manual_port(window, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_toggle_baud_dropdown = Rc::new(move |window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.toggle_start_baud_dropdown(window, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_select_baud = Rc::new(move |baud: u32, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.select_start_baud(baud, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_toggle_frame_expanded = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.toggle_start_frame_expanded(cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_select_data_bits = Rc::new(move |bits: DataBits, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.select_start_data_bits(bits, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_select_parity = Rc::new(move |parity: Parity, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.select_start_parity(parity, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_select_stop_bits =
+                Rc::new(move |stop_bits: StopBits, _: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.select_start_stop_bits(stop_bits, cx));
+                });
+            let weak = cx.entity().downgrade();
+            let on_connect = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.connect_from_start_page(cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_enter_simulated = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.enter_simulated_from_start_page(cx));
+            });
+
+            return v_flex()
+                .id("sasha-root")
+                .relative()
+                .size_full()
+                .bg(self.theme.bg_canvas)
+                .text_color(self.theme.text_primary)
+                .child(AppTitleBar::new(self.theme, false))
+                .child(StartPage::new(
+                    self.theme,
+                    self.start_page.clone(),
+                    manual_port_input,
+                    baud_input,
+                    on_refresh_ports,
+                    on_select_port,
+                    on_enable_manual_port,
+                    on_toggle_baud_dropdown,
+                    on_select_baud,
+                    on_toggle_frame_expanded,
+                    on_select_data_bits,
+                    on_select_parity,
+                    on_select_stop_bits,
+                    on_connect,
+                    on_enter_simulated,
+                ))
+                .into_any_element();
+        }
+
         self.log_selection.observe_log_len(self.state.logs.len());
         let send_input = self.ensure_send_input(window, cx);
         let log_focus = self.log_focus.clone();
@@ -342,7 +831,7 @@ impl Render for SashaApp {
         let weak_for_conn = cx.entity().downgrade();
         let on_toggle_connection = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak_for_conn.update(cx, |this, cx| {
-                this.toggle_simulated_connection(cx);
+                this.toggle_connection(cx);
             });
         });
 
@@ -375,8 +864,8 @@ impl Render for SashaApp {
         });
 
         let weak = cx.entity().downgrade();
-        let on_tx_hex = Rc::new(move |_: &mut Window, cx: &mut App| {
-            let _ = weak.update(cx, |this, cx| this.toggle_send_hex(cx));
+        let on_tx_hex = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_send_hex(window, cx));
         });
         let weak = cx.entity().downgrade();
         let on_tx_submit = Rc::new(move |_: &mut Window, cx: &mut App| {
@@ -415,7 +904,7 @@ impl Render for SashaApp {
                     || (event.keystroke.modifiers.control
                         && event.keystroke.modifiers.shift
                         && event.keystroke.key.eq_ignore_ascii_case("r"));
-                if is_sim_rx_shortcut {
+                if is_sim_rx_shortcut && this.state.is_simulated_session {
                     this.inject_simulated_rx_event(cx);
                     cx.stop_propagation();
                     return;
@@ -487,6 +976,7 @@ impl Render for SashaApp {
                 self.theme,
                 self.state.send.clone(),
                 self.state.connection.is_connected(),
+                self.state.is_simulated_session,
                 self.motion.tx_hex,
                 self.motion.connection,
                 send_input,
@@ -498,6 +988,8 @@ impl Render for SashaApp {
                 self.theme,
                 self.state.config.clone(),
                 self.state.connection,
+                self.state.connection_status_label(),
+                self.state.connection_action_label(),
                 self.motion.connection,
                 self.state.counters,
                 self.state.active_picker,
@@ -517,6 +1009,8 @@ impl Render for SashaApp {
                         .child(ParameterPickerPopover::new(
                             self.theme,
                             kind,
+                            self.state.is_simulated_session,
+                            self.picker_port_presets.clone(),
                             self.motion.picker_open_epoch,
                             self.state.config.clone(),
                             input,
@@ -525,5 +1019,6 @@ impl Render for SashaApp {
                         )),
                 )
             })
+            .into_any_element()
     }
 }

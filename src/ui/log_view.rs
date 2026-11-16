@@ -110,13 +110,15 @@ impl RenderOnce for LogView {
                                 )
                             })
                     }))
-                    .child(
-                        div()
-                            .pt_3()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(format!("* {}", self.simulated_notice)),
-                    ),
+                    .when(!self.simulated_notice.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .pt_3()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(format!("* {}", self.simulated_notice)),
+                        )
+                    }),
             )
     }
 }

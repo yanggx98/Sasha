@@ -1,7 +1,9 @@
 use std::fmt;
 
 /// Preset baud rates for the quick-select overlay (used by TASK-002).
-pub const BAUD_RATE_PRESETS: &[u32] = &[9600, 19200, 38400, 57600, 115200];
+pub const BAUD_RATE_PRESETS: &[u32] = &[
+    9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
+];
 
 /// Preset simulated serial ports (used by TASK-002).
 pub const SIMULATED_PORT_PRESETS: &[&str] = &["COM1", "COM3", "COM4", "COM7"];
@@ -251,7 +253,17 @@ mod tests {
     fn baud_rate_accepts_positive_integers_and_rejects_invalid() {
         assert_eq!(parse_baud_rate("115200"), Ok(115200));
         assert_eq!(parse_baud_rate(" 230400 "), Ok(230400));
+        assert_eq!(parse_baud_rate("460800"), Ok(460800));
+        assert_eq!(parse_baud_rate("921600"), Ok(921600));
         assert_eq!(parse_baud_rate("1"), Ok(1));
+
+        for &preset in BAUD_RATE_PRESETS {
+            assert_eq!(parse_baud_rate(&preset.to_string()), Ok(preset));
+        }
+        assert!(BAUD_RATE_PRESETS.contains(&115200));
+        assert!(BAUD_RATE_PRESETS.contains(&230400));
+        assert!(BAUD_RATE_PRESETS.contains(&460800));
+        assert!(BAUD_RATE_PRESETS.contains(&921600));
 
         assert!(parse_baud_rate("").is_err());
         assert!(parse_baud_rate("   ").is_err());

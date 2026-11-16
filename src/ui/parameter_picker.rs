@@ -19,6 +19,8 @@ pub type SelectPresetCallback = Rc<dyn Fn(String, &mut Window, &mut App)>;
 pub struct ParameterPickerPopover {
     theme: NanoTheme,
     kind: ActivePickerKind,
+    is_simulated: bool,
+    port_presets: Vec<String>,
     open_epoch: u64,
     config: SerialConfig,
     input: Entity<InputState>,
@@ -27,9 +29,12 @@ pub struct ParameterPickerPopover {
 }
 
 impl ParameterPickerPopover {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         theme: NanoTheme,
         kind: ActivePickerKind,
+        is_simulated: bool,
+        port_presets: Vec<String>,
         open_epoch: u64,
         config: SerialConfig,
         input: Entity<InputState>,
@@ -39,6 +44,8 @@ impl ParameterPickerPopover {
         Self {
             theme,
             kind,
+            is_simulated,
+            port_presets,
             open_epoch,
             config,
             input,
@@ -54,7 +61,16 @@ impl RenderOnce for ParameterPickerPopover {
         let current_value = self.config.current_value_str(self.kind);
         let typed_value = self.input.read(cx).value().to_string();
         let trimmed_typed = typed_value.trim().to_string();
-        let presets = self.kind.presets();
+        let presets = if self.kind == ActivePickerKind::Port && !self.is_simulated {
+            self.port_presets
+        } else {
+            self.kind.presets()
+        };
+        let title = if self.kind == ActivePickerKind::Port && !self.is_simulated {
+            "选择或输入端口"
+        } else {
+            self.kind.title()
+        };
         let has_exact_preset = presets.iter().any(|p| p == &trimmed_typed);
         let input_border = if self.error.is_some() {
             theme.error_text
@@ -92,7 +108,7 @@ impl RenderOnce for ParameterPickerPopover {
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_primary)
-                            .child(self.kind.title()),
+                            .child(title),
                     )
                     .child(
                         div()
@@ -178,6 +194,20 @@ impl RenderOnce for ParameterPickerPopover {
                                 ),
                         )
                     })
+                    .when(
+                        presets.is_empty() && trimmed_typed.is_empty(),
+                        |this| {
+                            this.child(
+                                div()
+                                    .w_full()
+                                    .px_2()
+                                    .py_1p5()
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .child("未检测到可用串口，请在上方输入端口名"),
+                            )
+                        },
+                    )
                     .children(presets.into_iter().enumerate().map(|(idx, preset)| {
                         let is_current = preset == current_value;
                         let preset_for_click = preset.clone();

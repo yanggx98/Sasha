@@ -1,3 +1,4 @@
+use super::log::format_hex_bytes;
 use super::{
     ActivePickerKind, LogDirection, LogEntry, SendPayloadError, SerialConfig, format_visible_logs,
     parse_hex_bytes,
@@ -135,6 +136,63 @@ impl SessionState {
         }
     }
 
+    /// Creates a real hardware serial session with empty logs and zeroed counters.
+    #[allow(dead_code)]
+    pub fn new_real_session(config: SerialConfig, connected: bool) -> Self {
+        Self {
+            is_simulated_session: false,
+            simulated_notice: "",
+            config,
+            connection: if connected {
+                SimulatedConnectionState::Connected
+            } else {
+                SimulatedConnectionState::Disconnected
+            },
+            receive: ReceiveViewState::default(),
+            send: SendDraftState::default(),
+            counters: SessionCounters::default(),
+            logs: Vec::new(),
+            retained_while_paused: Vec::new(),
+            active_picker: None,
+            next_log_id: 1,
+            next_sim_rx_seq: 0,
+        }
+    }
+
+    /// Returns the mode-aware connection status label (real vs. simulated).
+    #[allow(dead_code)]
+    pub fn connection_status_label(&self) -> &'static str {
+        if self.is_simulated_session {
+            self.connection.status_label()
+        } else if self.connection.is_connected() {
+            "已连接"
+        } else {
+            "未连接"
+        }
+    }
+
+    /// Returns the mode-aware connection toggle button label (real vs. simulated).
+    #[allow(dead_code)]
+    pub fn connection_action_label(&self) -> &'static str {
+        if self.is_simulated_session {
+            self.connection.action_label()
+        } else if self.connection.is_connected() {
+            "断开"
+        } else {
+            "连接"
+        }
+    }
+
+    /// Explicitly sets the connection state.
+    #[allow(dead_code)]
+    pub fn set_connected(&mut self, connected: bool) {
+        self.connection = if connected {
+            SimulatedConnectionState::Connected
+        } else {
+            SimulatedConnectionState::Disconnected
+        };
+    }
+
     /// Toggles the simulated connection state without claiming real hardware connectivity.
     pub fn toggle_simulated_connection(&mut self) {
         self.connection = self.connection.toggled();
@@ -159,13 +217,28 @@ impl SessionState {
         }
     }
 
-    /// Records a simulated log entry, queuing it while receive display is paused so
+    /// Records a log entry, queuing it while receive display is paused so
     /// visible logs stay frozen and RX/TX events preserve arrival order on resume.
-    fn record_simulated_log(&mut self, entry: LogEntry) {
+    fn record_log(&mut self, entry: LogEntry) {
         if self.receive.paused {
             self.retained_while_paused.push(entry);
         } else {
             self.logs.push(entry);
+        }
+    }
+
+    fn build_log_entry(
+        &mut self,
+        timestamp: impl Into<String>,
+        direction: LogDirection,
+        bytes: Vec<u8>,
+    ) -> LogEntry {
+        let id = self.next_log_id;
+        self.next_log_id += 1;
+        if self.is_simulated_session {
+            LogEntry::new_simulated(id, timestamp, direction, bytes)
+        } else {
+            LogEntry::new(id, timestamp, direction, bytes)
         }
     }
 
@@ -179,6 +252,15 @@ impl SessionState {
         format_visible_logs(&self.logs, self.receive.show_timestamp, self.receive.hex_mode)
     }
 
+    /// Appends received bytes (used by real serial backend) and updates RX counters.
+    /// Respects `receive.paused` and omits the simulated badge when in real mode.
+    #[allow(dead_code)]
+    pub fn append_rx_bytes(&mut self, payload: &[u8], timestamp: &str) {
+        self.counters.rx_bytes += payload.len() as u64;
+        let entry = self.build_log_entry(timestamp, LogDirection::Rx, payload.to_vec());
+        self.record_log(entry);
+    }
+
     /// Injects a clearly-labelled simulated RX event.
     /// When receive display is paused, the event is retained until resume.
     pub fn inject_simulated_rx(&mut self, timestamp: impl Into<String>, bytes: Vec<u8>) {
@@ -187,7 +269,7 @@ impl SessionState {
         self.counters.rx_bytes += bytes.len() as u64;
 
         let entry = LogEntry::new_simulated(id, timestamp, LogDirection::Rx, bytes);
-        self.record_simulated_log(entry);
+        self.record_log(entry);
     }
 
     /// Deterministically injects the next simulated RX payload for reproducible verification.
@@ -203,36 +285,75 @@ impl SessionState {
         seq
     }
 
-    /// Toggles send card HEX mode independently from receive HEX display.
-    pub fn toggle_send_hex(&mut self) {
-        self.send.hex_mode = !self.send.hex_mode;
+    /// Toggles send card HEX mode independently from receive HEX display, converting
+    /// `self.send.text` between UTF-8 text and space-separated uppercase HEX bytes.
+    ///
+    /// When switching from HEX to text, blocks the transition and preserves both
+    /// `hex_mode == true` and the original `text` if the HEX input is malformed or
+    /// cannot be decoded as valid UTF-8.
+    pub fn toggle_send_hex(&mut self) -> Result<(), &'static str> {
+        if self.send.hex_mode {
+            if self.send.text.trim().is_empty() {
+                self.send.text.clear();
+                self.send.hex_mode = false;
+                return Ok(());
+            }
+
+            let bytes = match parse_hex_bytes(&self.send.text) {
+                Ok(bytes) => bytes,
+                Err(SendPayloadError::InvalidHex(msg)) => return Err(msg),
+                Err(SendPayloadError::EmptyInput) => {
+                    self.send.text.clear();
+                    self.send.hex_mode = false;
+                    return Ok(());
+                }
+                Err(SendPayloadError::Disconnected) => return Err("HEX 转换失败"),
+            };
+
+            let text = String::from_utf8(bytes)
+                .map_err(|_| "HEX 字节无法解码为有效 UTF-8 文本，无法切换回文本模式")?;
+            self.send.text = text;
+            self.send.hex_mode = false;
+            Ok(())
+        } else {
+            self.send.text = format_hex_bytes(self.send.text.as_bytes());
+            self.send.hex_mode = true;
+            Ok(())
+        }
     }
 
-    /// Validates and submits the current send draft as a simulated TX log entry.
+    /// Validates connection, non-empty draft, and HEX syntax without mutating state.
+    pub fn prepare_send_bytes(&self) -> Result<Vec<u8>, SendPayloadError> {
+        if !self.connection.is_connected() {
+            return Err(SendPayloadError::Disconnected);
+        }
+
+        if self.send.hex_mode {
+            parse_hex_bytes(&self.send.text)
+        } else if self.send.text.is_empty() {
+            Err(SendPayloadError::EmptyInput)
+        } else {
+            Ok(self.send.text.as_bytes().to_vec())
+        }
+    }
+
+    /// Records transmitted bytes after a successful serial write, updating TX counters
+    /// and respecting `receive.paused`.
+    pub fn record_tx_bytes(&mut self, payload: &[u8], timestamp: &str) {
+        self.counters.tx_bytes += payload.len() as u64;
+        let entry = self.build_log_entry(timestamp, LogDirection::Tx, payload.to_vec());
+        self.record_log(entry);
+    }
+
+    /// Validates and submits the current send draft as a TX log entry.
     /// Preserves `self.send.text` after submission and accumulates UTF-8/HEX byte counts.
     pub fn submit_send_with_timestamp(
         &mut self,
         timestamp: impl Into<String>,
     ) -> Result<Vec<u8>, SendPayloadError> {
-        if !self.connection.is_connected() {
-            return Err(SendPayloadError::Disconnected);
-        }
-
-        let bytes = if self.send.hex_mode {
-            parse_hex_bytes(&self.send.text)?
-        } else {
-            if self.send.text.is_empty() {
-                return Err(SendPayloadError::EmptyInput);
-            }
-            self.send.text.as_bytes().to_vec()
-        };
-
-        let id = self.next_log_id;
-        self.next_log_id += 1;
-        self.counters.tx_bytes += bytes.len() as u64;
-        let entry = LogEntry::new_simulated(id, timestamp, LogDirection::Tx, bytes.clone());
-        self.record_simulated_log(entry);
-
+        let bytes = self.prepare_send_bytes()?;
+        let ts = timestamp.into();
+        self.record_tx_bytes(&bytes, &ts);
         Ok(bytes)
     }
 }
@@ -325,7 +446,7 @@ mod tests {
         let rx2_expected = "SIM_RX_02: 数据".as_bytes().to_vec();
 
         // 4. Second TX in HEX mode while paused
-        state.toggle_send_hex();
+        state.toggle_send_hex().unwrap();
         state.send.text = "0A FF".to_string();
         let tx2 = state
             .submit_send_with_timestamp("14:26:08.400")
@@ -426,7 +547,7 @@ mod tests {
         assert_eq!(state.counters.tx_bytes, initial_tx);
 
         // Invalid HEX: error, no submission, no counter change.
-        state.toggle_send_hex();
+        state.toggle_send_hex().unwrap();
         state.send.text = "4142".to_string();
         assert!(matches!(
             state.submit_send_with_timestamp("14:26:10.002"),
@@ -455,7 +576,7 @@ mod tests {
         assert_eq!(state.logs.last().unwrap().bytes, vec![0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD]);
 
         // Valid space-separated HEX bytes.
-        state.toggle_send_hex();
+        state.toggle_send_hex().unwrap();
         state.send.text = "0A FF 1b".to_string();
         let submitted_hex = state
             .submit_send_with_timestamp("14:26:11.100")
@@ -464,5 +585,180 @@ mod tests {
         assert_eq!(state.send.text, "0A FF 1b");
         assert_eq!(state.counters.tx_bytes, initial_tx + 6 + 3);
         assert_eq!(state.logs.last().unwrap().bytes, vec![0x0A, 0xFF, 0x1B]);
+    }
+
+    #[test]
+    fn toggle_send_hex_converts_ascii_utf8_and_empty_bidirectionally() {
+        let mut state = SessionState::new_simulated_demo();
+
+        // ASCII: text -> hex -> text
+        state.send.hex_mode = false;
+        state.send.text = "AT+VERSION".to_string();
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "41 54 2B 56 45 52 53 49 4F 4E");
+
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(!state.send.hex_mode);
+        assert_eq!(state.send.text, "AT+VERSION");
+
+        // Chinese UTF-8: text -> hex -> text
+        state.send.text = "数据".to_string();
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "E6 95 B0 E6 8D AE");
+
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(!state.send.hex_mode);
+        assert_eq!(state.send.text, "数据");
+
+        // Lowercase / extra spaces in HEX -> text
+        state.send.hex_mode = true;
+        state.send.text = "  e6  95 b0 ".to_string();
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(!state.send.hex_mode);
+        assert_eq!(state.send.text, "数");
+
+        // Empty string: text -> hex -> text
+        state.send.text.clear();
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "");
+
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(!state.send.hex_mode);
+        assert_eq!(state.send.text, "");
+
+        // Whitespace-only in HEX -> clears to "" and switches to text
+        state.send.hex_mode = true;
+        state.send.text = "   ".to_string();
+        assert_eq!(state.toggle_send_hex(), Ok(()));
+        assert!(!state.send.hex_mode);
+        assert_eq!(state.send.text, "");
+    }
+
+    #[test]
+    fn toggle_send_hex_blocks_invalid_hex_and_non_utf8_bytes() {
+        let mut state = SessionState::new_simulated_demo();
+        state.send.hex_mode = true;
+
+        // Odd-length token
+        state.send.text = "41 5".to_string();
+        let err = state.toggle_send_hex().unwrap_err();
+        assert!(err.contains("HEX"));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "41 5");
+
+        // Unseparated pair
+        state.send.text = "4142".to_string();
+        let err = state.toggle_send_hex().unwrap_err();
+        assert!(err.contains("HEX"));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "4142");
+
+        // Non-UTF-8 bytes
+        state.send.text = "FF 00".to_string();
+        let err = state.toggle_send_hex().unwrap_err();
+        assert!(err.contains("UTF-8"));
+        assert!(state.send.hex_mode);
+        assert_eq!(state.send.text, "FF 00");
+    }
+
+    #[test]
+    fn real_session_creation_and_labels_reflect_real_mode() {
+        let mut cfg = SerialConfig::default();
+        cfg.port = "COM5".to_string();
+        cfg.baud_rate = 230400;
+
+        let mut real = SessionState::new_real_session(cfg.clone(), false);
+        assert!(!real.is_simulated_session);
+        assert_eq!(real.simulated_notice, "");
+        assert_eq!(real.config, cfg);
+        assert!(real.logs.is_empty());
+        assert_eq!(real.counters, SessionCounters::default());
+        assert!(!real.connection.is_connected());
+        assert_eq!(real.connection_status_label(), "未连接");
+        assert_eq!(real.connection_action_label(), "连接");
+
+        real.set_connected(true);
+        assert!(real.connection.is_connected());
+        assert_eq!(real.connection_status_label(), "已连接");
+        assert_eq!(real.connection_action_label(), "断开");
+
+        let mut sim = SessionState::new_simulated_demo();
+        assert_eq!(sim.connection_status_label(), "模拟未连接");
+        assert_eq!(sim.connection_action_label(), "模拟连接");
+        sim.set_connected(true);
+        assert_eq!(sim.connection_status_label(), "模拟已连接");
+        assert_eq!(sim.connection_action_label(), "模拟断开");
+    }
+
+    #[test]
+    fn real_session_prepare_record_tx_and_append_rx_with_pause_retention() {
+        let mut state = SessionState::new_real_session(SerialConfig::default(), false);
+        state.send.text = "AT".to_string();
+
+        // Disconnected: prepare_send_bytes fails without mutating state.
+        assert_eq!(
+            state.prepare_send_bytes(),
+            Err(SendPayloadError::Disconnected)
+        );
+        assert!(state.logs.is_empty());
+        assert_eq!(state.counters.tx_bytes, 0);
+
+        state.set_connected(true);
+
+        // Empty text fails.
+        state.send.text.clear();
+        assert_eq!(state.prepare_send_bytes(), Err(SendPayloadError::EmptyInput));
+
+        // Invalid HEX fails without mutating state.
+        state.send.hex_mode = true;
+        state.send.text = "4142".to_string();
+        assert!(matches!(
+            state.prepare_send_bytes(),
+            Err(SendPayloadError::InvalidHex(_))
+        ));
+        assert!(state.logs.is_empty());
+
+        // Valid HEX prepares bytes without mutating counters or logs.
+        state.send.text = "41 54".to_string();
+        let prepared = state.prepare_send_bytes().expect("valid HEX should prepare");
+        assert_eq!(prepared, b"AT");
+        assert!(state.logs.is_empty());
+        assert_eq!(state.counters.tx_bytes, 0);
+
+        // Record TX and RX in normal (unpaused) mode -> non-simulated LogEntry.
+        state.record_tx_bytes(&prepared, "15:00:00.100");
+        state.append_rx_bytes(b"OK\r\n", "15:00:00.150");
+
+        assert_eq!(state.counters.tx_bytes, 2);
+        assert_eq!(state.counters.rx_bytes, 4);
+        assert_eq!(state.logs.len(), 2);
+        assert!(!state.logs[0].is_simulated);
+        assert_eq!(state.logs[0].direction, LogDirection::Tx);
+        assert_eq!(state.logs[0].bytes, b"AT");
+        assert!(!state.logs[1].is_simulated);
+        assert_eq!(state.logs[1].direction, LogDirection::Rx);
+        assert_eq!(state.logs[1].bytes, b"OK\r\n");
+
+        // Pause retains both RX and TX in arrival order and flushes on resume.
+        state.toggle_receive_pause();
+        state.append_rx_bytes(b"R1", "15:00:01.000");
+        state.record_tx_bytes(b"T1", "15:00:01.100");
+        assert_eq!(state.logs.len(), 2);
+        assert_eq!(state.retained_while_paused.len(), 2);
+        assert_eq!(state.counters.rx_bytes, 6);
+        assert_eq!(state.counters.tx_bytes, 4);
+
+        state.toggle_receive_pause();
+        assert!(state.retained_while_paused.is_empty());
+        assert_eq!(state.logs.len(), 4);
+        assert_eq!(state.logs[2].direction, LogDirection::Rx);
+        assert_eq!(state.logs[2].bytes, b"R1");
+        assert!(!state.logs[2].is_simulated);
+        assert_eq!(state.logs[3].direction, LogDirection::Tx);
+        assert_eq!(state.logs[3].bytes, b"T1");
+        assert!(!state.logs[3].is_simulated);
     }
 }

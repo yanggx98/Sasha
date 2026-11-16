@@ -24,6 +24,7 @@ pub struct SendCard {
     theme: NanoTheme,
     draft: SendDraftState,
     connected: bool,
+    is_simulated: bool,
     tx_hex_flag: TransitionFlag,
     connection_flag: TransitionFlag,
     input: Entity<TextareaState>,
@@ -38,6 +39,7 @@ impl SendCard {
         theme: NanoTheme,
         draft: SendDraftState,
         connected: bool,
+        is_simulated: bool,
         tx_hex_flag: TransitionFlag,
         connection_flag: TransitionFlag,
         input: Entity<TextareaState>,
@@ -49,6 +51,7 @@ impl SendCard {
             theme,
             draft,
             connected,
+            is_simulated,
             tx_hex_flag,
             connection_flag,
             input,
@@ -63,10 +66,11 @@ impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let on_toggle_hex = self.on_toggle_hex.clone();
         let on_submit = self.on_submit.clone();
-        let submit_tooltip: &'static str = if self.connected {
-            "发送（模拟）"
-        } else {
-            "模拟未连接，无法发送"
+        let submit_tooltip: &'static str = match (self.is_simulated, self.connected) {
+            (true, true) => "发送（模拟）",
+            (true, false) => "模拟未连接，无法发送",
+            (false, true) => "发送",
+            (false, false) => "未连接，无法发送",
         };
 
         let tx_hex_flag = TransitionFlag {
