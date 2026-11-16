@@ -1,6 +1,7 @@
 use std::ops::Range;
 
 use gpui_kit::base::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
+use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -17,6 +18,7 @@ pub struct LogView {
     view_state: ReceiveViewState,
     simulated_notice: &'static str,
     focus: FocusHandle,
+    scroll_handle: ScrollHandle,
 }
 
 impl LogView {
@@ -26,6 +28,7 @@ impl LogView {
         view_state: ReceiveViewState,
         simulated_notice: &'static str,
         focus: FocusHandle,
+        scroll_handle: ScrollHandle,
     ) -> Self {
         Self {
             theme,
@@ -33,6 +36,7 @@ impl LogView {
             view_state,
             simulated_notice,
             focus,
+            scroll_handle,
         }
     }
 }
@@ -43,84 +47,100 @@ impl RenderOnce for LogView {
         let show_timestamp = self.view_state.show_timestamp;
         let hex_mode = self.view_state.hex_mode;
         let focus = self.focus;
+        let scroll_handle = self.scroll_handle;
 
         div()
-            .id("log-scroll-container")
-            .track_focus(&focus)
-            .tab_stop(false)
+            .relative()
             .flex_1()
             .min_h_0()
             .w_full()
-            .overflow_y_scroll()
-            .px_3()
-            .pb_2()
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                focus.focus(window, cx);
-            })
             .child(
-                v_flex()
-                    .w_full()
-                    .gap_1()
-                    .font_family("Consolas")
-                    .text_sm()
-                    .text_color(theme.text_primary)
-                    .children(
-                        self.logs
-                            .into_iter()
-                            .enumerate()
-                            .map(move |(index, entry)| {
-                                let tag_color = match entry.direction {
-                                    LogDirection::Rx => theme.rx_green,
-                                    LogDirection::Tx => theme.tx_blue,
-                                    LogDirection::System => theme.text_muted,
-                                };
-                                let line = selectable_log_line(&entry, show_timestamp, hex_mode);
-                                let mut highlights = Vec::new();
-                                if let Some(timestamp) = line.timestamp_bytes.clone() {
-                                    highlights.push((timestamp, color_highlight(theme.text_muted)));
-                                }
-                                highlights.push((
-                                    line.tag_bytes.clone(),
-                                    HighlightStyle {
-                                        color: Some(tag_color),
-                                        font_weight: Some(FontWeight::MEDIUM),
-                                        ..Default::default()
-                                    },
-                                ));
-                                let simulated = entry.is_simulated;
+                div()
+                    .id("log-scroll-container")
+                    .track_focus(&focus)
+                    .track_scroll(&scroll_handle)
+                    .tab_stop(false)
+                    .size_full()
+                    .overflow_y_scroll()
+                    .pl_3()
+                    .pr_4()
+                    .pb_2()
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        focus.focus(window, cx);
+                    })
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .gap_1()
+                            .font_family("Consolas")
+                            .text_sm()
+                            .text_color(theme.text_primary)
+                            .children(
+                                self.logs
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(move |(index, entry)| {
+                                        let tag_color = match entry.direction {
+                                            LogDirection::Rx => theme.rx_green,
+                                            LogDirection::Tx => theme.tx_blue,
+                                            LogDirection::System => theme.text_muted,
+                                        };
+                                        let line =
+                                            selectable_log_line(&entry, show_timestamp, hex_mode);
+                                        let mut highlights = Vec::new();
+                                        if let Some(timestamp) = line.timestamp_bytes.clone() {
+                                            highlights
+                                                .push((timestamp, color_highlight(theme.text_muted)));
+                                        }
+                                        highlights.push((
+                                            line.tag_bytes.clone(),
+                                            HighlightStyle {
+                                                color: Some(tag_color),
+                                                font_weight: Some(FontWeight::MEDIUM),
+                                                ..Default::default()
+                                            },
+                                        ));
+                                        let simulated = entry.is_simulated;
 
-                                h_flex()
-                                    .w_full()
-                                    .items_baseline()
-                                    .gap_2()
-                                    .child(div().flex_1().min_w_0().child(LogLineText::new(
-                                        ElementId::named_usize("log-line", entry.id as usize),
-                                        line.text,
-                                        highlights,
-                                        index as u64,
-                                        rgba(0x2563EB99).into(),
-                                    )))
-                                    .when(simulated, |this| {
-                                        this.child(
-                                            div()
-                                                .flex_shrink_0()
-                                                .text_xs()
-                                                .text_color(theme.text_muted)
-                                                .child("[模拟]"),
-                                        )
-                                    })
+                                        h_flex()
+                                            .w_full()
+                                            .items_baseline()
+                                            .gap_2()
+                                            .child(div().flex_1().min_w_0().child(
+                                                LogLineText::new(
+                                                    ElementId::named_usize(
+                                                        "log-line",
+                                                        entry.id as usize,
+                                                    ),
+                                                    line.text,
+                                                    highlights,
+                                                    index as u64,
+                                                    rgba(0x2563EB99).into(),
+                                                ),
+                                            ))
+                                            .when(simulated, |this| {
+                                                this.child(
+                                                    div()
+                                                        .flex_shrink_0()
+                                                        .text_xs()
+                                                        .text_color(theme.text_muted)
+                                                        .child("[模拟]"),
+                                                )
+                                            })
+                                    }),
+                            )
+                            .when(!self.simulated_notice.is_empty(), |this| {
+                                this.child(
+                                    div()
+                                        .pt_3()
+                                        .text_xs()
+                                        .text_color(theme.text_muted)
+                                        .child(format!("* {}", self.simulated_notice)),
+                                )
                             }),
-                    )
-                    .when(!self.simulated_notice.is_empty(), |this| {
-                        this.child(
-                            div()
-                                .pt_3()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(format!("* {}", self.simulated_notice)),
-                        )
-                    }),
+                    ),
             )
+            .child(Scrollbar::vertical(&scroll_handle))
     }
 }
 

@@ -24,10 +24,12 @@ pub struct ReceiveToolbar {
     rx_hex_flag: TransitionFlag,
     rx_timestamp_flag: TransitionFlag,
     rx_pause_flag: TransitionFlag,
+    rx_auto_scroll_flag: TransitionFlag,
     tx_send_hex_flag: TransitionFlag,
     on_toggle_hex: ToolbarActionCallback,
     on_toggle_timestamp: ToolbarActionCallback,
     on_toggle_pause: ToolbarActionCallback,
+    on_toggle_auto_scroll: ToolbarActionCallback,
     on_clear: ToolbarActionCallback,
     on_save: ToolbarActionCallback,
     on_toggle_send_hex: ToolbarActionCallback,
@@ -42,10 +44,12 @@ impl ReceiveToolbar {
         rx_hex_flag: TransitionFlag,
         rx_timestamp_flag: TransitionFlag,
         rx_pause_flag: TransitionFlag,
+        rx_auto_scroll_flag: TransitionFlag,
         tx_send_hex_flag: TransitionFlag,
         on_toggle_hex: ToolbarActionCallback,
         on_toggle_timestamp: ToolbarActionCallback,
         on_toggle_pause: ToolbarActionCallback,
+        on_toggle_auto_scroll: ToolbarActionCallback,
         on_clear: ToolbarActionCallback,
         on_save: ToolbarActionCallback,
         on_toggle_send_hex: ToolbarActionCallback,
@@ -57,10 +61,12 @@ impl ReceiveToolbar {
             rx_hex_flag,
             rx_timestamp_flag,
             rx_pause_flag,
+            rx_auto_scroll_flag,
             tx_send_hex_flag,
             on_toggle_hex,
             on_toggle_timestamp,
             on_toggle_pause,
+            on_toggle_auto_scroll,
             on_clear,
             on_save,
             on_toggle_send_hex,
@@ -80,7 +86,9 @@ impl ReceiveToolbar {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(22.))
+            .h(px(22.))
+            .min_w(px(22.))
+            .px_1()
             .rounded(px(6.))
             .hover(|s| {
                 s.bg(self.theme.bg_hover)
@@ -162,7 +170,7 @@ impl RenderOnce for ReceiveToolbar {
             strip
                 .child(self.text_tool_button(
                     "rx-tool-hex",
-                    "H",
+                    "H↓",
                     "HEX 显示切换",
                     Some(TransitionFlag {
                         active: self.state.hex_mode,
@@ -192,6 +200,16 @@ impl RenderOnce for ReceiveToolbar {
                     self.on_toggle_pause.clone(),
                 ))
                 .child(self.icon_tool_button(
+                    "rx-tool-auto-scroll",
+                    LucideIcon::ArrowDownToLine,
+                    "自动滚动到底部",
+                    Some(TransitionFlag {
+                        active: self.state.auto_scroll,
+                        epoch: self.rx_auto_scroll_flag.epoch,
+                    }),
+                    self.on_toggle_auto_scroll.clone(),
+                ))
+                .child(self.icon_tool_button(
                     "rx-tool-clear",
                     LucideIcon::Trash,
                     "清空当前显示日志",
@@ -208,7 +226,7 @@ impl RenderOnce for ReceiveToolbar {
                 .child(div().w(px(1.)).h(px(14.)).mx_1().bg(self.theme.border_card))
                 .child(self.text_tool_button(
                     "tx-tool-send-hex",
-                    "H",
+                    "H↑",
                     "HEX 发送切换（发送时按十六进制解析）",
                     Some(TransitionFlag {
                         active: self.send_hex,

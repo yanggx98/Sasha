@@ -44,6 +44,7 @@ pub struct ReceiveViewState {
     pub hex_mode: bool,
     pub show_timestamp: bool,
     pub paused: bool,
+    pub auto_scroll: bool,
 }
 
 impl Default for ReceiveViewState {
@@ -52,6 +53,7 @@ impl Default for ReceiveViewState {
             hex_mode: false,
             show_timestamp: true,
             paused: false,
+            auto_scroll: true,
         }
     }
 }
@@ -225,6 +227,11 @@ impl SessionState {
         if !self.receive.paused && !self.retained_while_paused.is_empty() {
             self.logs.append(&mut self.retained_while_paused);
         }
+    }
+
+    /// Toggles automatic scrolling to the newest log entry.
+    pub fn toggle_auto_scroll(&mut self) {
+        self.receive.auto_scroll = !self.receive.auto_scroll;
     }
 
     /// Records a log entry, queuing it while receive display is paused so

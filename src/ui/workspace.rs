@@ -53,6 +53,8 @@ pub struct SashaApp {
     _send_subscription: Option<Subscription>,
     send_error: Option<SharedString>,
     log_focus: FocusHandle,
+    log_scroll_handle: ScrollHandle,
+    last_log_count: usize,
     log_selection: LogSelectionModel,
 }
 
@@ -63,6 +65,7 @@ impl SashaApp {
             state.receive.hex_mode,
             state.receive.show_timestamp,
             state.receive.paused,
+            state.receive.auto_scroll,
             state.send.display_hex,
             state.send.send_hex,
             state.connection.is_connected(),
@@ -92,6 +95,8 @@ impl SashaApp {
             _send_subscription: None,
             send_error: None,
             log_focus: cx.focus_handle(),
+            log_scroll_handle: ScrollHandle::new(),
+            last_log_count: 0,
             log_selection,
         }
     }
@@ -101,10 +106,12 @@ impl SashaApp {
             self.state.receive.hex_mode,
             self.state.receive.show_timestamp,
             self.state.receive.paused,
+            self.state.receive.auto_scroll,
             self.state.send.display_hex,
             self.state.send.send_hex,
             self.state.connection.is_connected(),
         );
+        self.last_log_count = 0;
         self.log_selection = LogSelectionModel::new(
             self.state.receive.show_timestamp,
             self.state.receive.hex_mode,
@@ -596,6 +603,17 @@ impl SashaApp {
         cx.notify();
     }
 
+    pub fn toggle_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
+        self.state.toggle_auto_scroll();
+        self.motion
+            .rx_auto_scroll
+            .set(self.state.receive.auto_scroll);
+        if self.state.receive.auto_scroll {
+            self.log_scroll_handle.scroll_to_bottom();
+        }
+        cx.notify();
+    }
+
     pub fn clear_receive_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.state.clear_receive_logs();
         self.sync_log_selection(window, cx);
@@ -869,6 +887,10 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.toggle_receive_pause(cx));
         });
         let weak = cx.entity().downgrade();
+        let on_rx_auto_scroll = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_receive_auto_scroll(cx));
+        });
+        let weak = cx.entity().downgrade();
         let on_rx_clear = Rc::new(move |window: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.clear_receive_logs(window, cx));
         });
@@ -891,6 +913,10 @@ impl Render for SashaApp {
         });
 
         let picker_overlay = self.state.active_picker.zip(self.picker_input.clone());
+        if self.state.receive.auto_scroll && self.state.logs.len() > self.last_log_count {
+            self.log_scroll_handle.scroll_to_bottom();
+        }
+        self.last_log_count = self.state.logs.len();
 
         v_flex()
             .id("sasha-root")
@@ -978,6 +1004,7 @@ impl Render for SashaApp {
                         self.state.receive.clone(),
                         self.state.simulated_notice,
                         log_focus,
+                        self.log_scroll_handle.clone(),
                     )),
             )
             .child(ReceiveToolbar::new(
@@ -987,10 +1014,12 @@ impl Render for SashaApp {
                 self.motion.rx_hex,
                 self.motion.rx_timestamp,
                 self.motion.rx_pause,
+                self.motion.rx_auto_scroll,
                 self.motion.tx_send_hex,
                 on_rx_hex,
                 on_rx_timestamp,
                 on_rx_pause,
+                on_rx_auto_scroll,
                 on_rx_clear,
                 on_rx_save,
                 on_tx_send_hex,
