@@ -102,6 +102,18 @@ requires valid UTF-8.
 | `Ctrl+C` | Copy selected text from the focused editor or log area |
 | `Enter` / `Esc` in a parameter picker | Confirm / cancel the parameter change |
 
+### Live stream output
+
+Click `⇥` in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug `log` output is excluded.
+
+Under **Settings → General → Stream output scope**, choose **Current buffer and future** or **Future only** (default). The former snapshots that session's retained visible and paused logs when the file is ready, then records subsequent events in order; cleared or trimmed history and other sessions are excluded. The latter records only events after the file is ready and capture is attached. This global preference is persisted and applies to the next capture; changing it does not backfill an active file again.
+
+The receive text/HEX mode at activation is fixed for that capture. Text follows device LF/CRLF line endings, prefixing each line once with its first byte's timestamp, direction and simulated-data marker. Consecutive RX chunks continue the same line, and unfinished lines are written immediately. Direction or simulated-marker changes separate unfinished lines; TX events remain separate, and stopping terminates an unfinished line. Text is decoded incrementally as UTF-8, preserving readable Unicode, CR/LF, tabs and backslashes. NUL and other controls appear as `\0` or `\xHH`; invalid UTF-8 bytes are also escaped. Only up to three trailing bytes of a split character wait for completion; stopping or changing direction escapes any incomplete bytes. For binary data, select HEX before starting capture; HEX continues to record all bytes per transfer event.
+
+New or empty files receive one UTF-8 BOM to help Windows editors recognize their encoding. Appending to a nonempty file neither inserts another BOM nor changes existing content. UTF-16/UTF-32 BOM files are rejected; choose a new file. Existing BOMless logs that display incorrectly are not automatically repaired; start capture in a new file.
+
+Writes run in the background and flush application buffers after each record. Pausing, clearing, memory trimming, switching tabs and disconnecting do not stop capture. Stopping drains queued records in the background; closing a session waits for them to drain, and normal app exit drains them within the framework shutdown window. File errors or a full writer queue stop capture and display an error above the toolbar.
+
 ## Preferences
 
 Open **Settings** from the sidebar. Preferences are saved to `config.toml` beside
@@ -111,6 +123,7 @@ the executable. The settings page shows the resolved configuration path.
 version = 1
 locale = "en-US"
 log_font_size = 14
+stream_output_scope = "future_only" # or "current_buffer_and_future"
 ```
 
 Supported locale values are `en-US` and `zh-CN`; the default is `zh-CN`.

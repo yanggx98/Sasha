@@ -7,7 +7,7 @@ use gpui_kit::*;
 
 use crate::i18n::{self, Locale, tr, tr_shared};
 use crate::model::ConfigStore;
-use crate::model::settings::LOG_FONT_SIZE_PRESETS;
+use crate::model::settings::{LOG_FONT_SIZE_PRESETS, StreamOutputScope};
 use crate::ui::theme::NanoTheme;
 
 const HEADER_HEIGHT: Pixels = px(38.);
@@ -131,6 +131,16 @@ impl SettingsWindow {
             let res = store.reset_to_default();
             cx.notify();
             res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
+    fn set_stream_scope(&mut self, scope: StreamOutputScope, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let result = store.update(|cfg| cfg.stream_output_scope = scope);
+            cx.notify();
+            result
         });
         self.save_error = result.err();
         cx.notify();
@@ -318,6 +328,53 @@ impl SettingsWindow {
             cx,
         );
 
+        let selected_scope = self.config_store.read(cx).config().stream_output_scope;
+        let scope_picker = v_flex()
+            .gap_1()
+            .children(
+                [
+                    (
+                        StreamOutputScope::CurrentBufferAndFuture,
+                        "settings.stream_scope_buffer",
+                    ),
+                    (
+                        StreamOutputScope::FutureOnly,
+                        "settings.stream_scope_future",
+                    ),
+                ]
+                .into_iter()
+                .enumerate()
+                .map(|(idx, (candidate, key))| {
+                    let selected = candidate == selected_scope;
+                    div()
+                        .id(ElementId::named_usize("settings-stream-scope", idx))
+                        .px_2p5()
+                        .py_1()
+                        .rounded(px(4.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .when(selected, |this| {
+                            this.bg(theme.bg_toggle_active)
+                                .text_color(theme.accent_blue_hover)
+                                .font_weight(FontWeight::MEDIUM)
+                        })
+                        .when(!selected, |this| {
+                            this.text_color(theme.text_secondary).hover(|style| {
+                                style.bg(theme.bg_hover).text_color(theme.text_primary)
+                            })
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.set_stream_scope(candidate, cx);
+                            }),
+                        )
+                        .child(tr_shared(locale, key))
+                }),
+            )
+            .into_any_element();
+
         let reset_btn = self.flat_action_button(
             "settings-reset-defaults",
             tr_shared(locale, "settings.reset_btn"),
@@ -332,6 +389,11 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.language_title"),
                 tr_shared(locale, "settings.language_desc"),
                 language_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.stream_scope_title"),
+                tr_shared(locale, "settings.stream_scope_desc"),
+                scope_picker,
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.config_path_title"),
@@ -491,13 +553,11 @@ impl SettingsWindow {
                             .child(tr(locale, "settings.ai_assisted"))
                             .child("DeepSeek · Grok · ChatGPT · Gemini"),
                     )
-                    .child(
-                        div().child(format!(
-                            "{} {}",
-                            tr(locale, "settings.created_by"),
-                            APP_AUTHOR
-                        )),
-                    )
+                    .child(div().child(format!(
+                        "{} {}",
+                        tr(locale, "settings.created_by"),
+                        APP_AUTHOR
+                    )))
                     .child(div().mt_3().child(github_actions)),
             )
     }

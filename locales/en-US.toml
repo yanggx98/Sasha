@@ -27,7 +27,7 @@ sim_btn = "Skip connection, open simulated session"
 current = "Current"
 
 [bottom]
-buffer = "Buffer %{limit}"
+buffer = "%{used} / %{limit}"
 
 [parity]
 none = "None"
@@ -130,6 +130,10 @@ action_write_failed = "Serial write failed"
 action_flush_failed = "Failed to flush serial output buffer"
 
 [settings]
+stream_scope_title = "Stream output scope"
+stream_scope_desc = "Applies to the next capture; includes only logs still retained in this session"
+stream_scope_buffer = "Current buffer and future"
+stream_scope_future = "Future only"
 created_by = "Created by"
 built_with = "Built with"
 ai_assisted = "AI-assisted development"
@@ -182,3 +186,9 @@ status_failed = "Failed: %{error}"
 lua_only = "Please choose .lua files"
 load_failed = "Could not open the file picker. Please try again."
 
+
+[stream]
+start = 'Stream output: choose a file and append logs (current text/HEX format)'
+stop = 'Stop stream output'
+busy = 'Preparing or stopping stream output…'
+error = 'Stream output failed'

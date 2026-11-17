@@ -36,6 +36,14 @@ pub const LOG_BUFFER_LIMIT_PRESETS: [u32; 5] = [
 /// Preset font sizes exposed in the Settings View tab.
 pub const LOG_FONT_SIZE_PRESETS: [u16; 4] = [12, 13, 14, 15];
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamOutputScope {
+    CurrentBufferAndFuture,
+    #[default]
+    FutureOnly,
+}
+
 /// Global application configuration persisted as `config.toml`.
 ///
 /// Session/tab states are intentionally excluded in this phase.
@@ -53,6 +61,8 @@ pub struct AppConfig {
     /// Maximum receive-log payload retained per session, in bytes.
     #[serde(default = "default_log_buffer_limit")]
     pub log_buffer_limit: u32,
+    /// Applies when the next stream capture is attached to its session.
+    pub stream_output_scope: StreamOutputScope,
     /// Persisted Lua script paths shown in the script panel.
     pub scripts: Vec<PathBuf>,
 }
@@ -64,6 +74,7 @@ impl Default for AppConfig {
             locale: Locale::default(),
             log_font_size: DEFAULT_LOG_FONT_SIZE,
             log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT,
+            stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
         }
     }
@@ -71,6 +82,33 @@ impl Default for AppConfig {
 
 fn default_log_buffer_limit() -> u32 {
     DEFAULT_LOG_BUFFER_LIMIT
+}
+
+/// Formats a live usage figure as `512 B`, `1.5 KB`, or `1 MB`.
+pub fn format_buffer_usage(bytes: u64) -> String {
+    const MB: u64 = 1024 * 1024;
+    const KB: u64 = 1024;
+    if bytes >= MB {
+        format_scaled_bytes(bytes, MB, "MB")
+    } else if bytes >= KB {
+        format_scaled_bytes(bytes, KB, "KB")
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_scaled_bytes(bytes: u64, unit: u64, suffix: &str) -> String {
+    if bytes.is_multiple_of(unit) {
+        return format!("{} {suffix}", bytes / unit);
+    }
+    let tenths = (bytes * 10) / unit;
+    let whole = tenths / 10;
+    let frac = tenths % 10;
+    if frac == 0 {
+        format!("{whole} {suffix}")
+    } else {
+        format!("{whole}.{frac} {suffix}")
+    }
 }
 
 /// Formats a byte budget as `64 KB`, `1 MB`, or a raw byte count.
@@ -385,6 +423,41 @@ mod tests {
     }
 
     #[test]
+    fn stream_scope_defaults_roundtrips_and_resets() {
+        let dir = TempDir::new("stream-scope");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\nlocale = \"zh-CN\"\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert_eq!(
+            store.config().stream_output_scope,
+            StreamOutputScope::FutureOnly
+        );
+        for scope in [
+            StreamOutputScope::CurrentBufferAndFuture,
+            StreamOutputScope::FutureOnly,
+        ] {
+            store.update(|cfg| cfg.stream_output_scope = scope).unwrap();
+            let reloaded = ConfigStore::load_from_path(path.clone());
+            assert_eq!(reloaded.config().stream_output_scope, scope);
+        }
+        store
+            .update(|cfg| cfg.stream_output_scope = StreamOutputScope::CurrentBufferAndFuture)
+            .unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("stream_output_scope = \"current_buffer_and_future\"")
+        );
+        store.reset_to_default().unwrap();
+        assert_eq!(
+            ConfigStore::load_from_path(path)
+                .config()
+                .stream_output_scope,
+            StreamOutputScope::FutureOnly
+        );
+    }
+
+    #[test]
     fn missing_buffer_limit_stays_at_default_and_out_of_range_is_clamped() {
         let dir = TempDir::new("buffer-default");
         let cfg_path = dir.file(CONFIG_FILE_NAME);
@@ -409,6 +482,9 @@ mod tests {
         );
         assert!(parse_log_buffer_limit_for("0", Locale::EnUs).is_err());
         assert!(parse_log_buffer_limit_for("999999999", Locale::ZhCn).is_err());
+        assert_eq!(format_buffer_usage(0), "0 B");
+        assert_eq!(format_buffer_usage(1536), "1.5 KB");
+        assert_eq!(format_buffer_usage(1024 * 1024), "1 MB");
     }
 
     #[test]

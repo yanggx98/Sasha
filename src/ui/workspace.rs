@@ -16,8 +16,8 @@ use crate::i18n::{Locale, bottom_buffer_label, tr, tr_shared};
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, LogSearchState, LogSelectionModel, Parity,
-    SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_log_buffer_limit,
-    parse_log_buffer_limit_for,
+    SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_buffer_usage,
+    format_log_buffer_limit, parse_log_buffer_limit_for,
 };
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
@@ -82,6 +82,9 @@ struct SessionTab {
     script_poll_task: Option<Task<()>>,
     script_preferred_width: Pixels,
     script_load_error: Option<SharedString>,
+    stream_busy: bool,
+    stream_error: Option<SharedString>,
+    stream_poll_task: Option<Task<()>>,
 }
 
 impl SessionTab {
@@ -141,6 +144,9 @@ impl SessionTab {
             script_poll_task: None,
             script_preferred_width: SCRIPT_PANEL_MIN_WIDTH,
             script_load_error: None,
+            stream_busy: false,
+            stream_error: None,
+            stream_poll_task: None,
         }
     }
 
@@ -342,6 +348,19 @@ pub struct SashaApp {
 
 impl SashaApp {
     pub fn new(config_store: Entity<ConfigStore>, cx: &mut Context<Self>) -> Self {
+        cx.on_app_quit(|this, cx| {
+            let outputs: Vec<_> = this
+                .tabs
+                .iter_mut()
+                .filter_map(|tab| tab.state.stream_output.take())
+                .collect();
+            cx.background_executor().spawn(async move {
+                for output in outputs {
+                    let _ = output.finish();
+                }
+            })
+        })
+        .detach();
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
         let (locale, initial_scripts, log_buffer_limit) = {
             let cfg = config_store.read(cx).config();
@@ -1407,6 +1426,109 @@ impl SashaApp {
         .detach();
     }
 
+    fn toggle_stream_output(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        if tab.stream_busy {
+            return;
+        }
+        let tab_id = tab.id;
+        tab.stream_error = None;
+        tab.stream_busy = true;
+        if let Some(output) = tab.state.stream_output.take() {
+            let finish = cx
+                .background_executor()
+                .spawn(async move { output.finish() });
+            cx.spawn(async move |this, cx| {
+                let error = finish.await;
+                let _ = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        tab.stream_busy = false;
+                        tab.stream_error = error.map(Into::into);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+            cx.notify();
+            return;
+        }
+        let hex_mode = tab.state.receive.hex_mode;
+        let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let picker = cx.prompt_for_new_path(&dir, Some("sasha-stream.txt"));
+        cx.spawn(async move |this, cx| {
+            let selected = picker.await;
+            let result = match selected {
+                Ok(Ok(Some(path))) => Some(
+                    cx.background_executor()
+                        .spawn(async move {
+                            crate::model::stream_output::StreamOutput::open(&path, hex_mode)
+                        })
+                        .await
+                        .map_err(|error| error.to_string()),
+                ),
+                Ok(Ok(None)) => None,
+                _ => Some(Err("Unable to open file picker".into())),
+            };
+            let _ = this.update(cx, |this, cx| {
+                let stream_scope = this.config_store.read(cx).config().stream_output_scope;
+                let Some(tab) = this.tab_mut(tab_id) else {
+                    return;
+                };
+                tab.stream_busy = false;
+                match result {
+                    Some(Ok(output)) => tab.state.start_stream_output(output, stream_scope),
+                    Some(Err(error)) => tab.stream_error = Some(error.into()),
+                    None => {}
+                }
+                this.ensure_stream_poller(tab_id, cx);
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn ensure_stream_poller(&mut self, tab_id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return;
+        };
+        if tab.stream_poll_task.is_some() || tab.state.stream_output.is_none() {
+            return;
+        }
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let keep = this.update(cx, |this, cx| {
+                    let Some(tab) = this.tab_mut(tab_id) else {
+                        return false;
+                    };
+                    let active = if let Some(output) = &mut tab.state.stream_output {
+                        output.poll();
+                        if let Some(error) = output.error() {
+                            tab.stream_error = Some(error.to_owned().into());
+                            cx.notify();
+                        }
+                        output.is_active()
+                    } else {
+                        false
+                    };
+                    if !active {
+                        tab.stream_poll_task = None;
+                    }
+                    active
+                });
+                if !matches!(keep, Ok(true)) {
+                    break;
+                }
+            }
+        });
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.stream_poll_task = Some(task);
+        }
+    }
+
     fn load_scripts(&mut self, tab_id: u64, cx: &mut Context<Self>) {
         let locale = self.current_locale(cx);
         // GPUI's native picker has no extension-filter option. Validate the selection here.
@@ -1983,6 +2105,7 @@ impl Render for SashaApp {
         let conn_status_label = tab.state.connection_status_label_for(locale);
         let conn_action_label = tab.state.connection_action_label_for(locale);
         let counters = tab.state.counters;
+        let buffer_used = tab.state.log_buffer_used_bytes();
         let active_picker = tab.state.active_picker;
         let picker_overlay = active_picker.zip(self.picker_input.clone());
         let script_items = tab.script_panel_items(locale);
@@ -2082,6 +2205,24 @@ impl Render for SashaApp {
         let weak = cx.entity().downgrade();
         let on_rx_save = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.save_receive_logs(cx));
+        });
+        let stream_active = self
+            .active_tab()
+            .state
+            .stream_output
+            .as_ref()
+            .is_some_and(|output| output.is_active());
+        let stream_tooltip: SharedString = if self.active_tab().stream_busy {
+            tr_shared(locale, "stream.busy")
+        } else if let Some(output) = &self.active_tab().state.stream_output {
+            format!("{}: {}", tr(locale, "stream.stop"), output.path().display()).into()
+        } else {
+            tr_shared(locale, "stream.start")
+        };
+        let stream_error = self.active_tab().stream_error.clone();
+        let weak = cx.entity().downgrade();
+        let on_rx_stream = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_stream_output(cx));
         });
         let weak = cx.entity().downgrade();
         let on_rx_search = Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -2286,29 +2427,43 @@ impl Render for SashaApp {
                                         )
                                     }),
                             )
-                            .child(ReceiveToolbar::new(
-                                self.theme,
-                                locale,
-                                receive_state,
-                                send_state.send_hex,
-                                send_state.line_ending,
-                                search_open,
-                                motion.rx_hex,
-                                motion.rx_timestamp,
-                                motion.rx_pause,
-                                motion.rx_auto_scroll,
-                                motion.tx_send_hex,
-                                motion.tx_line_ending,
-                                on_rx_hex,
-                                on_rx_timestamp,
-                                on_rx_pause,
-                                on_rx_auto_scroll,
-                                on_rx_clear,
-                                on_rx_save,
-                                on_rx_search,
-                                on_tx_send_hex,
-                                on_tx_line_ending,
-                            ))
+                            .children(stream_error.map(|error| {
+                                div()
+                                    .px_4()
+                                    .text_xs()
+                                    .text_color(self.theme.text_primary)
+                                    .child(format!("{}: {}", tr(locale, "stream.error"), error))
+                            }))
+                            .child(
+                                ReceiveToolbar::new(
+                                    self.theme,
+                                    locale,
+                                    receive_state,
+                                    send_state.send_hex,
+                                    send_state.line_ending,
+                                    search_open,
+                                    motion.rx_hex,
+                                    motion.rx_timestamp,
+                                    motion.rx_pause,
+                                    motion.rx_auto_scroll,
+                                    motion.tx_send_hex,
+                                    motion.tx_line_ending,
+                                    on_rx_hex,
+                                    on_rx_timestamp,
+                                    on_rx_pause,
+                                    on_rx_auto_scroll,
+                                    on_rx_clear,
+                                    on_rx_save,
+                                    on_rx_search,
+                                    on_tx_send_hex,
+                                    on_tx_line_ending,
+                                )
+                                .stream_output(
+                                    stream_active,
+                                    stream_tooltip,
+                                    on_rx_stream,
+                                ),
+                            )
                             // The send card overlaps the strip's lower edge so the strip reads as
                             // a drawer tucked underneath it.
                             .child(div().w_full().flex_shrink_0().mt(px(-12.)).child(
@@ -2337,6 +2492,7 @@ impl Render for SashaApp {
                                 counters,
                                 bottom_buffer_label(
                                     locale,
+                                    &format_buffer_usage(buffer_used as u64),
                                     &format_log_buffer_limit(log_buffer_limit),
                                 ),
                                 active_picker,

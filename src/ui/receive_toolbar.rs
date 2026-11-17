@@ -40,6 +40,7 @@ pub struct ReceiveToolbar {
     on_toggle_search: ToolbarActionCallback,
     on_toggle_send_hex: ToolbarActionCallback,
     on_cycle_line_ending: ToolbarActionCallback,
+    stream: Option<(bool, SharedString, ToolbarActionCallback)>,
 }
 
 impl ReceiveToolbar {
@@ -89,7 +90,18 @@ impl ReceiveToolbar {
             on_toggle_search,
             on_toggle_send_hex,
             on_cycle_line_ending,
+            stream: None,
         }
+    }
+
+    pub fn stream_output(
+        mut self,
+        active: bool,
+        tooltip: SharedString,
+        callback: ToolbarActionCallback,
+    ) -> Self {
+        self.stream = Some((active, tooltip, callback));
+        self
     }
 
     fn tool_button(
@@ -257,6 +269,18 @@ impl RenderOnce for ReceiveToolbar {
                     },
                     self.on_toggle_search.clone(),
                 ))
+                .children(self.stream.as_ref().map(|(active, tooltip, callback)| {
+                    self.text_tool_button(
+                        "rx-tool-stream",
+                        "⇥",
+                        tooltip.clone(),
+                        active.then_some(TransitionFlag {
+                            active: true,
+                            epoch: 0,
+                        }),
+                        callback.clone(),
+                    )
+                }))
                 .child(div().w(px(1.)).h(px(14.)).mx_1().bg(self.theme.border_card))
                 .child(self.text_tool_button(
                     "tx-tool-send-hex",

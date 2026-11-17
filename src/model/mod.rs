@@ -2,6 +2,7 @@ pub mod config;
 pub mod log;
 pub mod session;
 pub mod settings;
+pub mod stream_output;
 
 #[allow(unused_imports)]
 pub use config::{ActivePickerKind, DataBits, Parity, SerialConfig, StopBits};
@@ -18,6 +19,6 @@ pub use session::{
 #[allow(unused_imports)]
 pub use settings::{
     AppConfig, ConfigStore, DEFAULT_LOG_BUFFER_LIMIT, LOG_BUFFER_LIMIT_PRESETS,
-    MAX_LOG_BUFFER_LIMIT, MIN_LOG_BUFFER_LIMIT, format_log_buffer_limit,
+    MAX_LOG_BUFFER_LIMIT, MIN_LOG_BUFFER_LIMIT, format_buffer_usage, format_log_buffer_limit,
     parse_log_buffer_limit_for,
 };

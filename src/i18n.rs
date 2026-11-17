@@ -56,8 +56,14 @@ pub fn picker_apply_value(locale: Locale, value: &str) -> String {
     rust_i18n::t!("picker.apply_value", locale = locale.code(), value = value).into_owned()
 }
 
-pub fn bottom_buffer_label(locale: Locale, limit: &str) -> String {
-    rust_i18n::t!("bottom.buffer", locale = locale.code(), limit = limit).into_owned()
+pub fn bottom_buffer_label(locale: Locale, used: &str, limit: &str) -> String {
+    rust_i18n::t!(
+        "bottom.buffer",
+        locale = locale.code(),
+        used = used,
+        limit = limit
+    )
+    .into_owned()
 }
 
 pub fn err_buffer_limit(locale: Locale, min: &str, max: &str) -> String {

@@ -155,8 +155,9 @@ pub struct SessionCounters {
 }
 
 /// Shared single-session UI state boundary for TASK-001 through TASK-004.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SessionState {
+    pub stream_output: Option<super::stream_output::StreamOutput>,
     pub is_simulated_session: bool,
     pub simulated_notice: &'static str,
     pub config: SerialConfig,
@@ -182,6 +183,21 @@ impl Default for SessionState {
 }
 
 impl SessionState {
+    /// Snapshot and attachment happen together on the UI thread after file preparation.
+    pub fn start_stream_output(
+        &mut self,
+        mut output: super::stream_output::StreamOutput,
+        scope: super::settings::StreamOutputScope,
+    ) {
+        if scope == super::settings::StreamOutputScope::CurrentBufferAndFuture {
+            let mut history = self.logs.clone();
+            history.extend(self.retained_while_paused.iter().cloned());
+            history.sort_by_key(|entry| entry.id);
+            history.dedup_by_key(|entry| entry.id);
+            output.record_history(history);
+        }
+        self.stream_output = Some(output);
+    }
     /// Creates a clearly-labelled simulated demo session for UI skeleton verification.
     pub fn new_simulated_demo() -> Self {
         let tx_payload = b"AT+VERSION".to_vec();
@@ -195,6 +211,7 @@ impl SessionState {
 
         Self {
             is_simulated_session: true,
+            stream_output: None,
             simulated_notice: "模拟会话（无真实串口硬件）",
             config: SerialConfig::default(),
             connection: SimulatedConnectionState::Disconnected,
@@ -225,6 +242,7 @@ impl SessionState {
     pub fn new_real_session(config: SerialConfig, connected: bool) -> Self {
         Self {
             is_simulated_session: false,
+            stream_output: None,
             simulated_notice: "",
             config,
             connection: if connected {
@@ -330,12 +348,22 @@ impl SessionState {
     /// Records a log entry, queuing it while receive display is paused so
     /// visible logs stay frozen and RX/TX events preserve arrival order on resume.
     fn record_log(&mut self, entry: LogEntry) {
+        if (entry.direction != LogDirection::Rx || self.is_simulated_session)
+            && let Some(output) = &mut self.stream_output
+        {
+            output.record(&entry);
+        }
         if self.receive.paused {
             self.retained_while_paused.push(entry);
         } else {
             self.logs.push(entry);
             self.trim_visible_logs();
         }
+    }
+
+    /// Payload bytes currently kept in the visible receive log.
+    pub fn log_buffer_used_bytes(&self) -> usize {
+        self.logs.iter().map(|entry| entry.bytes.len()).sum()
     }
 
     /// Sets the receive-log payload cap in bytes and drops the oldest rows past it.
@@ -387,6 +415,9 @@ impl SessionState {
             return;
         }
         self.counters.rx_bytes += payload.len() as u64;
+        if let Some(output) = &mut self.stream_output {
+            output.record(&LogEntry::new(0, timestamp, LogDirection::Rx, payload));
+        }
 
         for chunk in payload.split_inclusive(|&b| b == b'\n') {
             let appended = if self.rx_line_open {
@@ -1116,6 +1147,8 @@ mod tests {
         let mut state = SessionState::new_simulated_demo();
         assert_eq!(state.log_buffer_limit, DEFAULT_LOG_BUFFER_LIMIT as usize);
         assert_eq!(state.logs.len(), 3);
+        let used: usize = state.logs.iter().map(|entry| entry.bytes.len()).sum();
+        assert_eq!(state.log_buffer_used_bytes(), used);
 
         let newest = state.logs.last().unwrap().bytes.len();
         state.set_log_buffer_limit(newest);

@@ -27,7 +27,7 @@ sim_btn = "先不连接，进入模拟会话"
 current = "当前"
 
 [bottom]
-buffer = "缓冲 %{limit}"
+buffer = "%{used} / %{limit}"
 
 [parity]
 none = "无校验"
@@ -130,6 +130,10 @@ action_write_failed = "串口写入失败"
 action_flush_failed = "串口刷新发送缓冲区失败"
 
 [settings]
+stream_scope_title = "流输出范围"
+stream_scope_desc = "对下次开始生效；缓存仅包含当前会话仍保留的日志"
+stream_scope_buffer = "当前缓存及后续"
+stream_scope_future = "仅开始后"
 created_by = "作者"
 built_with = "基于"
 ai_assisted = "AI 辅助开发"
@@ -182,3 +186,9 @@ status_failed = "失败: %{error}"
 lua_only = "请选择 .lua 文件"
 load_failed = "无法打开文件选择器，请重试"
 
+
+[stream]
+start = '流输出：选择文件并追加记录（固定当前文本/HEX格式）'
+stop = '停止流输出'
+busy = '正在准备或停止流输出…'
+error = '流输出失败'
