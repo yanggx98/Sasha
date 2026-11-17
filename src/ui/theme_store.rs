@@ -163,14 +163,10 @@ pub fn contrast_foreground(bg: Hsla) -> Hsla {
     }
 }
 
-/// Send-card shadow `(alpha, y_offset_px, blur_px)` chosen by canvas brightness.
-/// Dark keeps the original black 0.55 / -4 / 12; light uses a much softer shadow.
-pub fn send_card_shadow(canvas: Hsla) -> (f32, f32, f32) {
-    if luminance(canvas) > 0.5 {
-        (0.12, -2.0, 8.0)
-    } else {
-        (0.55, -4.0, 12.0)
-    }
+/// Send-card shadow `(alpha, y_offset_px, blur_px)`. One soft shadow shared by
+/// every theme so dark and light look the same.
+pub fn send_card_shadow() -> (f32, f32, f32) {
+    (0.12, -2.0, 8.0)
 }
 
 /// Background highlight colors for search matches `(normal, active)` over a
@@ -1089,15 +1085,20 @@ mod tests {
     }
 
     #[test]
-    fn send_card_shadow_is_softer_on_light() {
-        assert_eq!(send_card_shadow(rgb(0x0D1117).into()), (0.55, -4.0, 12.0));
-        let (alpha, _, blur) = send_card_shadow(rgb(0xF6F8FA).into());
-        assert!((0.10..=0.14).contains(&alpha));
-        assert!(blur < 12.0);
+    fn hover_over_keeps_the_surface_opacity() {
         for entry in builtin_themes() {
-            let (a, _, _) = send_card_shadow(entry.theme.bg_canvas);
-            assert_eq!(a < 0.2, !entry.base.is_dark());
+            let t = entry.theme.with_surface_opacity(0.84);
+            let hovered = t.hover_over(t.bg_card);
+            assert!(hovered.a >= t.bg_card.a - 0.01, "{}", entry.id);
+            assert!(hovered.a > t.bg_hover.a, "{}", entry.id);
         }
+    }
+
+    #[test]
+    fn send_card_shadow_is_soft_and_theme_independent() {
+        let (alpha, _, blur) = send_card_shadow();
+        assert!((0.10..=0.14).contains(&alpha));
+        assert!(blur <= 8.0);
     }
 
     #[test]

@@ -426,7 +426,7 @@ impl SettingsWindow {
             .bg(theme.bg_card)
             .text_xs()
             .text_color(theme.text_primary)
-            .hover(|s| s.bg(theme.bg_hover))
+            .hover(|s| s.bg(theme.hover_over(theme.bg_card)))
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -654,7 +654,7 @@ impl SettingsWindow {
             .py_1()
             .rounded(px(6.))
             .bg(theme.bg_card)
-            .hover(|s| s.bg(theme.bg_hover))
+            .hover(|s| s.bg(theme.hover_over(theme.bg_card)))
             .cursor_pointer()
             .text_xs()
             .text_color(theme.text_primary)

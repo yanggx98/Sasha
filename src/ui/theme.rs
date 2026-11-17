@@ -68,6 +68,14 @@ impl Default for NanoTheme {
 }
 
 impl NanoTheme {
+    /// Hover color for an element that paints its own `base` background.
+    /// `bg_hover` is a translucent overlay; using it as the hover background
+    /// would replace `base` and let the workspace background image show
+    /// through, so composite it over `base` instead.
+    pub fn hover_over(&self, base: Hsla) -> Hsla {
+        base.blend(self.bg_hover)
+    }
+
     /// Returns a copy with surface backgrounds made slightly translucent so a
     /// workspace background image shows through without hurting readability.
     #[allow(dead_code)]

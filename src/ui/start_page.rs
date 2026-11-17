@@ -435,7 +435,7 @@ impl RenderOnce for StartPage {
                     } else {
                         theme.border_card
                     })
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.hover_over(theme.bg_card)))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();
@@ -547,7 +547,7 @@ impl RenderOnce for StartPage {
                     .bg(theme.bg_card)
                     .border_1()
                     .border_color(theme.border_card)
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.hover_over(theme.bg_card)))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();

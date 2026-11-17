@@ -71,7 +71,7 @@ impl SendCard {
 impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let locale = self.locale;
-        let (shadow_alpha, shadow_y, shadow_blur) = send_card_shadow(self.theme.bg_canvas);
+        let (shadow_alpha, shadow_y, shadow_blur) = send_card_shadow();
         let on_toggle_display_hex = self.on_toggle_display_hex.clone();
         let on_submit = self.on_submit.clone();
         let hex_display_tooltip = tr_shared(locale, "tooltip.tx_hex_display");
