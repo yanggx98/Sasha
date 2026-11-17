@@ -14,6 +14,7 @@ use crate::ui::motion::{
     transparent_like,
 };
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_store::{contrast_foreground, send_card_shadow};
 
 pub type SendActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -70,6 +71,7 @@ impl SendCard {
 impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let locale = self.locale;
+        let (shadow_alpha, shadow_y, shadow_blur) = send_card_shadow(self.theme.bg_canvas);
         let on_toggle_display_hex = self.on_toggle_display_hex.clone();
         let on_submit = self.on_submit.clone();
         let hex_display_tooltip = tr_shared(locale, "tooltip.tx_hex_display");
@@ -131,7 +133,7 @@ impl RenderOnce for SendCard {
         let (submit_bg_from, submit_bg_to) =
             conn_flag.color_pair(self.theme.bg_hover, self.theme.accent_blue);
         let (submit_fg_from, submit_fg_to) =
-            conn_flag.color_pair(self.theme.text_muted, gpui_kit::white());
+            conn_flag.color_pair(self.theme.text_muted, contrast_foreground(self.theme.accent_blue));
         let submit_hover_bg = if self.connected {
             self.theme.accent_blue_hover
         } else {
@@ -176,9 +178,9 @@ impl RenderOnce for SendCard {
                 .rounded(px(12.))
                 .bg(self.theme.bg_card)
                 .shadow(vec![BoxShadow {
-                    color: gpui_kit::black().opacity(0.55),
-                    offset: point(px(0.), px(-4.)),
-                    blur_radius: px(12.),
+                    color: gpui_kit::black().opacity(shadow_alpha),
+                    offset: point(px(0.), px(shadow_y)),
+                    blur_radius: px(shadow_blur),
                     spread_radius: px(0.),
                     inset: false,
                 }])

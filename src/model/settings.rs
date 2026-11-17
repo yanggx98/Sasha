@@ -39,6 +39,9 @@ pub const LOG_FONT_SIZE_PRESETS: [u16; 4] = [12, 13, 14, 15];
 /// Default background image opacity percentage (`0..=100`).
 pub const DEFAULT_BACKGROUND_OPACITY: u8 = 25;
 
+/// Default (built-in dark) theme id.
+pub const DEFAULT_THEME_ID: &str = "dark";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamOutputScope {
@@ -73,6 +76,9 @@ pub struct AppConfig {
     /// Background image opacity percentage (`0..=100`).
     #[serde(default = "default_background_opacity")]
     pub background_opacity: u8,
+    /// Selected theme id (`dark`, `light`, or a file stem in the `themes` directory).
+    #[serde(default = "default_theme_id")]
+    pub theme: String,
 }
 
 impl Default for AppConfig {
@@ -86,6 +92,7 @@ impl Default for AppConfig {
             scripts: Vec::new(),
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
+            theme: DEFAULT_THEME_ID.to_string(),
         }
     }
 }
@@ -96,6 +103,10 @@ fn default_log_buffer_limit() -> u32 {
 
 fn default_background_opacity() -> u8 {
     DEFAULT_BACKGROUND_OPACITY
+}
+
+fn default_theme_id() -> String {
+    DEFAULT_THEME_ID.to_string()
 }
 
 /// Formats a live usage figure as `512 B`, `1.5 KB`, or `1 MB`.
@@ -318,6 +329,12 @@ fn migrate_config(config: &mut AppConfig) {
         config.background_image = None;
     }
     config.background_opacity = config.background_opacity.min(100);
+    let trimmed = config.theme.trim();
+    config.theme = if trimmed.is_empty() {
+        DEFAULT_THEME_ID.to_string()
+    } else {
+        trimmed.to_string()
+    };
 }
 
 fn backup_corrupted_file(path: &Path) -> std::io::Result<PathBuf> {
@@ -605,5 +622,23 @@ mod tests {
         let reloaded = ConfigStore::load_from_path(cfg_path);
         assert_eq!(reloaded.config().background_image, Some(bg_path));
         assert_eq!(reloaded.config().background_opacity, 100);
+    }
+
+    #[test]
+    fn theme_defaults_roundtrips_and_normalizes() {
+        let dir = TempDir::new("theme");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&cfg_path, "log_font_size = 14
+").unwrap();
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        assert_eq!(store.config().theme, "dark");
+
+        store.update(|cfg| cfg.theme = "  ocean ".to_string()).unwrap();
+        assert_eq!(store.config().theme, "ocean");
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().theme, "ocean");
+
+        store.update_in_memory(|cfg| cfg.theme = "   ".to_string());
+        assert_eq!(store.config().theme, "dark");
     }
 }

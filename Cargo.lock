@@ -5989,6 +5989,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre",
  "mlua",
+ "notify",
  "rust-i18n",
  "serde",
  "serialport",

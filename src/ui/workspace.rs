@@ -38,6 +38,7 @@ use crate::ui::settings_window::SettingsWindow;
 use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_manager::{ThemeHandle, ThemeManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPage {
@@ -337,6 +338,8 @@ pub struct SashaApp {
     active_tab_id: u64,
     next_tab_id: u64,
     theme: NanoTheme,
+    theme_manager: Entity<ThemeManager>,
+    _theme_subscription: Subscription,
     config_store: Entity<ConfigStore>,
     last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
@@ -364,6 +367,9 @@ impl SashaApp {
         })
         .detach();
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
+        let theme_manager = ThemeHandle::get(cx);
+        let _theme_subscription = cx.observe(&theme_manager, |_, _, cx| cx.notify());
+        let initial_theme = theme_manager.read(cx).nano();
         let (locale, initial_scripts, log_buffer_limit) = {
             let cfg = config_store.read(cx).config();
             (
@@ -377,7 +383,9 @@ impl SashaApp {
             tabs: vec![initial_tab],
             active_tab_id: 1,
             next_tab_id: 2,
-            theme: NanoTheme::default(),
+            theme: initial_theme,
+            theme_manager,
+            _theme_subscription,
             config_store,
             last_locale: locale,
             settings_window: None,
@@ -2041,10 +2049,13 @@ impl Render for SashaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.current_locale(cx);
         self.sync_placeholders_if_locale_changed(locale, window, cx);
+        self.theme = self.theme_manager.read(cx).nano();
         let (bg_image, bg_opacity) = self.sync_background_image(cx);
         let has_bg_image = bg_image.is_some() && bg_opacity > 0;
         let surface_theme = if has_bg_image {
-            self.theme.with_translucent_surfaces()
+            self
+                .theme
+                .with_surface_opacity(self.theme_manager.read(cx).surface_opacity())
         } else {
             self.theme
         };

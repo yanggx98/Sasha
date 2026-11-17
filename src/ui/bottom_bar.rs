@@ -105,7 +105,7 @@ impl RenderOnce for BottomBar {
         let (conn_from, conn_to) =
             conn_flag.color_pair(self.theme.status_disconnected, self.theme.status_connected);
         let (badge_bg_from, badge_bg_to) =
-            conn_flag.color_pair(self.theme.sim_badge_bg, rgba(0x3FB9501F).into());
+            conn_flag.color_pair(self.theme.sim_badge_bg, self.theme.status_connected.alpha(0.12));
         let on_toggle = self.on_toggle_connection.clone();
 
         let connection_btn = animate_toggle_colors(

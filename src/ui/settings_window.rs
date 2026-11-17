@@ -12,6 +12,7 @@ use crate::model::settings::{
     DEFAULT_BACKGROUND_OPACITY, LOG_FONT_SIZE_PRESETS, StreamOutputScope,
 };
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_manager::{ThemeHandle, ThemeManager, ThemeSelectError};
 use crate::ui::workspace::image_format_for_path;
 
 const HEADER_HEIGHT: Pixels = px(38.);
@@ -77,6 +78,11 @@ impl SettingsTab {
 /// into the transparent titlebar and flat Zed-style setting rows.
 pub struct SettingsWindow {
     theme: NanoTheme,
+    theme_manager: Entity<ThemeManager>,
+    theme_menu_open: bool,
+    /// Last theme-folder / theme-selection problem shown in the warnings area.
+    theme_notice: Option<String>,
+    _theme_subscription: Subscription,
     config_store: Entity<ConfigStore>,
     active_tab: SettingsTab,
     save_error: Option<String>,
@@ -92,6 +98,9 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
+        let theme_manager = ThemeHandle::get(cx);
+        let theme_subscription = cx.observe(&theme_manager, |_, _, cx| cx.notify());
+        let initial_theme = theme_manager.read(cx).nano();
         let initial_opacity = config_store.read(cx).config().background_opacity as f32;
         let bg_opacity_slider = cx.new(|_| {
             SliderState::new()
@@ -114,7 +123,11 @@ impl SettingsWindow {
             },
         );
         Self {
-            theme: NanoTheme::default(),
+            theme: initial_theme,
+            theme_manager,
+            theme_menu_open: false,
+            theme_notice: None,
+            _theme_subscription: theme_subscription,
             config_store,
             active_tab: SettingsTab::General,
             save_error: None,
@@ -152,6 +165,48 @@ impl SettingsWindow {
             res
         });
         self.save_error = result.err();
+        cx.notify();
+    }
+
+    fn select_theme(&mut self, id: &str, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let result = self
+            .theme_manager
+            .update(cx, |manager, cx| manager.select(id, cx));
+        self.theme_notice = None;
+        self.save_error = None;
+        match result {
+            Ok(()) => {}
+            Err(ThemeSelectError::Unknown(id)) => {
+                self.theme_notice = Some(i18n::theme_unknown(locale, &id));
+            }
+            Err(ThemeSelectError::Save(err)) => self.save_error = Some(err),
+        }
+        self.theme_menu_open = false;
+        cx.notify();
+    }
+
+    fn open_theme_dir(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let dir = self.theme_manager.read(cx).themes_dir().to_path_buf();
+        // Recreates a deleted directory and restores watching right away.
+        let created = self
+            .theme_manager
+            .update(cx, |manager, cx| manager.ensure_dir(cx));
+        if let Err(err) = created {
+            self.theme_notice = Some(i18n::theme_open_failed(locale, &err.to_string()));
+            cx.notify();
+            return;
+        }
+        #[cfg(windows)]
+        let spawned = std::process::Command::new("explorer").arg(&dir).spawn();
+        #[cfg(target_os = "macos")]
+        let spawned = std::process::Command::new("open").arg(&dir).spawn();
+        #[cfg(not(any(windows, target_os = "macos")))]
+        let spawned = std::process::Command::new("xdg-open").arg(&dir).spawn();
+        self.theme_notice = spawned
+            .err()
+            .map(|err| i18n::theme_open_failed(locale, &err.to_string()));
         cx.notify();
     }
 
@@ -567,15 +622,144 @@ impl SettingsWindow {
             }))
             .into_any_element();
 
-        let theme_badge = div()
+        let (theme_infos, theme_selected, theme_current, theme_dir, theme_messages) = {
+            let manager = self.theme_manager.read(cx);
+            (
+                manager.themes(),
+                manager.selected_id().to_string(),
+                manager.current_id().to_string(),
+                manager.themes_dir().display().to_string(),
+                manager.messages(),
+            )
+        };
+        let builtin_label = tr_shared(locale, "settings.theme_builtin");
+        let current_name: SharedString = theme_infos
+            .iter()
+            .find(|info| info.id == theme_current)
+            .map(|info| info.name.clone())
+            .unwrap_or_else(|| theme_current.clone())
+            .into();
+        let theme_fell_back = theme_selected != theme_current;
+        let theme_desc: SharedString = if theme_fell_back {
+            i18n::theme_status_fallback(locale, &current_name, &theme_selected).into()
+        } else {
+            tr_shared(locale, "settings.theme_desc")
+        };
+        let menu_open = self.theme_menu_open;
+        let theme_button = h_flex()
+            .id("settings-theme-button")
+            .items_center()
+            .gap_1p5()
             .px_3()
             .py_1()
             .rounded(px(6.))
             .bg(theme.bg_card)
+            .hover(|s| s.bg(theme.bg_hover))
+            .cursor_pointer()
             .text_xs()
-            .text_color(theme.text_secondary)
-            .child(tr(locale, "settings.theme_dark"))
+            .text_color(theme.text_primary)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.theme_menu_open = !this.theme_menu_open;
+                    cx.notify();
+                }),
+            )
+            .child(current_name)
+            .child(
+                Icon::new(if menu_open {
+                    LucideIcon::ChevronUp
+                } else {
+                    LucideIcon::ChevronDown
+                })
+                .size(px(12.)),
+            )
             .into_any_element();
+        let theme_menu = menu_open.then(|| {
+            v_flex()
+                .w_full()
+                .py_1()
+                .gap_0p5()
+                .border_b_1()
+                .border_color(theme.border_card)
+                .children(theme_infos.iter().enumerate().map(|(index, info)| {
+                    let id = info.id.clone();
+                    let is_current = info.id == theme_current;
+                    h_flex()
+                        .id(ElementId::named_usize("settings-theme-item", index))
+                        .w_full()
+                        .px_3()
+                        .py_1p5()
+                        .gap_2()
+                        .items_center()
+                        .rounded(px(6.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .when(is_current, |this| {
+                            this.bg(theme.bg_toggle_active)
+                                .text_color(theme.accent_blue_hover)
+                                .font_weight(FontWeight::MEDIUM)
+                        })
+                        .when(!is_current, |this| {
+                            this.text_color(theme.text_secondary)
+                                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.select_theme(&id, cx);
+                            }),
+                        )
+                        .child(div().flex_1().truncate().child(info.name.clone()))
+                        .when(info.builtin, |this| {
+                            this.child(
+                                div()
+                                    .text_color(theme.text_muted)
+                                    .child(builtin_label.clone()),
+                            )
+                        })
+                        .into_any_element()
+                }))
+                .into_any_element()
+        });
+
+        let theme_dir_button = self.flat_action_button(
+            "settings-theme-open-dir",
+            tr_shared(locale, "settings.theme_open_dir"),
+            |this, _, cx| this.open_theme_dir(cx),
+            cx,
+        );
+        let theme_notice = self.theme_notice.clone();
+        let theme_warnings = (!theme_messages.is_empty() || theme_notice.is_some()).then(|| {
+            v_flex()
+                .w_full()
+                .py_3()
+                .gap_1()
+                .border_b_1()
+                .border_color(theme.border_card)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.error_text)
+                        .child(tr_shared(locale, "settings.theme_warnings_title")),
+                )
+                .children(theme_notice.map(|notice| {
+                    div()
+                        .text_xs()
+                        .text_color(theme.error_text)
+                        .child(notice)
+                }))
+                .children(theme_messages.iter().map(|message| {
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_secondary)
+                        .child(i18n::theme_message(locale, message))
+                }))
+                .into_any_element()
+        });
 
         let bg_image_controls = h_flex()
             .items_center()
@@ -645,9 +829,16 @@ impl SettingsWindow {
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.theme_title"),
-                tr_shared(locale, "settings.theme_desc"),
-                theme_badge,
+                theme_desc,
+                theme_button,
             ))
+            .children(theme_menu)
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.theme_dir_title"),
+                i18n::theme_dir_desc(locale, &theme_dir),
+                theme_dir_button,
+            ))
+            .children(theme_warnings)
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.bg_image_title"),
                 tr_shared(locale, "settings.bg_image_desc"),
@@ -787,6 +978,7 @@ impl SettingsWindow {
 
 impl Render for SettingsWindow {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.theme = self.theme_manager.read(cx).nano();
         let theme = self.theme;
         let locale = self.current_locale(cx);
         let save_error = self.save_error.clone();
@@ -797,6 +989,17 @@ impl Render for SettingsWindow {
             .size_full()
             .bg(theme.bg_canvas)
             .text_color(theme.text_primary)
+            // Clicks that no control handled (controls stop propagation) close the
+            // theme dropdown.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.theme_menu_open {
+                        this.theme_menu_open = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .on_key_down(|event: &KeyDownEvent, window, cx| {
                 if event.keystroke.key.eq_ignore_ascii_case("escape") {
                     cx.stop_propagation();

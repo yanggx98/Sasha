@@ -1,0 +1,31 @@
+# Sasha theme example. Copy this file into the `themes` folder next to
+# config.toml (Settings > View > Theme Folder > Open Folder). The file name
+# without ".toml" is the theme id, e.g. `ocean.toml` -> id `ocean`.
+
+# Display name shown in the theme list (defaults to the id).
+name = "Ocean"
+
+# "dark" or "light" (default "dark"). Decides the system control mode and which
+# built-in theme fills in any color you leave out.
+base = "dark"
+
+# Base colors: #RRGGBB or #RRGGBBAA. Omitted ones come from the built-in theme
+# of the same base.
+canvas = "#0B1620"   # window / log background
+card = "#12222F"     # send card and raised surfaces
+text = "#E3EEF5"     # primary text
+accent = "#14B8A6"   # send button and active highlights
+rx = "#4ADE80"       # received data
+tx = "#7DD3FC"       # sent data (independent of accent)
+error = "#FB7185"    # validation errors
+border = "#FFFFFF1C" # card border
+
+# Optional: override any derived token by its NanoTheme field name.
+# Available: bg_canvas, bg_card, bg_strip, bg_popover, bg_hover,
+# bg_toggle_active, border_card, border_popover, accent_blue,
+# accent_blue_hover, rx_green, tx_blue, text_primary, text_secondary,
+# text_muted, error_text, error_bg, sim_badge_bg, sim_badge_text,
+# status_disconnected, status_connected.
+[overrides]
+bg_strip = "#08111A"
+text_muted = "#6B8394"

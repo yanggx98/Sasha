@@ -1,0 +1,12 @@
+# Built-in light theme. Derived colors come from the derivation rules.
+name = "Light"
+base = "light"
+
+canvas = "#F6F8FA"
+card = "#FFFFFF"
+text = "#1F2328"
+accent = "#0969DA"
+rx = "#1A7F37"
+tx = "#0550AE"
+error = "#CF222E"
+border = "#1F232826"
