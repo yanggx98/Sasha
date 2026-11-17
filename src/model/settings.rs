@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub locale: Locale,
     /// Monospace font size (px) used in the log view.
     pub log_font_size: u16,
+    /// Persisted Lua script paths shown in the script panel.
+    pub scripts: Vec<PathBuf>,
 }
 
 impl Default for AppConfig {
@@ -40,6 +42,7 @@ impl Default for AppConfig {
             version: CURRENT_CONFIG_VERSION,
             locale: Locale::default(),
             log_font_size: DEFAULT_LOG_FONT_SIZE,
+            scripts: Vec::new(),
         }
     }
 }
@@ -160,6 +163,13 @@ fn migrate_config(config: &mut AppConfig) {
         config.version = CURRENT_CONFIG_VERSION;
     }
     config.log_font_size = config.log_font_size.clamp(10, 24);
+    let mut unique_scripts = Vec::with_capacity(config.scripts.len());
+    for path in config.scripts.drain(..) {
+        if !path.as_os_str().is_empty() && !unique_scripts.contains(&path) {
+            unique_scripts.push(path);
+        }
+    }
+    config.scripts = unique_scripts;
 }
 
 fn backup_corrupted_file(path: &Path) -> std::io::Result<PathBuf> {
@@ -329,5 +339,33 @@ mod tests {
             path.file_name().and_then(|n| n.to_str()),
             Some(CONFIG_FILE_NAME)
         );
+    }
+
+    #[test]
+    fn scripts_roundtrip_and_deduplication() {
+        let dir = TempDir::new("scripts");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        let script_a = dir.file("a.lua");
+        let script_b = dir.file("b.lua");
+
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        store
+            .update(|cfg| {
+                cfg.scripts = vec![
+                    script_a.clone(),
+                    script_b.clone(),
+                    script_a.clone(),
+                    PathBuf::new(),
+                ];
+            })
+            .expect("save scripts");
+
+        assert_eq!(
+            store.config().scripts,
+            vec![script_a.clone(), script_b.clone()]
+        );
+
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().scripts, vec![script_a, script_b]);
     }
 }

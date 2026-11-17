@@ -80,7 +80,12 @@ struct SessionTab {
 }
 
 impl SessionTab {
-    fn new(id: u64, locale: Locale, cx: &mut Context<SashaApp>) -> Self {
+    fn new(
+        id: u64,
+        locale: Locale,
+        initial_scripts: Vec<PathBuf>,
+        cx: &mut Context<SashaApp>,
+    ) -> Self {
         let state = SessionState::new_simulated_demo();
         let motion = UiMotionState::new(
             state.receive.hex_mode,
@@ -120,7 +125,7 @@ impl SessionTab {
             last_tail_len: 0,
             last_display_flags: (true, false),
             log_selection,
-            script_paths: Vec::new(),
+            script_paths: initial_scripts,
             script_states: HashMap::new(),
             script_manager: ScriptManager::new(),
             script_poll_task: None,
@@ -320,8 +325,11 @@ pub struct SashaApp {
 impl SashaApp {
     pub fn new(config_store: Entity<ConfigStore>, cx: &mut Context<Self>) -> Self {
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
-        let locale = config_store.read(cx).config().locale;
-        let initial_tab = SessionTab::new(1, locale, cx);
+        let (locale, initial_scripts) = {
+            let cfg = config_store.read(cx).config();
+            (cfg.locale, cfg.scripts.clone())
+        };
+        let initial_tab = SessionTab::new(1, locale, initial_scripts, cx);
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
@@ -439,8 +447,11 @@ impl SashaApp {
         TextSelection::clear(window, cx);
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let locale = self.current_locale(cx);
-        let tab = SessionTab::new(id, locale, cx);
+        let (locale, initial_scripts) = {
+            let cfg = self.config_store.read(cx).config();
+            (cfg.locale, cfg.scripts.clone())
+        };
+        let tab = SessionTab::new(id, locale, initial_scripts, cx);
         self.tabs.push(tab);
         self.active_tab_id = id;
         cx.notify();
@@ -1220,6 +1231,7 @@ impl SashaApp {
                 match result {
                     Ok(Ok(Some(paths))) => {
                         let mut invalid = false;
+                        let mut added = false;
                         for path in paths {
                             if path
                                 .extension()
@@ -1228,6 +1240,7 @@ impl SashaApp {
                             {
                                 if !tab.script_paths.contains(&path) {
                                     tab.script_paths.push(path);
+                                    added = true;
                                 }
                             } else {
                                 invalid = true;
@@ -1235,6 +1248,10 @@ impl SashaApp {
                         }
                         tab.script_load_error =
                             invalid.then(|| tr_shared(locale, "scripts.lua_only"));
+                        let updated_scripts = added.then(|| tab.script_paths.clone());
+                        if let Some(scripts) = updated_scripts {
+                            this.persist_scripts(scripts, cx);
+                        }
                     }
                     Ok(Ok(None)) => return,
                     _ => tab.script_load_error = Some(tr_shared(locale, "scripts.load_failed")),
@@ -1332,19 +1349,30 @@ impl SashaApp {
         cx.notify();
     }
 
+    fn persist_scripts(&self, scripts: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.config_store.update(cx, |store, cx| {
+            let _ = store.update(|cfg| cfg.scripts = scripts);
+            cx.notify();
+        });
+    }
+
     fn remove_script(&mut self, tab_id: u64, path: PathBuf, cx: &mut Context<Self>) {
-        let Some(tab) = self.tab_mut(tab_id) else {
-            return;
+        let updated_scripts = {
+            let Some(tab) = self.tab_mut(tab_id) else {
+                return;
+            };
+            if let Some(entry) = tab.script_states.get(&path)
+                && let Some(run_id) = entry.run_id
+                && entry.status.as_ref().is_some_and(ScriptStatus::is_active)
+            {
+                tab.script_manager.stop_instance(run_id);
+                tab.drain_script_events();
+            }
+            tab.script_paths.retain(|item| item != &path);
+            tab.script_states.remove(&path);
+            tab.script_paths.clone()
         };
-        if let Some(entry) = tab.script_states.get(&path)
-            && let Some(run_id) = entry.run_id
-            && entry.status.as_ref().is_some_and(ScriptStatus::is_active)
-        {
-            tab.script_manager.stop_instance(run_id);
-            tab.drain_script_events();
-        }
-        tab.script_paths.retain(|item| item != &path);
-        tab.script_states.remove(&path);
+        self.persist_scripts(updated_scripts, cx);
         cx.notify();
     }
 
