@@ -24,6 +24,7 @@ pub struct ReceiveToolbar {
     state: ReceiveViewState,
     send_hex: bool,
     line_ending: SendLineEnding,
+    search_open: bool,
     rx_hex_flag: TransitionFlag,
     rx_timestamp_flag: TransitionFlag,
     rx_pause_flag: TransitionFlag,
@@ -36,6 +37,7 @@ pub struct ReceiveToolbar {
     on_toggle_auto_scroll: ToolbarActionCallback,
     on_clear: ToolbarActionCallback,
     on_save: ToolbarActionCallback,
+    on_toggle_search: ToolbarActionCallback,
     on_toggle_send_hex: ToolbarActionCallback,
     on_cycle_line_ending: ToolbarActionCallback,
 }
@@ -48,6 +50,7 @@ impl ReceiveToolbar {
         state: ReceiveViewState,
         send_hex: bool,
         line_ending: SendLineEnding,
+        search_open: bool,
         rx_hex_flag: TransitionFlag,
         rx_timestamp_flag: TransitionFlag,
         rx_pause_flag: TransitionFlag,
@@ -60,6 +63,7 @@ impl ReceiveToolbar {
         on_toggle_auto_scroll: ToolbarActionCallback,
         on_clear: ToolbarActionCallback,
         on_save: ToolbarActionCallback,
+        on_toggle_search: ToolbarActionCallback,
         on_toggle_send_hex: ToolbarActionCallback,
         on_cycle_line_ending: ToolbarActionCallback,
     ) -> Self {
@@ -69,6 +73,7 @@ impl ReceiveToolbar {
             state,
             send_hex,
             line_ending,
+            search_open,
             rx_hex_flag,
             rx_timestamp_flag,
             rx_pause_flag,
@@ -81,6 +86,7 @@ impl ReceiveToolbar {
             on_toggle_auto_scroll,
             on_clear,
             on_save,
+            on_toggle_search,
             on_toggle_send_hex,
             on_cycle_line_ending,
         }
@@ -236,6 +242,20 @@ impl RenderOnce for ReceiveToolbar {
                     tr_shared(locale, "tooltip.rx_save"),
                     None,
                     self.on_save.clone(),
+                ))
+                .child(self.icon_tool_button(
+                    "rx-tool-search",
+                    LucideIcon::Search,
+                    tr_shared(locale, "tooltip.rx_search"),
+                    if self.search_open {
+                        Some(TransitionFlag {
+                            active: true,
+                            epoch: 0,
+                        })
+                    } else {
+                        None
+                    },
+                    self.on_toggle_search.clone(),
                 ))
                 .child(div().w(px(1.)).h(px(14.)).mx_1().bg(self.theme.border_card))
                 .child(self.text_tool_button(

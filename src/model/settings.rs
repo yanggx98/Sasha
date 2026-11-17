@@ -15,6 +15,24 @@ pub const CURRENT_CONFIG_VERSION: u32 = 1;
 /// Default monospace font size (in logical pixels) for the receive log view.
 pub const DEFAULT_LOG_FONT_SIZE: u16 = 14;
 
+/// Default receive-log payload budget, in bytes (1 MiB).
+pub const DEFAULT_LOG_BUFFER_LIMIT: u32 = 1024 * 1024;
+
+/// Smallest receive-log payload budget the bottom bar accepts, in bytes (4 KiB).
+pub const MIN_LOG_BUFFER_LIMIT: u32 = 4 * 1024;
+
+/// Largest receive-log payload budget the bottom bar accepts, in bytes (64 MiB).
+pub const MAX_LOG_BUFFER_LIMIT: u32 = 64 * 1024 * 1024;
+
+/// Preset receive-log payload budgets shown in the bottom-bar picker, in bytes.
+pub const LOG_BUFFER_LIMIT_PRESETS: [u32; 5] = [
+    64 * 1024,
+    256 * 1024,
+    1024 * 1024,
+    4 * 1024 * 1024,
+    16 * 1024 * 1024,
+];
+
 /// Preset font sizes exposed in the Settings View tab.
 pub const LOG_FONT_SIZE_PRESETS: [u16; 4] = [12, 13, 14, 15];
 
@@ -32,6 +50,9 @@ pub struct AppConfig {
     pub locale: Locale,
     /// Monospace font size (px) used in the log view.
     pub log_font_size: u16,
+    /// Maximum receive-log payload retained per session, in bytes.
+    #[serde(default = "default_log_buffer_limit")]
+    pub log_buffer_limit: u32,
     /// Persisted Lua script paths shown in the script panel.
     pub scripts: Vec<PathBuf>,
 }
@@ -42,8 +63,67 @@ impl Default for AppConfig {
             version: CURRENT_CONFIG_VERSION,
             locale: Locale::default(),
             log_font_size: DEFAULT_LOG_FONT_SIZE,
+            log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT,
             scripts: Vec::new(),
         }
+    }
+}
+
+fn default_log_buffer_limit() -> u32 {
+    DEFAULT_LOG_BUFFER_LIMIT
+}
+
+/// Formats a byte budget as `64 KB`, `1 MB`, or a raw byte count.
+pub fn format_log_buffer_limit(bytes: u32) -> String {
+    const MB: u32 = 1024 * 1024;
+    const KB: u32 = 1024;
+    if bytes >= MB && bytes.is_multiple_of(MB) {
+        format!("{} MB", bytes / MB)
+    } else if bytes >= KB && bytes.is_multiple_of(KB) {
+        format!("{} KB", bytes / KB)
+    } else {
+        bytes.to_string()
+    }
+}
+
+/// Parses a bottom-bar buffer limit in bytes.
+///
+/// Accepts a plain byte count (`1048576`) or a 1024-based suffix (`64 KB`, `1 MB`).
+/// Rejects blank input and values outside
+/// [`MIN_LOG_BUFFER_LIMIT`]..=[`MAX_LOG_BUFFER_LIMIT`].
+pub fn parse_log_buffer_limit_for(
+    raw: &str,
+    locale: crate::i18n::Locale,
+) -> Result<u32, std::borrow::Cow<'static, str>> {
+    let compact: String = raw
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let (number, multiplier) = if let Some(number) = compact.strip_suffix("mb") {
+        (number, 1024 * 1024)
+    } else if let Some(number) = compact.strip_suffix("kb") {
+        (number, 1024)
+    } else if let Some(number) = compact.strip_suffix('m') {
+        (number, 1024 * 1024)
+    } else if let Some(number) = compact.strip_suffix('k') {
+        (number, 1024)
+    } else {
+        let number = compact.strip_suffix('b').unwrap_or(compact.as_str());
+        (number, 1)
+    };
+    let bytes = number
+        .parse::<u32>()
+        .ok()
+        .and_then(|count| count.checked_mul(multiplier));
+    match bytes {
+        Some(value) if (MIN_LOG_BUFFER_LIMIT..=MAX_LOG_BUFFER_LIMIT).contains(&value) => Ok(value),
+        _ => Err(crate::i18n::err_buffer_limit(
+            locale,
+            &format_log_buffer_limit(MIN_LOG_BUFFER_LIMIT),
+            &format_log_buffer_limit(MAX_LOG_BUFFER_LIMIT),
+        )
+        .into()),
     }
 }
 
@@ -163,6 +243,9 @@ fn migrate_config(config: &mut AppConfig) {
         config.version = CURRENT_CONFIG_VERSION;
     }
     config.log_font_size = config.log_font_size.clamp(10, 24);
+    if !(MIN_LOG_BUFFER_LIMIT..=MAX_LOG_BUFFER_LIMIT).contains(&config.log_buffer_limit) {
+        config.log_buffer_limit = DEFAULT_LOG_BUFFER_LIMIT;
+    }
     let mut unique_scripts = Vec::with_capacity(config.scripts.len());
     for path in config.scripts.drain(..) {
         if !path.as_os_str().is_empty() && !unique_scripts.contains(&path) {
@@ -299,6 +382,33 @@ mod tests {
         let reloaded = ConfigStore::load_from_path(cfg_path);
         assert_eq!(reloaded.config(), store.config());
         assert!(reloaded.last_load_warning().is_none());
+    }
+
+    #[test]
+    fn missing_buffer_limit_stays_at_default_and_out_of_range_is_clamped() {
+        let dir = TempDir::new("buffer-default");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&cfg_path, "version = 1\nlocale = \"zh-CN\"\n").expect("write partial");
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().log_buffer_limit, DEFAULT_LOG_BUFFER_LIMIT);
+
+        let dir = TempDir::new("buffer-clamp");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&cfg_path, "log_buffer_limit = 1\n").expect("write tiny limit");
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().log_buffer_limit, DEFAULT_LOG_BUFFER_LIMIT);
+
+        assert_eq!(
+            parse_log_buffer_limit_for("1 MB", Locale::ZhCn),
+            Ok(1024 * 1024)
+        );
+        assert_eq!(
+            parse_log_buffer_limit_for("64KB", Locale::EnUs),
+            Ok(64 * 1024)
+        );
+        assert!(parse_log_buffer_limit_for("0", Locale::EnUs).is_err());
+        assert!(parse_log_buffer_limit_for("999999999", Locale::ZhCn).is_err());
     }
 
     #[test]

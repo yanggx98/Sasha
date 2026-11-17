@@ -2,6 +2,9 @@ use std::borrow::Cow;
 use std::fmt;
 
 use crate::i18n::{Locale, tr};
+use crate::model::settings::{
+    LOG_BUFFER_LIMIT_PRESETS, format_log_buffer_limit, parse_log_buffer_limit_for,
+};
 
 /// Preset baud rates for the quick-select overlay (used by TASK-002).
 pub const BAUD_RATE_PRESETS: &[u32] = &[9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
@@ -17,6 +20,7 @@ pub enum ActivePickerKind {
     DataBits,
     Parity,
     StopBits,
+    BufferLimit,
 }
 
 impl ActivePickerKind {
@@ -32,6 +36,7 @@ impl ActivePickerKind {
             Self::DataBits => tr(locale, "picker.title_data_bits"),
             Self::Parity => tr(locale, "picker.title_parity"),
             Self::StopBits => tr(locale, "picker.title_stop_bits"),
+            Self::BufferLimit => tr(locale, "picker.title_buffer"),
         }
     }
 
@@ -47,6 +52,7 @@ impl ActivePickerKind {
             Self::DataBits => tr(locale, "picker.placeholder_data_bits"),
             Self::Parity => tr(locale, "picker.placeholder_parity"),
             Self::StopBits => tr(locale, "picker.placeholder_stop_bits"),
+            Self::BufferLimit => tr(locale, "picker.placeholder_buffer"),
         }
     }
 
@@ -73,6 +79,11 @@ impl ActivePickerKind {
             Self::StopBits => StopBits::ALL
                 .iter()
                 .map(|s| s.label().to_string())
+                .collect(),
+            Self::BufferLimit => LOG_BUFFER_LIMIT_PRESETS
+                .iter()
+                .copied()
+                .map(format_log_buffer_limit)
                 .collect(),
         }
     }
@@ -256,6 +267,7 @@ impl SerialConfig {
             ActivePickerKind::DataBits => self.data_bits.label().to_string(),
             ActivePickerKind::Parity => self.parity.label_for(locale).to_string(),
             ActivePickerKind::StopBits => self.stop_bits.label().to_string(),
+            ActivePickerKind::BufferLimit => String::new(),
         }
     }
 
@@ -290,6 +302,9 @@ impl SerialConfig {
             }
             ActivePickerKind::StopBits => {
                 self.stop_bits = StopBits::parse_for(raw, locale)?;
+            }
+            ActivePickerKind::BufferLimit => {
+                parse_log_buffer_limit_for(raw, locale)?;
             }
         }
         Ok(())

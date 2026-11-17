@@ -44,11 +44,30 @@ pub fn tr_shared(locale: Locale, key: &'static str) -> SharedString {
 }
 
 pub fn start_frame_header(locale: Locale, chevron: &str) -> String {
-    rust_i18n::t!("start.frame_header", locale = locale.code(), chevron = chevron).into_owned()
+    rust_i18n::t!(
+        "start.frame_header",
+        locale = locale.code(),
+        chevron = chevron
+    )
+    .into_owned()
 }
 
 pub fn picker_apply_value(locale: Locale, value: &str) -> String {
     rust_i18n::t!("picker.apply_value", locale = locale.code(), value = value).into_owned()
+}
+
+pub fn bottom_buffer_label(locale: Locale, limit: &str) -> String {
+    rust_i18n::t!("bottom.buffer", locale = locale.code(), limit = limit).into_owned()
+}
+
+pub fn err_buffer_limit(locale: Locale, min: &str, max: &str) -> String {
+    rust_i18n::t!(
+        "err.buffer_limit",
+        locale = locale.code(),
+        min = min,
+        max = max
+    )
+    .into_owned()
 }
 
 pub fn settings_save_error(locale: Locale, err: &str) -> String {
@@ -112,7 +131,12 @@ pub fn serial_action_flush_failed(locale: Locale) -> String {
 }
 
 pub fn scripts_status_failed(locale: Locale, error: &str) -> String {
-    rust_i18n::t!("scripts.status_failed", locale = locale.code(), error = error).into_owned()
+    rust_i18n::t!(
+        "scripts.status_failed",
+        locale = locale.code(),
+        error = error
+    )
+    .into_owned()
 }
 
 pub fn scripts_running_tooltip(locale: Locale, count: usize) -> String {
@@ -146,7 +170,10 @@ mod tests {
     #[test]
     fn dynamic_helpers_format_for_each_locale() {
         assert_eq!(picker_apply_value(Locale::ZhCn, "9600"), "应用输入值: 9600");
-        assert_eq!(picker_apply_value(Locale::EnUs, "9600"), "Apply value: 9600");
+        assert_eq!(
+            picker_apply_value(Locale::EnUs, "9600"),
+            "Apply value: 9600"
+        );
         assert_eq!(start_frame_header(Locale::ZhCn, "▸"), "▸ 帧格式（高级）");
         assert_eq!(
             start_frame_header(Locale::EnUs, "▾"),

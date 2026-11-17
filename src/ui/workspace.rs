@@ -12,11 +12,12 @@ use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{Locale, tr, tr_shared};
+use crate::i18n::{Locale, bottom_buffer_label, tr, tr_shared};
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
-    ActivePickerKind, ConfigStore, DataBits, LogSelectionModel, Parity, SendPayloadError,
-    SessionState, StopBits, current_timestamp_hms_ms,
+    ActivePickerKind, ConfigStore, DataBits, LogSearchState, LogSelectionModel, Parity,
+    SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_log_buffer_limit,
+    parse_log_buffer_limit_for,
 };
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
@@ -30,6 +31,7 @@ use crate::ui::script_panel::{
     ResizeScriptPanel, SCRIPT_PANEL_MIN_WIDTH, SCRIPT_PANEL_WIDTH, ScriptPanel, ScriptPanelItem,
     dragged_panel_width, panel_is_compact, panel_width,
 };
+use crate::ui::search_bar::LogSearchBar;
 use crate::ui::send_card::SendCard;
 use crate::ui::settings_window::SettingsWindow;
 use crate::ui::start_page::{StartPage, StartPageState};
@@ -71,6 +73,9 @@ struct SessionTab {
     last_tail_len: usize,
     last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
+    log_search: LogSearchState,
+    search_input: Option<Entity<InputState>>,
+    _search_subscription: Option<Subscription>,
     script_paths: Vec<PathBuf>,
     script_states: HashMap<PathBuf, ScriptEntryState>,
     script_manager: ScriptManager,
@@ -84,9 +89,11 @@ impl SessionTab {
         id: u64,
         locale: Locale,
         initial_scripts: Vec<PathBuf>,
+        log_buffer_limit: usize,
         cx: &mut Context<SashaApp>,
     ) -> Self {
-        let state = SessionState::new_simulated_demo();
+        let mut state = SessionState::new_simulated_demo();
+        state.set_log_buffer_limit(log_buffer_limit);
         let motion = UiMotionState::new(
             state.receive.hex_mode,
             state.receive.show_timestamp,
@@ -125,6 +132,9 @@ impl SessionTab {
             last_tail_len: 0,
             last_display_flags: (true, false),
             log_selection,
+            log_search: LogSearchState::default(),
+            search_input: None,
+            _search_subscription: None,
             script_paths: initial_scripts,
             script_states: HashMap::new(),
             script_manager: ScriptManager::new(),
@@ -207,6 +217,14 @@ impl SessionTab {
 
         if self.state.receive.auto_scroll && content_changed {
             self.log_list_state.scroll_to_end();
+        }
+
+        if self.log_search.open
+            && !self.log_search.query.is_empty()
+            && (content_changed || display_flags != self.last_display_flags)
+        {
+            self.log_search
+                .recompute(&self.state.logs, display_flags.0, display_flags.1, true);
         }
 
         self.last_log_count = log_count;
@@ -325,11 +343,15 @@ pub struct SashaApp {
 impl SashaApp {
     pub fn new(config_store: Entity<ConfigStore>, cx: &mut Context<Self>) -> Self {
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
-        let (locale, initial_scripts) = {
+        let (locale, initial_scripts, log_buffer_limit) = {
             let cfg = config_store.read(cx).config();
-            (cfg.locale, cfg.scripts.clone())
+            (
+                cfg.locale,
+                cfg.scripts.clone(),
+                cfg.log_buffer_limit as usize,
+            )
         };
-        let initial_tab = SessionTab::new(1, locale, initial_scripts, cx);
+        let initial_tab = SessionTab::new(1, locale, initial_scripts, log_buffer_limit, cx);
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
@@ -348,6 +370,10 @@ impl SashaApp {
 
     fn current_locale(&self, cx: &App) -> Locale {
         self.config_store.read(cx).config().locale
+    }
+
+    fn saved_log_buffer_limit(&self, cx: &App) -> usize {
+        self.config_store.read(cx).config().log_buffer_limit as usize
     }
 
     fn sync_placeholders_if_locale_changed(
@@ -447,11 +473,15 @@ impl SashaApp {
         TextSelection::clear(window, cx);
         let id = self.next_tab_id;
         self.next_tab_id += 1;
-        let (locale, initial_scripts) = {
+        let (locale, initial_scripts, log_buffer_limit) = {
             let cfg = self.config_store.read(cx).config();
-            (cfg.locale, cfg.scripts.clone())
+            (
+                cfg.locale,
+                cfg.scripts.clone(),
+                cfg.log_buffer_limit as usize,
+            )
         };
-        let tab = SessionTab::new(id, locale, initial_scripts, cx);
+        let tab = SessionTab::new(id, locale, initial_scripts, log_buffer_limit, cx);
         self.tabs.push(tab);
         self.active_tab_id = id;
         cx.notify();
@@ -731,10 +761,12 @@ impl SashaApp {
                 let writer = conn
                     .take_writer()
                     .expect("newly opened SerialConnection must have a writer");
+                let log_buffer_limit = self.saved_log_buffer_limit(cx);
                 let tab = self.active_tab_mut();
                 tab.disconnect_real_serial(None);
                 let generation = tab.session_service.attach_writer(writer);
                 tab.state = SessionState::new_real_session(config, true);
+                tab.state.set_log_buffer_limit(log_buffer_limit);
                 tab.sync_motion_and_selection_from_state();
                 tab.send_input = None;
                 tab._send_subscription = None;
@@ -753,9 +785,11 @@ impl SashaApp {
     }
 
     fn enter_simulated_from_start_page(&mut self, cx: &mut Context<Self>) {
+        let log_buffer_limit = self.saved_log_buffer_limit(cx);
         let tab = self.active_tab_mut();
         tab.disconnect_real_serial(None);
         tab.state = SessionState::new_simulated_demo();
+        tab.state.set_log_buffer_limit(log_buffer_limit);
         tab.sync_motion_and_selection_from_state();
         tab.send_input = None;
         tab._send_subscription = None;
@@ -1032,14 +1066,17 @@ impl SashaApp {
         }
 
         let locale = self.current_locale(cx);
+        let buffer_limit = self.config_store.read(cx).config().log_buffer_limit;
         let (is_sim, current_val) = {
             let tab = self.active_tab_mut();
             tab.state.active_picker = Some(kind);
             tab.motion.picker_open_epoch += 1;
-            (
-                tab.state.is_simulated_session,
-                tab.state.config.current_value_str_for(kind, locale),
-            )
+            let current_val = if kind == ActivePickerKind::BufferLimit {
+                format_log_buffer_limit(buffer_limit)
+            } else {
+                tab.state.config.current_value_str_for(kind, locale)
+            };
+            (tab.state.is_simulated_session, current_val)
         };
         self.picker_error = None;
         if kind == ActivePickerKind::Port && !is_sim {
@@ -1065,6 +1102,10 @@ impl SashaApp {
         };
 
         let locale = self.current_locale(cx);
+        if kind == ActivePickerKind::BufferLimit {
+            self.apply_buffer_limit(raw, locale, cx);
+            return;
+        }
         let result = self
             .active_tab_mut()
             .state
@@ -1081,6 +1122,34 @@ impl SashaApp {
                 if should_disconnect {
                     self.disconnect_real_serial(None, cx);
                     return;
+                }
+            }
+            Err(err) => {
+                self.picker_error = Some(err.into());
+            }
+        }
+        cx.notify();
+    }
+
+    fn apply_buffer_limit(&mut self, raw: &str, locale: Locale, cx: &mut Context<Self>) {
+        match parse_log_buffer_limit_for(raw, locale) {
+            Ok(limit) => {
+                let saved = self.config_store.update(cx, |store, cx| {
+                    let result = store.update(|cfg| cfg.log_buffer_limit = limit);
+                    cx.notify();
+                    result
+                });
+                match saved {
+                    Ok(()) => {
+                        self.picker_error = None;
+                        for tab in &mut self.tabs {
+                            tab.state.set_log_buffer_limit(limit as usize);
+                            tab.state.active_picker = None;
+                        }
+                    }
+                    Err(err) => {
+                        self.picker_error = Some(err.into());
+                    }
                 }
             }
             Err(err) => {
@@ -1172,17 +1241,145 @@ impl SashaApp {
         }
     }
 
+    fn ensure_search_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.search_input.clone())
+        {
+            return existing;
+        }
+
+        let placeholder = tr_shared(
+            self.config_store.read(cx).config().locale,
+            "search.placeholder",
+        );
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, input, event: &InputEvent, _window, cx| match event {
+                InputEvent::Change => {
+                    let query = input.read(cx).value().to_string();
+                    let target_line = if let Some(tab) = this.tab_mut(tab_id) {
+                        tab.log_search.query = query;
+                        tab.log_search.recompute(
+                            &tab.state.logs,
+                            tab.state.receive.show_timestamp,
+                            tab.state.receive.hex_mode,
+                            false,
+                        );
+                        let line = tab.log_search.current().map(|m| m.log_index);
+                        if let Some(idx) = line {
+                            tab.log_list_state.scroll_to_reveal_item(idx);
+                        }
+                        line
+                    } else {
+                        None
+                    };
+                    let _ = target_line;
+                    cx.notify();
+                }
+                InputEvent::PressEnter { .. } if this.active_tab_id == tab_id => {
+                    this.jump_search_match(true, cx);
+                }
+                _ => {}
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.search_input = Some(entity.clone());
+            tab._search_subscription = Some(sub);
+        }
+        entity
+    }
+
+    pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let locale = self.config_store.read(cx).config().locale;
+        let (query, logs_len) = {
+            let tab = self.active_tab_mut();
+            tab.log_search.open = true;
+            if !tab.log_search.query.is_empty() {
+                tab.log_search.recompute(
+                    &tab.state.logs,
+                    tab.state.receive.show_timestamp,
+                    tab.state.receive.hex_mode,
+                    true,
+                );
+            }
+            (tab.log_search.query.clone(), tab.state.logs.len())
+        };
+        let _ = logs_len;
+
+        let input = self.ensure_search_input(tab_id, window, cx);
+        input.update(cx, |state, cx| {
+            state.set_placeholder(tr_shared(locale, "search.placeholder"), window, cx);
+            if state.value().as_str() != query {
+                state.set_value(query, window, cx);
+            }
+            state.focus(window, cx);
+            state.select_all(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        if !tab.log_search.open {
+            return;
+        }
+        tab.log_search.open = false;
+        tab.log_search.matches.clear();
+        tab.log_search.active_match = None;
+        let log_focus = tab.log_focus.clone();
+        log_focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub fn toggle_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_tab().log_search.open {
+            self.close_search(window, cx);
+        } else {
+            self.open_search(window, cx);
+        }
+    }
+
+    pub fn jump_search_match(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        let target = if forward {
+            tab.log_search.next().map(|m| m.log_index)
+        } else {
+            tab.log_search.prev().map(|m| m.log_index)
+        };
+        if let Some(log_index) = target {
+            tab.log_list_state.scroll_to_reveal_item(log_index);
+        }
+        cx.notify();
+    }
+
     fn editor_owns_copy(&self, window: &Window, cx: &App) -> bool {
         let send_focused = self
             .active_tab()
             .send_input
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        let search_focused = self
+            .active_tab()
+            .search_input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
         let picker_focused = self
             .picker_input
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
-        send_focused || picker_focused
+        send_focused || search_focused || picker_focused
     }
 
     fn copy_log_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1471,7 +1668,10 @@ impl SashaApp {
                 let tab_id = self.active_tab_id;
                 let (service, generation) = {
                     let tab = self.active_tab();
-                    (tab.session_service.clone(), tab.session_service.generation())
+                    (
+                        tab.session_service.clone(),
+                        tab.session_service.generation(),
+                    )
                 };
                 match service.enqueue_tx(generation, bytes, None) {
                     Ok(reply_rx) => {
@@ -1744,9 +1944,30 @@ impl Render for SashaApp {
             tab.log_selection.observe_log_len(log_len);
             tab.sync_log_list_state();
         }
-        let log_font_size = self.config_store.read(cx).config().log_font_size;
+        let (log_font_size, log_buffer_limit) = {
+            let cfg = self.config_store.read(cx).config();
+            (cfg.log_font_size, cfg.log_buffer_limit)
+        };
         let send_input = self.ensure_send_input(active_id, window, cx);
+        let search_open = self.active_tab().log_search.open;
+        let search_input = if search_open {
+            Some(self.ensure_search_input(active_id, window, cx))
+        } else {
+            None
+        };
         let tab = self.active_tab();
+        let search_matches = if search_open {
+            Rc::new(tab.log_search.matches.clone())
+        } else {
+            Rc::new(Vec::new())
+        };
+        let active_search_match = if search_open {
+            tab.log_search.active_match
+        } else {
+            None
+        };
+        let search_count_label = tab.log_search.count_label().map(SharedString::from);
+        let search_has_matches = !tab.log_search.matches.is_empty();
         let log_focus = tab.log_focus.clone();
         let log_list_state = tab.log_list_state.clone();
         let logs = tab.state.logs.clone();
@@ -1862,6 +2083,22 @@ impl Render for SashaApp {
         let on_rx_save = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.save_receive_logs(cx));
         });
+        let weak = cx.entity().downgrade();
+        let on_rx_search = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_search(window, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_search_prev = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.jump_search_match(false, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_search_next = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.jump_search_match(true, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_search_close = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.close_search(window, cx));
+        });
 
         let weak = cx.entity().downgrade();
         let on_tx_display_hex = Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -1942,7 +2179,48 @@ impl Render for SashaApp {
                     return;
                 }
 
+                let is_search_shortcut = (event.keystroke.modifiers.control
+                    || event.keystroke.modifiers.platform)
+                    && !event.keystroke.modifiers.alt
+                    && !event.keystroke.modifiers.shift
+                    && event.keystroke.key.eq_ignore_ascii_case("f");
+                if is_search_shortcut {
+                    this.open_search(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+
+                if event.keystroke.key.eq_ignore_ascii_case("f3")
+                    && this.active_tab().log_search.open
+                {
+                    this.jump_search_match(!event.keystroke.modifiers.shift, cx);
+                    cx.stop_propagation();
+                    return;
+                }
+
                 if this.active_tab().state.active_picker.is_none() {
+                    if this.active_tab().log_search.open {
+                        match event.keystroke.key.as_str() {
+                            "escape" => {
+                                this.close_search(window, cx);
+                                cx.stop_propagation();
+                            }
+                            "enter" if event.keystroke.modifiers.shift => {
+                                let search_focused = this
+                                    .active_tab()
+                                    .search_input
+                                    .as_ref()
+                                    .is_some_and(|input| {
+                                        input.read(cx).focus_handle(cx).is_focused(window)
+                                    });
+                                if search_focused {
+                                    this.jump_search_match(false, cx);
+                                    cx.stop_propagation();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     return;
                 }
 
@@ -1975,6 +2253,7 @@ impl Render for SashaApp {
                             .child(
                                 v_flex()
                                     .id("receive-area")
+                                    .relative()
                                     .flex_1()
                                     .min_h_0()
                                     .w_full()
@@ -1987,7 +2266,25 @@ impl Render for SashaApp {
                                         log_font_size,
                                         log_focus,
                                         log_list_state,
-                                    )),
+                                        search_matches,
+                                        active_search_match,
+                                    ))
+                                    .when_some(search_input, |this, input| {
+                                        this.child(
+                                            div().absolute().bottom(px(8.)).right(px(16.)).child(
+                                                LogSearchBar::new(
+                                                    self.theme,
+                                                    locale,
+                                                    input,
+                                                    search_count_label,
+                                                    search_has_matches,
+                                                    on_search_prev,
+                                                    on_search_next,
+                                                    on_search_close,
+                                                ),
+                                            ),
+                                        )
+                                    }),
                             )
                             .child(ReceiveToolbar::new(
                                 self.theme,
@@ -1995,6 +2292,7 @@ impl Render for SashaApp {
                                 receive_state,
                                 send_state.send_hex,
                                 send_state.line_ending,
+                                search_open,
                                 motion.rx_hex,
                                 motion.rx_timestamp,
                                 motion.rx_pause,
@@ -2007,6 +2305,7 @@ impl Render for SashaApp {
                                 on_rx_auto_scroll,
                                 on_rx_clear,
                                 on_rx_save,
+                                on_rx_search,
                                 on_tx_send_hex,
                                 on_tx_line_ending,
                             ))
@@ -2036,6 +2335,10 @@ impl Render for SashaApp {
                                 conn_action_label,
                                 motion.connection,
                                 counters,
+                                bottom_buffer_label(
+                                    locale,
+                                    &format_log_buffer_limit(log_buffer_limit),
+                                ),
                                 active_picker,
                                 on_pick,
                                 on_toggle_connection,
@@ -2080,6 +2383,8 @@ impl Render for SashaApp {
                             self.picker_port_presets.clone(),
                             motion.picker_open_epoch,
                             self.active_tab().state.config.clone(),
+                            (kind == ActivePickerKind::BufferLimit)
+                                .then(|| format_log_buffer_limit(log_buffer_limit)),
                             input,
                             self.picker_error.clone(),
                             on_select_preset,

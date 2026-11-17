@@ -8,7 +8,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{Locale, tr_shared};
-use crate::model::{LogDirection, LogEntry, ReceiveViewState, selectable_log_line};
+use crate::model::{LogDirection, LogEntry, ReceiveViewState, SearchMatch, selectable_log_line};
 use crate::ui::theme::NanoTheme;
 
 /// Scrollable receive/transmit log area.
@@ -23,6 +23,8 @@ pub struct LogView {
     log_font_size: u16,
     focus: FocusHandle,
     list_state: ListState,
+    search_matches: Rc<Vec<SearchMatch>>,
+    active_match: Option<usize>,
 }
 
 impl LogView {
@@ -36,6 +38,8 @@ impl LogView {
         log_font_size: u16,
         focus: FocusHandle,
         list_state: ListState,
+        search_matches: Rc<Vec<SearchMatch>>,
+        active_match: Option<usize>,
     ) -> Self {
         Self {
             theme,
@@ -46,6 +50,8 @@ impl LogView {
             log_font_size,
             focus,
             list_state,
+            search_matches,
+            active_match,
         }
     }
 }
@@ -61,6 +67,8 @@ impl RenderOnce for LogView {
         let list_state = self.list_state;
         let logs = Rc::new(self.logs);
         let simulated_notice = self.simulated_notice;
+        let search_matches = self.search_matches;
+        let active_match = self.active_match;
 
         div()
             .id("log-scroll-container")
@@ -95,6 +103,19 @@ impl RenderOnce for LogView {
                             },
                         ));
                         let simulated = entry.is_simulated;
+                        let start = search_matches.partition_point(|m| m.log_index < index);
+                        let mut normal_search_ranges = Vec::new();
+                        let mut active_search_ranges = Vec::new();
+                        for (offset, m) in search_matches[start..].iter().enumerate() {
+                            if m.log_index != index {
+                                break;
+                            }
+                            if active_match == Some(start + offset) {
+                                active_search_ranges.push(m.byte_range.clone());
+                            } else {
+                                normal_search_ranges.push(m.byte_range.clone());
+                            }
+                        }
 
                         h_flex()
                             .w_full()
@@ -111,6 +132,8 @@ impl RenderOnce for LogView {
                                 ElementId::named_usize("log-line", entry.id as usize),
                                 line.text,
                                 highlights,
+                                normal_search_ranges,
+                                active_search_ranges,
                                 index as u64,
                                 rgba(0x2563EB99).into(),
                             )))
@@ -155,16 +178,21 @@ struct LogLineText {
     id: ElementId,
     text: SharedString,
     highlights: Vec<(Range<usize>, HighlightStyle)>,
+    normal_search_ranges: Vec<Range<usize>>,
+    active_search_ranges: Vec<Range<usize>>,
     document_order: u64,
     selection_color: Hsla,
     styled: StyledText,
 }
 
 impl LogLineText {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: ElementId,
         text: impl Into<SharedString>,
         highlights: Vec<(Range<usize>, HighlightStyle)>,
+        normal_search_ranges: Vec<Range<usize>>,
+        active_search_ranges: Vec<Range<usize>>,
         document_order: u64,
         selection_color: Hsla,
     ) -> Self {
@@ -174,6 +202,8 @@ impl LogLineText {
             id,
             text,
             highlights,
+            normal_search_ranges,
+            active_search_ranges,
             document_order,
             selection_color,
             styled,
@@ -311,6 +341,14 @@ impl Element for LogLineText {
         cx: &mut App,
     ) {
         let layout = self.styled.layout().clone();
+        let normal_match_bg: Hsla = rgba(0xEAB30840).into();
+        let active_match_bg: Hsla = rgba(0xF59E0B99).into();
+        for range in &self.normal_search_ranges {
+            Self::paint_selection(&layout, range.clone(), normal_match_bg, window);
+        }
+        for range in &self.active_search_ranges {
+            Self::paint_selection(&layout, range.clone(), active_match_bg, window);
+        }
         let projection = handle.update_runs(
             &[
                 TextSelectionRun::new(self.text.clone(), layout.clone(), bounds)

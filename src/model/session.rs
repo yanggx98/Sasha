@@ -3,6 +3,7 @@ use std::borrow::Cow;
 use crate::i18n::{Locale, tr};
 
 use super::log::format_hex_bytes;
+use super::settings::DEFAULT_LOG_BUFFER_LIMIT;
 use super::{
     ActivePickerKind, LogDirection, LogEntry, SendPayloadError, SerialConfig, format_visible_logs,
     parse_hex_bytes,
@@ -52,7 +53,17 @@ impl SimulatedConnectionState {
     }
 }
 
-pub const MAX_VISIBLE_LOGS: usize = 2000;
+fn trim_log_buffer(logs: &mut Vec<LogEntry>, limit: usize) {
+    let mut total: usize = logs.iter().map(|entry| entry.bytes.len()).sum();
+    let mut drop_count = 0;
+    while drop_count + 1 < logs.len() && total > limit {
+        total = total.saturating_sub(logs[drop_count].bytes.len());
+        drop_count += 1;
+    }
+    if drop_count > 0 {
+        logs.drain(..drop_count);
+    }
+}
 
 /// Receive view display flags (independent from send card HEX flag).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,6 +166,8 @@ pub struct SessionState {
     pub counters: SessionCounters,
     pub logs: Vec<LogEntry>,
     pub retained_while_paused: Vec<LogEntry>,
+    /// Maximum receive-log payload kept, in bytes. Oldest rows are dropped past this cap.
+    pub log_buffer_limit: usize,
     #[allow(dead_code)]
     pub active_picker: Option<ActivePickerKind>,
     next_log_id: u64,
@@ -199,6 +212,7 @@ impl SessionState {
                 LogEntry::new_simulated(3, "14:26:07.343", LogDirection::Rx, rx_payload_2),
             ],
             retained_while_paused: Vec::new(),
+            log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT as usize,
             active_picker: None,
             next_log_id: 4,
             next_sim_rx_seq: 0,
@@ -223,6 +237,7 @@ impl SessionState {
             counters: SessionCounters::default(),
             logs: Vec::new(),
             retained_while_paused: Vec::new(),
+            log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT as usize,
             active_picker: None,
             next_log_id: 1,
             next_sim_rx_seq: 0,
@@ -323,11 +338,15 @@ impl SessionState {
         }
     }
 
+    /// Sets the receive-log payload cap in bytes and drops the oldest rows past it.
+    pub fn set_log_buffer_limit(&mut self, limit: usize) {
+        self.log_buffer_limit = limit.max(1);
+        self.trim_visible_logs();
+        trim_log_buffer(&mut self.retained_while_paused, self.log_buffer_limit);
+    }
+
     fn trim_visible_logs(&mut self) {
-        if self.logs.len() > MAX_VISIBLE_LOGS {
-            let excess = self.logs.len() - MAX_VISIBLE_LOGS;
-            self.logs.drain(..excess);
-        }
+        trim_log_buffer(&mut self.logs, self.log_buffer_limit);
     }
 
     fn build_log_entry(
@@ -436,10 +455,7 @@ impl SessionState {
         self.toggle_send_display_hex_for(Locale::ZhCn)
     }
 
-    pub fn toggle_send_display_hex_for(
-        &mut self,
-        locale: Locale,
-    ) -> Result<(), Cow<'static, str>> {
+    pub fn toggle_send_display_hex_for(&mut self, locale: Locale) -> Result<(), Cow<'static, str>> {
         if self.send.display_hex {
             if self.send.text.trim().is_empty() {
                 self.send.text.clear();
@@ -460,8 +476,7 @@ impl SessionState {
                 }
             };
 
-            let text =
-                String::from_utf8(bytes).map_err(|_| tr(locale, "err.hex_non_utf8"))?;
+            let text = String::from_utf8(bytes).map_err(|_| tr(locale, "err.hex_non_utf8"))?;
             self.send.text = text;
             self.send.display_hex = false;
             Ok(())
@@ -1094,5 +1109,35 @@ mod tests {
 
         state.cycle_send_line_ending();
         assert_eq!(state.send.line_ending, SendLineEnding::None);
+    }
+
+    #[test]
+    fn lowering_buffer_limit_drops_oldest_bytes() {
+        let mut state = SessionState::new_simulated_demo();
+        assert_eq!(state.log_buffer_limit, DEFAULT_LOG_BUFFER_LIMIT as usize);
+        assert_eq!(state.logs.len(), 3);
+
+        let newest = state.logs.last().unwrap().bytes.len();
+        state.set_log_buffer_limit(newest);
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs[0].id, 3);
+
+        state.receive.paused = true;
+        state.record_log(LogEntry::new_simulated(
+            9,
+            "14:26:08.000",
+            LogDirection::Rx,
+            b"QUEUED".to_vec(),
+        ));
+        state.record_log(LogEntry::new_simulated(
+            10,
+            "14:26:08.001",
+            LogDirection::Rx,
+            b"QUEUED2".to_vec(),
+        ));
+        state.set_log_buffer_limit(b"QUEUED2".len());
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.retained_while_paused.len(), 1);
+        assert_eq!(state.retained_while_paused[0].id, 10);
     }
 }

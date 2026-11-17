@@ -26,6 +26,7 @@ pub struct BottomBar {
     action_label: SharedString,
     connection_flag: TransitionFlag,
     counters: SessionCounters,
+    buffer_label: SharedString,
     active_picker: Option<ActivePickerKind>,
     on_pick: PickParamCallback,
     on_toggle_connection: ToggleConnectionCallback,
@@ -42,6 +43,7 @@ impl BottomBar {
         action_label: impl Into<SharedString>,
         connection_flag: TransitionFlag,
         counters: SessionCounters,
+        buffer_label: impl Into<SharedString>,
         active_picker: Option<ActivePickerKind>,
         on_pick: PickParamCallback,
         on_toggle_connection: ToggleConnectionCallback,
@@ -55,6 +57,7 @@ impl BottomBar {
             action_label: action_label.into(),
             connection_flag,
             counters,
+            buffer_label: buffer_label.into(),
             active_picker,
             on_pick,
             on_toggle_connection,
@@ -190,6 +193,11 @@ impl RenderOnce for BottomBar {
                     .gap_3()
                     .text_xs()
                     .text_color(self.theme.text_secondary)
+                    .child(self.param_item(
+                        "param-buffer",
+                        ActivePickerKind::BufferLimit,
+                        self.buffer_label.clone(),
+                    ))
                     .child(format!("RX: {} B", self.counters.rx_bytes))
                     .child(format!("TX: {} B", self.counters.tx_bytes)),
             )

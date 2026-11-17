@@ -386,6 +386,173 @@ pub fn current_timestamp_hms_ms() -> String {
     chrono::Local::now().format("%H:%M:%S%.3f").to_string()
 }
 
+/// A single search match within a rendered log line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    /// Index of the matching entry in `SessionState::logs`.
+    pub log_index: usize,
+    /// UTF-8 byte range within `selectable_log_line(entry, show_timestamp, hex_mode).text`.
+    pub byte_range: std::ops::Range<usize>,
+}
+
+/// Per-tab log search state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogSearchState {
+    pub open: bool,
+    pub query: String,
+    pub matches: Vec<SearchMatch>,
+    pub active_match: Option<usize>,
+}
+
+impl LogSearchState {
+    /// Recomputes matches against `logs` for the current display flags.
+    /// When `preserve_active` is true, keeps the active index clamped to the new match count.
+    pub fn recompute(
+        &mut self,
+        logs: &[LogEntry],
+        show_timestamp: bool,
+        hex_mode: bool,
+        preserve_active: bool,
+    ) {
+        self.matches = find_log_matches(logs, &self.query, show_timestamp, hex_mode);
+        if self.matches.is_empty() {
+            self.active_match = None;
+        } else if preserve_active {
+            let idx = self.active_match.unwrap_or(0).min(self.matches.len() - 1);
+            self.active_match = Some(idx);
+        } else {
+            self.active_match = Some(0);
+        }
+    }
+
+    /// Advances to the next match (wrapping around) and returns it.
+    pub fn next(&mut self) -> Option<&SearchMatch> {
+        if self.matches.is_empty() {
+            self.active_match = None;
+            return None;
+        }
+        let next = match self.active_match {
+            Some(i) => (i + 1) % self.matches.len(),
+            None => 0,
+        };
+        self.active_match = Some(next);
+        self.matches.get(next)
+    }
+
+    /// Moves to the previous match (wrapping around) and returns it.
+    pub fn prev(&mut self) -> Option<&SearchMatch> {
+        if self.matches.is_empty() {
+            self.active_match = None;
+            return None;
+        }
+        let prev = match self.active_match {
+            Some(0) | None => self.matches.len() - 1,
+            Some(i) => i - 1,
+        };
+        self.active_match = Some(prev);
+        self.matches.get(prev)
+    }
+
+    /// Returns the currently active match, if any.
+    pub fn current(&self) -> Option<&SearchMatch> {
+        self.active_match.and_then(|idx| self.matches.get(idx))
+    }
+
+    /// Formats `"current/total"` (1-based), `"0/0"`, or `None` when the query is empty.
+    pub fn count_label(&self) -> Option<String> {
+        if self.query.is_empty() {
+            return None;
+        }
+        if self.matches.is_empty() {
+            Some("0/0".to_string())
+        } else {
+            let current = self.active_match.unwrap_or(0) + 1;
+            Some(format!("{}/{}", current, self.matches.len()))
+        }
+    }
+}
+
+/// Finds all case-insensitive non-overlapping matches of `query` across visible log lines.
+pub fn find_log_matches(
+    logs: &[LogEntry],
+    query: &str,
+    show_timestamp: bool,
+    hex_mode: bool,
+) -> Vec<SearchMatch> {
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let mut matches = Vec::new();
+    for (log_index, entry) in logs.iter().enumerate() {
+        let line = selectable_log_line(entry, show_timestamp, hex_mode);
+        for byte_range in find_case_insensitive_ranges(&line.text, query) {
+            matches.push(SearchMatch {
+                log_index,
+                byte_range,
+            });
+        }
+    }
+    matches
+}
+
+fn find_case_insensitive_ranges(haystack: &str, needle: &str) -> Vec<std::ops::Range<usize>> {
+    if needle.is_empty() || haystack.is_empty() {
+        return Vec::new();
+    }
+
+    if haystack.is_ascii() && needle.is_ascii() {
+        let haystack_lower = haystack.to_ascii_lowercase();
+        let needle_lower = needle.to_ascii_lowercase();
+        let mut ranges = Vec::new();
+        let mut offset = 0;
+        while let Some(pos) = haystack_lower[offset..].find(&needle_lower) {
+            let start = offset + pos;
+            let end = start + needle_lower.len();
+            ranges.push(start..end);
+            offset = end;
+        }
+        return ranges;
+    }
+
+    let needle_lower: Vec<char> = needle.chars().flat_map(|c| c.to_lowercase()).collect();
+    if needle_lower.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ranges = Vec::new();
+    let mut byte_idx = 0;
+    while byte_idx < haystack.len() {
+        if let Some(matched_len) = starts_with_lower_chars(&haystack[byte_idx..], &needle_lower) {
+            let end = byte_idx + matched_len;
+            ranges.push(byte_idx..end);
+            byte_idx = end;
+        } else if let Some(ch) = haystack[byte_idx..].chars().next() {
+            byte_idx += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    ranges
+}
+
+fn starts_with_lower_chars(slice: &str, needle_lower: &[char]) -> Option<usize> {
+    let mut needle_iter = needle_lower.iter().copied();
+    let mut current_target = needle_iter.next()?;
+    for (offset, ch) in slice.char_indices() {
+        for lc in ch.to_lowercase() {
+            if lc != current_target {
+                return None;
+            }
+            match needle_iter.next() {
+                Some(next) => current_target = next,
+                None => return Some(offset + ch.len_utf8()),
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -744,5 +911,67 @@ mod tests {
         assert!(bytes[3..5].iter().all(u8::is_ascii_digit));
         assert!(bytes[6..8].iter().all(u8::is_ascii_digit));
         assert!(bytes[9..12].iter().all(u8::is_ascii_digit));
+    }
+
+    #[test]
+    fn search_matches_case_insensitively_and_navigates() {
+        let logs = vec![
+            LogEntry::new(1, "12:00:00.000", LogDirection::Tx, b"AT+CSQ".to_vec()),
+            LogEntry::new(2, "12:00:00.100", LogDirection::Rx, b"+CSQ: 24,99".to_vec()),
+            LogEntry::new(3, "12:00:00.200", LogDirection::Rx, b"AT+OK at".to_vec()),
+        ];
+
+        let mut search = LogSearchState {
+            query: "at".to_string(),
+            ..Default::default()
+        };
+        search.recompute(&logs, false, false, false);
+
+        assert_eq!(search.matches.len(), 3);
+        assert_eq!(search.active_match, Some(0));
+        assert_eq!(search.count_label().as_deref(), Some("1/3"));
+        assert_eq!(search.current().map(|m| m.log_index), Some(0));
+
+        assert_eq!(search.next().map(|m| m.log_index), Some(2));
+        assert_eq!(search.count_label().as_deref(), Some("2/3"));
+
+        assert_eq!(search.next().map(|m| m.log_index), Some(2));
+        assert_eq!(search.count_label().as_deref(), Some("3/3"));
+
+        // Wrap around forward
+        assert_eq!(search.next().map(|m| m.log_index), Some(0));
+        assert_eq!(search.count_label().as_deref(), Some("1/3"));
+
+        // Wrap around backward
+        assert_eq!(search.prev().map(|m| m.log_index), Some(2));
+        assert_eq!(search.count_label().as_deref(), Some("3/3"));
+    }
+
+    #[test]
+    fn search_handles_empty_unicode_and_hex_modes() {
+        let logs = vec![LogEntry::new(
+            1,
+            "12:00:00.000",
+            LogDirection::Rx,
+            "你好AT".as_bytes().to_vec(),
+        )];
+
+        let mut search = LogSearchState {
+            query: "你好at".to_string(),
+            ..Default::default()
+        };
+        search.recompute(&logs, false, false, false);
+        assert_eq!(search.matches.len(), 1);
+        let line = selectable_log_line(&logs[0], false, false);
+        assert_eq!(&line.text[search.matches[0].byte_range.clone()], "你好AT");
+
+        // In HEX mode, text query no longer matches UTF-8 literal, while hex bytes do.
+        search.recompute(&logs, false, true, false);
+        assert_eq!(search.matches.len(), 0);
+        assert_eq!(search.count_label().as_deref(), Some("0/0"));
+
+        search.query = "41 54".to_string();
+        search.recompute(&logs, false, true, false);
+        assert_eq!(search.matches.len(), 1);
     }
 }

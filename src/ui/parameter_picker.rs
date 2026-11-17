@@ -25,6 +25,7 @@ pub struct ParameterPickerPopover {
     port_presets: Vec<String>,
     open_epoch: u64,
     config: SerialConfig,
+    current_override: Option<String>,
     input: Entity<InputState>,
     error: Option<SharedString>,
     on_select_preset: SelectPresetCallback,
@@ -40,6 +41,7 @@ impl ParameterPickerPopover {
         port_presets: Vec<String>,
         open_epoch: u64,
         config: SerialConfig,
+        current_override: Option<String>,
         input: Entity<InputState>,
         error: Option<SharedString>,
         on_select_preset: SelectPresetCallback,
@@ -52,6 +54,7 @@ impl ParameterPickerPopover {
             port_presets,
             open_epoch,
             config,
+            current_override,
             input,
             error,
             on_select_preset,
@@ -63,7 +66,10 @@ impl RenderOnce for ParameterPickerPopover {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = self.theme;
         let locale = self.locale;
-        let current_value = self.config.current_value_str_for(self.kind, locale);
+        let current_value = self
+            .current_override
+            .clone()
+            .unwrap_or_else(|| self.config.current_value_str_for(self.kind, locale));
         let typed_value = self.input.read(cx).value().to_string();
         let trimmed_typed = typed_value.trim().to_string();
         let presets = if self.kind == ActivePickerKind::Port && !self.is_simulated {
