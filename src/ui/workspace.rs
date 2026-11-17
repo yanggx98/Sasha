@@ -927,8 +927,6 @@ impl SashaApp {
             TextareaState::new(window, cx)
                 .placeholder(placeholder)
                 .default_value(initial_text)
-                .caret_style(px(4.), px(2.))
-                .hide_placeholder_on_focus(true)
         });
         let entity_for_sub = entity.clone();
         let sub = cx.subscribe_in(

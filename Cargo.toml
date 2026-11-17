@@ -13,8 +13,5 @@ serde = { version = "1", features = ["derive"] }
 serialport = "4.10.1"
 toml = "0.8"
 
-[patch.crates-io]
-gpui-base = { path = "vendor/gpui-base" }
-
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] }
