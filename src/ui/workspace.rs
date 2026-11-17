@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -5,6 +7,7 @@ use std::time::Duration;
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -15,22 +18,34 @@ use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, LogSelectionModel, Parity, SendPayloadError,
     SessionState, StopBits, current_timestamp_hms_ms,
 };
+use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
+use crate::session_service::{SessionService, SessionTxError};
 use crate::ui::bottom_bar::BottomBar;
 use crate::ui::log_view::LogView;
 use crate::ui::motion::UiMotionState;
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
+use crate::ui::script_panel::{
+    ResizeScriptPanel, SCRIPT_PANEL_MIN_WIDTH, SCRIPT_PANEL_WIDTH, ScriptPanel, ScriptPanelItem,
+    dragged_panel_width, panel_is_compact, panel_width,
+};
 use crate::ui::send_card::SendCard;
 use crate::ui::settings_window::SettingsWindow;
 use crate::ui::start_page::{StartPage, StartPageState};
-use crate::ui::tab_rail::{TabItem, TabRail};
+use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPage {
     Start,
     Workspace,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ScriptEntryState {
+    run_id: Option<u64>,
+    status: Option<ScriptStatus>,
 }
 
 struct SessionTab {
@@ -45,6 +60,7 @@ struct SessionTab {
     _start_baud_sub: Option<Subscription>,
     serial_conn: Option<SerialConnection>,
     serial_rx_task: Option<Task<()>>,
+    session_service: SessionService,
     send_input: Option<Entity<TextareaState>>,
     _send_subscription: Option<Subscription>,
     send_error: Option<SharedString>,
@@ -55,6 +71,12 @@ struct SessionTab {
     last_tail_len: usize,
     last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
+    script_paths: Vec<PathBuf>,
+    script_states: HashMap<PathBuf, ScriptEntryState>,
+    script_manager: ScriptManager,
+    script_poll_task: Option<Task<()>>,
+    script_preferred_width: Pixels,
+    script_load_error: Option<SharedString>,
 }
 
 impl SessionTab {
@@ -87,6 +109,7 @@ impl SessionTab {
             _start_baud_sub: None,
             serial_conn: None,
             serial_rx_task: None,
+            session_service: SessionService::new(),
             send_input: None,
             _send_subscription: None,
             send_error: None,
@@ -97,6 +120,12 @@ impl SessionTab {
             last_tail_len: 0,
             last_display_flags: (true, false),
             log_selection,
+            script_paths: Vec::new(),
+            script_states: HashMap::new(),
+            script_manager: ScriptManager::new(),
+            script_poll_task: None,
+            script_preferred_width: SCRIPT_PANEL_MIN_WIDTH,
+            script_load_error: None,
         }
     }
 
@@ -114,6 +143,7 @@ impl SessionTab {
             is_active: self.id == active_id,
             is_connected: self.page == AppPage::Workspace && self.state.connection.is_connected(),
             is_simulated: self.page == AppPage::Workspace && self.state.is_simulated_session,
+            running_script_count: self.script_manager.running_count(),
         }
     }
 
@@ -180,8 +210,81 @@ impl SessionTab {
         self.last_display_flags = display_flags;
     }
 
+    fn drain_tx_completed_logs(&mut self) -> bool {
+        let completed = self.session_service.drain_tx_completed();
+        if completed.is_empty() {
+            return false;
+        }
+        let ts = current_timestamp_hms_ms();
+        for event in completed {
+            self.state.record_tx_bytes(&event.bytes, &ts);
+        }
+        self.log_selection.observe_log_len(self.state.logs.len());
+        true
+    }
+
+    fn drain_script_events(&mut self) -> bool {
+        let events = self.script_manager.drain_events();
+        if events.is_empty() {
+            return false;
+        }
+        for event in events {
+            match event {
+                ScriptEvent::Started { run_id, path, .. } => {
+                    let entry = self.script_states.entry(path).or_default();
+                    if entry.run_id.is_none_or(|existing| run_id >= existing) {
+                        entry.run_id = Some(run_id);
+                        if entry.status.is_none() {
+                            entry.status = Some(ScriptStatus::Running);
+                        }
+                    }
+                }
+                ScriptEvent::StatusChanged { run_id, status } => {
+                    if let Some(entry) = self
+                        .script_states
+                        .values_mut()
+                        .find(|entry| entry.run_id == Some(run_id))
+                    {
+                        entry.status = Some(status);
+                    }
+                }
+                ScriptEvent::Log(_) => {}
+            }
+        }
+        true
+    }
+
+    fn script_panel_items(&self, locale: Locale) -> Vec<ScriptPanelItem> {
+        let is_simulated = self.state.is_simulated_session;
+        let is_connected = self.state.connection.is_connected();
+        let can_run = !is_simulated && is_connected;
+        let disabled_reason = if is_simulated {
+            Some(tr_shared(locale, "scripts.simulated_unsupported"))
+        } else if !is_connected {
+            Some(tr_shared(locale, "scripts.connect_to_run"))
+        } else {
+            None
+        };
+        self.script_paths
+            .iter()
+            .map(|path| {
+                let state = self.script_states.get(path);
+                ScriptPanelItem {
+                    path: path.clone(),
+                    run_id: state.and_then(|s| s.run_id),
+                    status: state.and_then(|s| s.status.clone()),
+                    can_run,
+                    disabled_reason: disabled_reason.clone(),
+                }
+            })
+            .collect()
+    }
+
     fn disconnect_real_serial(&mut self, error: Option<String>) {
         self.serial_rx_task = None;
+        self.session_service.disconnect(error.clone());
+        self.script_manager.handle_disconnect(error.clone());
+        self.drain_script_events();
         if let Some(mut conn) = self.serial_conn.take() {
             conn.close();
         }
@@ -190,6 +293,12 @@ impl SessionTab {
         if let Some(err) = error {
             self.send_error = Some(err.into());
         }
+    }
+}
+
+impl Drop for SessionTab {
+    fn drop(&mut self) {
+        self.disconnect_real_serial(None);
     }
 }
 
@@ -247,11 +356,7 @@ impl SashaApp {
         for tab in &self.tabs {
             if let Some(input) = &tab.start_manual_port_input {
                 input.update(cx, |state, cx| {
-                    state.set_placeholder(
-                        tr(locale, "start.manual_port_placeholder"),
-                        window,
-                        cx,
-                    );
+                    state.set_placeholder(tr(locale, "start.manual_port_placeholder"), window, cx);
                 });
             }
             if let Some(input) = &tab.start_baud_input {
@@ -611,9 +716,13 @@ impl SashaApp {
         let locale = self.current_locale(cx);
         let config = self.active_tab().start_page.config.clone();
         match SerialConnection::open_for(&config, locale) {
-            Ok((conn, rx)) => {
+            Ok((mut conn, rx)) => {
+                let writer = conn
+                    .take_writer()
+                    .expect("newly opened SerialConnection must have a writer");
                 let tab = self.active_tab_mut();
                 tab.disconnect_real_serial(None);
+                let generation = tab.session_service.attach_writer(writer);
                 tab.state = SessionState::new_real_session(config, true);
                 tab.sync_motion_and_selection_from_state();
                 tab.send_input = None;
@@ -622,7 +731,7 @@ impl SashaApp {
                 tab.start_page.connect_error = None;
                 tab.serial_conn = Some(conn);
                 tab.page = AppPage::Workspace;
-                self.start_serial_rx_loop(tab_id, rx, cx);
+                self.start_serial_rx_loop(tab_id, rx, generation, cx);
                 cx.notify();
             }
             Err(err) => {
@@ -648,8 +757,13 @@ impl SashaApp {
         &mut self,
         tab_id: u64,
         rx: Receiver<SerialEvent>,
+        generation: u64,
         cx: &mut Context<Self>,
     ) {
+        let Some(session_service) = self.tab_mut(tab_id).map(|tab| tab.session_service.clone())
+        else {
+            return;
+        };
         let task = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -662,7 +776,10 @@ impl SashaApp {
 
                 loop {
                     match rx.try_recv() {
-                        Ok(SerialEvent::Rx(bytes)) => rx_chunks.push(bytes),
+                        Ok(SerialEvent::Rx(bytes)) => {
+                            session_service.publish_rx(generation, &bytes);
+                            rx_chunks.push(bytes);
+                        }
                         Ok(SerialEvent::Disconnected(err)) => {
                             disconnected_err = Some(err);
                             break;
@@ -675,18 +792,23 @@ impl SashaApp {
                     }
                 }
 
+                let tx_completed = session_service.drain_tx_completed();
                 let should_break = disconnected_err.is_some() || channel_closed;
-                if !rx_chunks.is_empty() || should_break {
+                if !rx_chunks.is_empty() || !tx_completed.is_empty() || should_break {
                     let updated = this.update(cx, |app, cx| {
                         let is_active = app.active_tab_id == tab_id;
-                        let closed_msg = tr(app.current_locale(cx), "serial.rx_closed").into_owned();
+                        let closed_msg =
+                            tr(app.current_locale(cx), "serial.rx_closed").into_owned();
                         let Some(tab) = app.tab_mut(tab_id) else {
                             return false;
                         };
-                        if !rx_chunks.is_empty() {
+                        if !rx_chunks.is_empty() || !tx_completed.is_empty() {
                             let ts = current_timestamp_hms_ms();
                             for chunk in rx_chunks {
                                 tab.state.append_rx_bytes(&chunk, &ts);
+                            }
+                            for event in tx_completed {
+                                tab.state.record_tx_bytes(&event.bytes, &ts);
                             }
                             tab.log_selection.observe_log_len(tab.state.logs.len());
                         }
@@ -727,13 +849,17 @@ impl SashaApp {
         };
         let locale = self.current_locale(cx);
         match SerialConnection::open_for(&config, locale) {
-            Ok((conn, rx)) => {
+            Ok((mut conn, rx)) => {
+                let writer = conn
+                    .take_writer()
+                    .expect("newly opened SerialConnection must have a writer");
                 let tab = self.active_tab_mut();
+                let generation = tab.session_service.attach_writer(writer);
                 tab.serial_conn = Some(conn);
                 tab.state.set_connected(true);
                 tab.motion.connection.set(true);
                 tab.send_error = None;
-                self.start_serial_rx_loop(tab_id, rx, cx);
+                self.start_serial_rx_loop(tab_id, rx, generation, cx);
             }
             Err(err) => {
                 let tab = self.active_tab_mut();
@@ -1012,9 +1138,7 @@ impl SashaApp {
     pub fn toggle_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
         tab.state.toggle_auto_scroll();
-        tab.motion
-            .rx_auto_scroll
-            .set(tab.state.receive.auto_scroll);
+        tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
         if tab.state.receive.auto_scroll {
             tab.log_list_state.scroll_to_end();
         }
@@ -1077,6 +1201,153 @@ impl SashaApp {
         .detach();
     }
 
+    fn load_scripts(&mut self, tab_id: u64, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        // GPUI's native picker has no extension-filter option. Validate the selection here.
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some(tr_shared(locale, "scripts.load")),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picker.await;
+            let _ = this.update(cx, |this, cx| {
+                let locale = this.current_locale(cx);
+                let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) else {
+                    return;
+                };
+                match result {
+                    Ok(Ok(Some(paths))) => {
+                        let mut invalid = false;
+                        for path in paths {
+                            if path
+                                .extension()
+                                .is_some_and(|ext| ext.eq_ignore_ascii_case("lua"))
+                                && path.is_file()
+                            {
+                                if !tab.script_paths.contains(&path) {
+                                    tab.script_paths.push(path);
+                                }
+                            } else {
+                                invalid = true;
+                            }
+                        }
+                        tab.script_load_error =
+                            invalid.then(|| tr_shared(locale, "scripts.lua_only"));
+                    }
+                    Ok(Ok(None)) => return,
+                    _ => tab.script_load_error = Some(tr_shared(locale, "scripts.load_failed")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn ensure_script_poller(&mut self, tab_id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return;
+        };
+        if tab.script_poll_task.is_some() {
+            return;
+        }
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+                let keep_going = this.update(cx, |app, cx| {
+                    let Some(tab) = app.tab_mut(tab_id) else {
+                        return false;
+                    };
+                    let had_script_events = tab.drain_script_events();
+                    let had_tx_logs = tab.drain_tx_completed_logs();
+                    if had_script_events || had_tx_logs {
+                        cx.notify();
+                    }
+                    let still_running = tab.script_manager.running_count() > 0;
+                    if !still_running {
+                        tab.script_poll_task = None;
+                    }
+                    still_running
+                });
+                match keep_going {
+                    Ok(true) => {}
+                    _ => break,
+                }
+            }
+        });
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.script_poll_task = Some(task);
+        }
+    }
+
+    fn run_script(&mut self, tab_id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let started = {
+            let Some(tab) = self.tab_mut(tab_id) else {
+                return;
+            };
+            if tab.state.is_simulated_session || !tab.state.connection.is_connected() {
+                return;
+            }
+            let result = std::fs::read_to_string(&path)
+                .map_err(|err| err.to_string())
+                .and_then(|source| {
+                    let generation = tab.session_service.generation();
+                    tab.script_manager.start_script(
+                        path.clone(),
+                        source,
+                        &tab.session_service,
+                        generation,
+                    )
+                });
+            let entry = tab.script_states.entry(path).or_default();
+            match result {
+                Ok(run_id) => {
+                    entry.run_id = Some(run_id);
+                    entry.status = Some(ScriptStatus::Running);
+                    tab.drain_script_events();
+                    true
+                }
+                Err(error) => {
+                    entry.run_id = None;
+                    entry.status = Some(ScriptStatus::Failed { error });
+                    false
+                }
+            }
+        };
+        if started {
+            self.ensure_script_poller(tab_id, cx);
+        }
+        cx.notify();
+    }
+
+    fn stop_script(&mut self, tab_id: u64, run_id: u64, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return;
+        };
+        tab.script_manager.stop_instance(run_id);
+        tab.drain_script_events();
+        cx.notify();
+    }
+
+    fn remove_script(&mut self, tab_id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return;
+        };
+        if let Some(entry) = tab.script_states.get(&path)
+            && let Some(run_id) = entry.run_id
+            && entry.status.as_ref().is_some_and(ScriptStatus::is_active)
+        {
+            tab.script_manager.stop_instance(run_id);
+            tab.drain_script_events();
+        }
+        tab.script_paths.retain(|item| item != &path);
+        tab.script_states.remove(&path);
+        cx.notify();
+    }
+
     pub fn inject_simulated_rx_event(&mut self, cx: &mut Context<Self>) {
         self.active_tab_mut()
             .state
@@ -1092,7 +1363,10 @@ impl SashaApp {
         }
 
         let locale = self.current_locale(cx);
-        let res = self.active_tab_mut().state.toggle_send_display_hex_for(locale);
+        let res = self
+            .active_tab_mut()
+            .state
+            .toggle_send_display_hex_for(locale);
         match res {
             Ok(()) => {
                 let (display_hex, next_text) = {
@@ -1168,24 +1442,66 @@ impl SashaApp {
         let prepared = self.active_tab().state.prepare_send_bytes();
         match prepared {
             Ok(bytes) => {
-                let tab = self.active_tab_mut();
-                if let Some(conn) = tab.serial_conn.as_mut() {
-                    match conn.write_bytes(&bytes) {
-                        Ok(()) => {
-                            tab.state
-                                .record_tx_bytes(&bytes, &current_timestamp_hms_ms());
-                            tab.send_error = None;
-                        }
-                        Err(err) => {
-                            tab.send_error = Some(err.into());
-                        }
+                let tab_id = self.active_tab_id;
+                let (service, generation) = {
+                    let tab = self.active_tab();
+                    (tab.session_service.clone(), tab.session_service.generation())
+                };
+                match service.enqueue_tx(generation, bytes, None) {
+                    Ok(reply_rx) => {
+                        cx.spawn(async move |this, cx| {
+                            let result = cx
+                                .background_executor()
+                                .spawn(async move { reply_rx.recv() })
+                                .await;
+                            let _ = this.update(cx, |app, cx| {
+                                let locale = app.current_locale(cx);
+                                let Some(tab) = app.tab_mut(tab_id) else {
+                                    return;
+                                };
+                                tab.drain_tx_completed_logs();
+                                match result {
+                                    Ok(Ok(())) => {
+                                        tab.send_error = None;
+                                    }
+                                    Ok(Err(SessionTxError::Disconnected))
+                                    | Ok(Err(SessionTxError::StaleGeneration { .. })) => {
+                                        if tab.state.connection.is_connected() {
+                                            tab.disconnect_real_serial(Some(
+                                                tr(locale, "err.send_disconnected").into_owned(),
+                                            ));
+                                        } else {
+                                            tab.send_error =
+                                                Some(tr_shared(locale, "err.send_disconnected"));
+                                        }
+                                    }
+                                    Ok(Err(SessionTxError::WriteFailed(err))) => {
+                                        tab.send_error = Some(err.into());
+                                    }
+                                    Ok(Err(SessionTxError::Cancelled)) => {}
+                                    Ok(Err(SessionTxError::QueueFull)) => {
+                                        tab.send_error =
+                                            Some(SessionTxError::QueueFull.to_string().into());
+                                    }
+                                    Err(_) => {}
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .detach();
+                        return;
                     }
-                } else {
-                    self.handle_serial_disconnected(
-                        Some(tr(locale, "err.send_disconnected").into_owned()),
-                        cx,
-                    );
-                    return;
+                    Err(SessionTxError::Disconnected)
+                    | Err(SessionTxError::StaleGeneration { .. }) => {
+                        self.handle_serial_disconnected(
+                            Some(tr(locale, "err.send_disconnected").into_owned()),
+                            cx,
+                        );
+                        return;
+                    }
+                    Err(err) => {
+                        self.active_tab_mut().send_error = Some(err.to_string().into());
+                    }
                 }
             }
             Err(SendPayloadError::Disconnected) => {
@@ -1259,7 +1575,7 @@ impl SashaApp {
         )
     }
 
-    fn build_top_bar(&self) -> impl IntoElement {
+    fn build_top_bar(&self, script_width: Pixels) -> impl IntoElement {
         div()
             .id("top-bar-overlay")
             .absolute()
@@ -1267,14 +1583,35 @@ impl SashaApp {
             .left_0()
             .right_0()
             .h(px(34.))
-            .occlude()
-            .cursor_default()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                gpui_kit::base::GlobalState::suppress_text_selection(cx);
-                // Windows needs the unhandled non-client mouse-down to start
-                // native title-bar dragging. Occlusion already blocks content below.
-            })
-            .child(TitleBar::new().bg(gpui_kit::transparent_black()).border_b_0())
+            .child(
+                div()
+                    .id("terminal-title-drag")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right(TAB_RAIL_WIDTH + script_width)
+                    .h_full()
+                    .occlude()
+                    .cursor_default()
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                    }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .right_0()
+                    .top_0()
+                    .w(TAB_RAIL_WIDTH)
+                    .h_full()
+                    .occlude()
+                    .child(
+                        TitleBar::new()
+                            .bg(gpui_kit::transparent_black())
+                            .border_b_0(),
+                    ),
+            )
     }
 }
 
@@ -1351,33 +1688,27 @@ impl Render for SashaApp {
                 .child(
                     h_flex()
                         .size_full()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .h_full()
-                                .child(StartPage::new(
-                                    self.theme,
-                                    locale,
-                                    start_page_state,
-                                    manual_port_input,
-                                    baud_input,
-                                    on_refresh_ports,
-                                    on_select_port,
-                                    on_enable_manual_port,
-                                    on_toggle_baud_dropdown,
-                                    on_select_baud,
-                                    on_toggle_frame_expanded,
-                                    on_select_data_bits,
-                                    on_select_parity,
-                                    on_select_stop_bits,
-                                    on_connect,
-                                    on_enter_simulated,
-                                )),
-                        )
+                        .child(div().flex_1().min_w_0().h_full().child(StartPage::new(
+                            self.theme,
+                            locale,
+                            start_page_state,
+                            manual_port_input,
+                            baud_input,
+                            on_refresh_ports,
+                            on_select_port,
+                            on_enable_manual_port,
+                            on_toggle_baud_dropdown,
+                            on_select_baud,
+                            on_toggle_frame_expanded,
+                            on_select_data_bits,
+                            on_select_parity,
+                            on_select_stop_bits,
+                            on_connect,
+                            on_enter_simulated,
+                        )))
                         .child(tab_rail),
                 )
-                .child(self.build_top_bar())
+                .child(self.build_top_bar(px(0.)))
                 .into_any_element();
         }
 
@@ -1407,6 +1738,56 @@ impl Render for SashaApp {
         let counters = tab.state.counters;
         let active_picker = tab.state.active_picker;
         let picker_overlay = active_picker.zip(self.picker_input.clone());
+        let script_items = tab.script_panel_items(locale);
+        let main_width = (window.viewport_size().width - TAB_RAIL_WIDTH).max(px(0.));
+        let script_panel_width = panel_width(tab.script_preferred_width, main_width);
+        let weak = cx.entity().downgrade();
+        let on_collapse_scripts = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_MIN_WIDTH;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_load_scripts = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.load_scripts(active_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_expand_scripts = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_WIDTH;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_run_script = Rc::new(move |path: PathBuf, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.run_script(active_id, path, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_stop_script = Rc::new(move |run_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.stop_script(active_id, run_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_remove_script = Rc::new(move |path: PathBuf, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.remove_script(active_id, path, cx));
+        });
+        let script_panel = ScriptPanel {
+            theme: self.theme,
+            locale,
+            items: script_items,
+            load_error: tab.script_load_error.clone(),
+            compact: panel_is_compact(script_panel_width),
+            on_load: on_load_scripts,
+            on_collapse: on_collapse_scripts,
+            on_expand: on_expand_scripts,
+            on_run: on_run_script,
+            on_stop: on_stop_script,
+            on_remove: on_remove_script,
+        };
 
         let weak_for_pick = cx.entity().downgrade();
         let on_pick = Rc::new(
@@ -1479,6 +1860,17 @@ impl Render for SashaApp {
             .size_full()
             .bg(self.theme.bg_canvas)
             .text_color(self.theme.text_primary)
+            .on_drag_move(cx.listener(
+                |this, event: &DragMoveEvent<ResizeScriptPanel>, window, cx| {
+                    let tab_id = event.drag(cx).tab_id;
+                    let main_width = window.viewport_size().width - TAB_RAIL_WIDTH;
+                    let preferred = dragged_panel_width(event.event.position.x, main_width);
+                    if let Some(tab) = this.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                        tab.script_preferred_width = preferred;
+                        cx.notify();
+                    }
+                },
+            ))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -1534,10 +1926,9 @@ impl Render for SashaApp {
                         cx.stop_propagation();
                     }
                     "enter" => {
-                        let input_focused = this
-                            .picker_input
-                            .as_ref()
-                            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+                        let input_focused = this.picker_input.as_ref().is_some_and(|input| {
+                            input.read(cx).focus_handle(cx).is_focused(window)
+                        });
                         if !input_focused {
                             this.apply_picker_input(cx);
                             cx.stop_propagation();
@@ -1595,25 +1986,21 @@ impl Render for SashaApp {
                             ))
                             // The send card overlaps the strip's lower edge so the strip reads as
                             // a drawer tucked underneath it.
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex_shrink_0()
-                                    .mt(px(-12.))
-                                    .child(SendCard::new(
-                                        self.theme,
-                                        locale,
-                                        send_state,
-                                        is_connected,
-                                        is_simulated,
-                                        motion.tx_display_hex,
-                                        motion.connection,
-                                        send_input,
-                                        send_error,
-                                        on_tx_display_hex,
-                                        on_tx_submit,
-                                    )),
-                            )
+                            .child(div().w_full().flex_shrink_0().mt(px(-12.)).child(
+                                SendCard::new(
+                                    self.theme,
+                                    locale,
+                                    send_state,
+                                    is_connected,
+                                    is_simulated,
+                                    motion.tx_display_hex,
+                                    motion.connection,
+                                    send_input,
+                                    send_error,
+                                    on_tx_display_hex,
+                                    on_tx_submit,
+                                ),
+                            ))
                             .child(BottomBar::new(
                                 self.theme,
                                 locale,
@@ -1628,9 +2015,27 @@ impl Render for SashaApp {
                                 on_toggle_connection,
                             )),
                     )
+                    .child(
+                        div()
+                            .id("script-panel-dock")
+                            .relative()
+                            .w(script_panel_width)
+                            .h_full()
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .child(script_panel)
+                            .child(
+                                resize_handle("script-resize", Axis::Horizontal)
+                                    .inside(HandleEdge::Leading)
+                                    .on_drag(
+                                        ResizeScriptPanel { tab_id: active_id },
+                                        |drag, _, _, cx| cx.new(|_| drag.clone()),
+                                    ),
+                            ),
+                    )
                     .child(tab_rail),
             )
-            .child(self.build_top_bar())
+            .child(self.build_top_bar(script_panel_width))
             .when_some(picker_overlay, |this, (kind, input)| {
                 this.child(
                     div()

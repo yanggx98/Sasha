@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
@@ -30,9 +30,28 @@ pub enum SerialEvent {
     Disconnected(String),
 }
 
+/// Owned write half of an open [`SerialConnection`].
+pub struct SerialWriteHandle {
+    port: Box<dyn serialport::SerialPort>,
+    locale: Locale,
+}
+
+impl SerialWriteHandle {
+    /// Writes `data` to the serial port and flushes the transmit buffer.
+    pub fn write_bytes(&mut self, data: &[u8]) -> Result<(), String> {
+        write_port_bytes(&mut *self.port, self.locale, data)
+    }
+}
+
+impl crate::session_service::PortWriter for SerialWriteHandle {
+    fn write_all_and_flush(&mut self, data: &[u8]) -> Result<(), String> {
+        self.write_bytes(data)
+    }
+}
+
 /// Active real hardware serial connection with a dedicated reader thread.
 pub struct SerialConnection {
-    port: Box<dyn serialport::SerialPort>,
+    port: Option<Box<dyn serialport::SerialPort>>,
     stop_flag: Arc<AtomicBool>,
     reader_handle: Option<JoinHandle<()>>,
     locale: Locale,
@@ -111,7 +130,7 @@ impl SerialConnection {
 
         Ok((
             Self {
-                port,
+                port: Some(port),
                 stop_flag,
                 reader_handle: Some(reader_handle),
                 locale,
@@ -120,24 +139,44 @@ impl SerialConnection {
         ))
     }
 
+    /// Takes ownership of the underlying write port handle for use by `SessionService`.
+    pub fn take_writer(&mut self) -> Option<SerialWriteHandle> {
+        self.port.take().map(|port| SerialWriteHandle {
+            port,
+            locale: self.locale,
+        })
+    }
+
     /// Writes `data` to the serial port and flushes the transmit buffer.
     pub fn write_bytes(&mut self, data: &[u8]) -> Result<(), String> {
-        self.port.write_all(data).map_err(|err| {
-            format_io_error(self.locale, &serial_action_write_failed(self.locale), &err)
-        })?;
-        self.port.flush().map_err(|err| {
-            format_io_error(self.locale, &serial_action_flush_failed(self.locale), &err)
-        })?;
-        Ok(())
+        let Some(port) = self.port.as_mut() else {
+            return Err(tr(self.locale, "err.send_disconnected").into_owned());
+        };
+        write_port_bytes(&mut **port, self.locale, data)
     }
 
     /// Signals the background reader thread to exit and waits for it to finish.
     pub fn close(&mut self) {
         self.stop_flag.store(true, Ordering::Release);
+        self.port.take();
         if let Some(handle) = self.reader_handle.take() {
             let _ = handle.join();
         }
     }
+}
+
+fn write_port_bytes(
+    port: &mut dyn serialport::SerialPort,
+    locale: Locale,
+    data: &[u8],
+) -> Result<(), String> {
+    port.write_all(data).map_err(|err| {
+        format_io_error(locale, &serial_action_write_failed(locale), &err)
+    })?;
+    port.flush().map_err(|err| {
+        format_io_error(locale, &serial_action_flush_failed(locale), &err)
+    })?;
+    Ok(())
 }
 
 impl Drop for SerialConnection {

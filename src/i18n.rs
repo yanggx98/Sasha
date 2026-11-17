@@ -111,6 +111,19 @@ pub fn serial_action_flush_failed(locale: Locale) -> String {
     tr(locale, "serial.action_flush_failed").into_owned()
 }
 
+pub fn scripts_status_failed(locale: Locale, error: &str) -> String {
+    rust_i18n::t!("scripts.status_failed", locale = locale.code(), error = error).into_owned()
+}
+
+pub fn scripts_running_tooltip(locale: Locale, count: usize) -> String {
+    rust_i18n::t!(
+        "scripts.running_tooltip",
+        locale = locale.code(),
+        count = count
+    )
+    .into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,7 +6,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{Locale, tr_shared};
+use crate::i18n::{Locale, scripts_running_tooltip, tr_shared};
 use crate::ui::theme::NanoTheme;
 
 pub type TabSelectCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
@@ -24,6 +24,7 @@ pub struct TabItem {
     pub is_active: bool,
     pub is_connected: bool,
     pub is_simulated: bool,
+    pub running_script_count: usize,
 }
 
 /// Right-hand vertical tab rail hosting the window controls at the top
@@ -68,6 +69,7 @@ impl RenderOnce for TabRail {
         let settings_tooltip = tr_shared(self.locale, "tab.settings_tooltip");
         let settings_label = tr_shared(self.locale, "tab.settings_label");
         let theme = self.theme;
+        let locale = self.locale;
         let on_select_tab = self.on_select_tab;
         let on_close_tab = self.on_close_tab;
         let on_new_tab = self.on_new_tab;
@@ -146,6 +148,25 @@ impl RenderOnce for TabRail {
                                     })
                                     .child(tab.title),
                             )
+                            .when(tab.running_script_count > 0, |this| {
+                                let tip: SharedString =
+                                    scripts_running_tooltip(locale, tab.running_script_count)
+                                        .into();
+                                this.child(
+                                    div()
+                                        .id(ElementId::named_usize(
+                                            "workspace-tab-scripts-running",
+                                            tab_id as usize,
+                                        ))
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .flex_shrink_0()
+                                        .bg(theme.accent_blue_hover)
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(tip.clone()).build(window, cx)
+                                        }),
+                                )
+                            })
                             .child(
                                 div()
                                     .id(ElementId::named_usize(

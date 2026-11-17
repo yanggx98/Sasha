@@ -161,7 +161,7 @@ impl ReceiveToolbar {
 }
 
 impl RenderOnce for ReceiveToolbar {
-    fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, _: &mut App) -> impl IntoElement {
         // Recessed "drawer" strip tucked underneath the send card: inset from the
         // card edges, darker surface, rounded top. The lower part is covered by
         // the send card (which overlaps it via a negative top margin).

@@ -2,7 +2,9 @@ rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod i18n;
 mod model;
+mod scripting;
 mod serial;
+mod session_service;
 mod ui;
 
 use gpui_kit::component::{Theme, ThemeMode, TitleBar};
