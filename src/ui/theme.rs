@@ -66,3 +66,14 @@ impl Default for NanoTheme {
         }
     }
 }
+
+impl NanoTheme {
+    /// Returns a copy with surface backgrounds made slightly translucent so a
+    /// workspace background image shows through without hurting readability.
+    pub fn with_translucent_surfaces(mut self) -> Self {
+        self.bg_canvas = self.bg_canvas.opacity(0.84);
+        self.bg_card = self.bg_card.opacity(0.84);
+        self.bg_strip = self.bg_strip.opacity(0.84);
+        self
+    }
+}

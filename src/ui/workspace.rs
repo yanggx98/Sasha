@@ -1,6 +1,7 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -344,6 +345,7 @@ pub struct SashaApp {
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
     picker_error: Option<SharedString>,
+    cached_bg_image: Option<(PathBuf, Option<Arc<Image>>)>,
 }
 
 impl SashaApp {
@@ -384,7 +386,56 @@ impl SashaApp {
             picker_input: None,
             _picker_subscription: None,
             picker_error: None,
+            cached_bg_image: None,
         }
+    }
+
+    fn sync_background_image(&mut self, cx: &App) -> (Option<Arc<Image>>, u8) {
+        let (path, opacity) = {
+            let cfg = self.config_store.read(cx).config();
+            (cfg.background_image.clone(), cfg.background_opacity)
+        };
+        let Some(path) = path else {
+            self.cached_bg_image = None;
+            return (None, opacity);
+        };
+        if let Some((cached_path, cached_img)) = &self.cached_bg_image
+            && cached_path == &path
+        {
+            return (cached_img.clone(), opacity);
+        }
+        let loaded = load_background_image(&path);
+        self.cached_bg_image = Some((path, loaded.clone()));
+        (loaded, opacity)
+    }
+
+    fn build_background_layer(
+        &self,
+        image: Option<Arc<Image>>,
+        opacity: u8,
+    ) -> Option<AnyElement> {
+        let image = image?;
+        if opacity == 0 {
+            return None;
+        }
+        let scrim_opacity = 1.0 - (opacity as f32 / 100.0);
+        Some(
+            div()
+                .id("workspace-bg-layer")
+                .absolute()
+                .inset_0()
+                .overflow_hidden()
+                .child(img(image).size_full().object_fit(ObjectFit::Cover))
+                .when(scrim_opacity > 0.0, |this| {
+                    this.child(
+                        div()
+                            .absolute()
+                            .inset_0()
+                            .bg(self.theme.bg_canvas.opacity(scrim_opacity)),
+                    )
+                })
+                .into_any_element(),
+        )
     }
 
     fn current_locale(&self, cx: &App) -> Locale {
@@ -1893,7 +1944,7 @@ impl SashaApp {
         }
     }
 
-    fn build_tab_rail(&self, cx: &mut Context<Self>) -> TabRail {
+    fn build_tab_rail(&self, theme: NanoTheme, cx: &mut Context<Self>) -> TabRail {
         let weak = cx.entity().downgrade();
         let on_select_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.select_tab(tab_id, window, cx));
@@ -1913,7 +1964,7 @@ impl SashaApp {
 
         let locale = self.current_locale(cx);
         TabRail::new(
-            self.theme,
+            theme,
             locale,
             self.tab_items(locale),
             on_select_tab,
@@ -1963,11 +2014,42 @@ impl SashaApp {
     }
 }
 
+pub(crate) fn image_format_for_path(path: &Path) -> Option<ImageFormat> {
+    let ext = path.extension()?.to_str()?;
+    if ext.eq_ignore_ascii_case("png") {
+        Some(ImageFormat::Png)
+    } else if ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg") {
+        Some(ImageFormat::Jpeg)
+    } else if ext.eq_ignore_ascii_case("webp") {
+        Some(ImageFormat::Webp)
+    } else if ext.eq_ignore_ascii_case("gif") {
+        Some(ImageFormat::Gif)
+    } else if ext.eq_ignore_ascii_case("bmp") {
+        Some(ImageFormat::Bmp)
+    } else {
+        None
+    }
+}
+
+fn load_background_image(path: &Path) -> Option<Arc<Image>> {
+    let format = image_format_for_path(path)?;
+    let bytes = std::fs::read(path).ok()?;
+    Some(Arc::new(Image::from_bytes(format, bytes)))
+}
+
 impl Render for SashaApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.current_locale(cx);
         self.sync_placeholders_if_locale_changed(locale, window, cx);
-        let tab_rail = self.build_tab_rail(cx);
+        let (bg_image, bg_opacity) = self.sync_background_image(cx);
+        let has_bg_image = bg_image.is_some() && bg_opacity > 0;
+        let surface_theme = if has_bg_image {
+            self.theme.with_translucent_surfaces()
+        } else {
+            self.theme
+        };
+        let bg_layer = self.build_background_layer(bg_image, bg_opacity);
+        let tab_rail = self.build_tab_rail(surface_theme, cx);
         let active_id = self.active_tab_id;
 
         if self.active_tab().page == AppPage::Start {
@@ -2028,6 +2110,7 @@ impl Render for SashaApp {
                 .size_full()
                 .bg(self.theme.bg_canvas)
                 .text_color(self.theme.text_primary)
+                .when_some(bg_layer, |this, layer| this.child(layer))
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                     if this.handle_tab_shortcut(event, window, cx) {
                         cx.stop_propagation();
@@ -2037,7 +2120,7 @@ impl Render for SashaApp {
                     h_flex()
                         .size_full()
                         .child(div().flex_1().min_w_0().h_full().child(StartPage::new(
-                            self.theme,
+                            surface_theme,
                             locale,
                             start_page_state,
                             manual_port_input,
@@ -2146,7 +2229,7 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.remove_script(active_id, path, cx));
         });
         let script_panel = ScriptPanel {
-            theme: self.theme,
+            theme: surface_theme,
             locale,
             items: script_items,
             load_error: tab.script_load_error.clone(),
@@ -2264,6 +2347,7 @@ impl Render for SashaApp {
             .size_full()
             .bg(self.theme.bg_canvas)
             .text_color(self.theme.text_primary)
+            .when_some(bg_layer, |this, layer| this.child(layer))
             .on_drag_move(cx.listener(
                 |this, event: &DragMoveEvent<ResizeScriptPanel>, window, cx| {
                     let tab_id = event.drag(cx).tab_id;
@@ -2436,7 +2520,7 @@ impl Render for SashaApp {
                             }))
                             .child(
                                 ReceiveToolbar::new(
-                                    self.theme,
+                                    surface_theme,
                                     locale,
                                     receive_state,
                                     send_state.send_hex,
@@ -2468,7 +2552,7 @@ impl Render for SashaApp {
                             // a drawer tucked underneath it.
                             .child(div().w_full().flex_shrink_0().mt(px(-12.)).child(
                                 SendCard::new(
-                                    self.theme,
+                                    surface_theme,
                                     locale,
                                     send_state,
                                     is_connected,

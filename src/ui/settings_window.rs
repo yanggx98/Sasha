@@ -1,14 +1,18 @@
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::assets::IconName as LucideIcon;
+use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{self, Locale, tr, tr_shared};
 use crate::model::ConfigStore;
-use crate::model::settings::{LOG_FONT_SIZE_PRESETS, StreamOutputScope};
+use crate::model::settings::{
+    DEFAULT_BACKGROUND_OPACITY, LOG_FONT_SIZE_PRESETS, StreamOutputScope,
+};
 use crate::ui::theme::NanoTheme;
+use crate::ui::workspace::image_format_for_path;
 
 const HEADER_HEIGHT: Pixels = px(38.);
 const APP_AUTHOR: &str = "yanggx98";
@@ -76,6 +80,8 @@ pub struct SettingsWindow {
     config_store: Entity<ConfigStore>,
     active_tab: SettingsTab,
     save_error: Option<String>,
+    bg_opacity_slider: Entity<SliderState>,
+    _slider_subscription: Subscription,
     _config_subscription: Subscription,
 }
 
@@ -86,11 +92,34 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
+        let initial_opacity = config_store.read(cx).config().background_opacity as f32;
+        let bg_opacity_slider = cx.new(|_| {
+            SliderState::new()
+                .min(0.)
+                .max(100.)
+                .step(1.)
+                .default_value(initial_opacity)
+        });
+        let slider_subscription = cx.subscribe(
+            &bg_opacity_slider,
+            |this, _, event: &SliderEvent, cx| match event {
+                SliderEvent::Change(value) => {
+                    let pct = value.end().round().clamp(0., 100.) as u8;
+                    this.preview_background_opacity(pct, cx);
+                }
+                SliderEvent::Release(value) => {
+                    let pct = value.end().round().clamp(0., 100.) as u8;
+                    this.commit_background_opacity(pct, cx);
+                }
+            },
+        );
         Self {
             theme: NanoTheme::default(),
             config_store,
             active_tab: SettingsTab::General,
             save_error: None,
+            bg_opacity_slider,
+            _slider_subscription: slider_subscription,
             _config_subscription: subscription,
         }
     }
@@ -126,9 +155,85 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn reset_defaults(&mut self, cx: &mut Context<Self>) {
+    fn reset_defaults(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let result = self.config_store.update(cx, |store, cx| {
             let res = store.reset_to_default();
+            cx.notify();
+            res
+        });
+        self.bg_opacity_slider.update(cx, |slider, cx| {
+            slider.set_value(
+                SliderValue::Single(DEFAULT_BACKGROUND_OPACITY as f32),
+                window,
+                cx,
+            );
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
+    fn choose_background_image(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(tr_shared(locale, "settings.bg_image_choose")),
+        });
+        cx.spawn(async move |this, cx| {
+            let result = picker.await;
+            let _ = this.update(cx, |this, cx| {
+                let locale = this.current_locale(cx);
+                match result {
+                    Ok(Ok(Some(mut paths))) => {
+                        let Some(path) = paths.pop() else {
+                            return;
+                        };
+                        if path.is_file() && image_format_for_path(&path).is_some() {
+                            let res = this.config_store.update(cx, |store, cx| {
+                                let saved = store.update(|cfg| cfg.background_image = Some(path));
+                                cx.notify();
+                                saved
+                            });
+                            this.save_error = res.err();
+                        } else {
+                            this.save_error =
+                                Some(tr(locale, "settings.bg_image_invalid").into_owned());
+                        }
+                    }
+                    Ok(Ok(None)) => return,
+                    _ => {
+                        this.save_error =
+                            Some(tr(locale, "settings.bg_image_load_failed").into_owned());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn clear_background_image(&mut self, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.background_image = None);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
+    fn preview_background_opacity(&mut self, opacity: u8, cx: &mut Context<Self>) {
+        self.config_store.update(cx, |store, cx| {
+            store.update_in_memory(|cfg| cfg.background_opacity = opacity);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    fn commit_background_opacity(&mut self, opacity: u8, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.background_opacity = opacity);
             cx.notify();
             res
         });
@@ -378,7 +483,7 @@ impl SettingsWindow {
         let reset_btn = self.flat_action_button(
             "settings-reset-defaults",
             tr_shared(locale, "settings.reset_btn"),
-            |this, _, cx| this.reset_defaults(cx),
+            |this, window, cx| this.reset_defaults(window, cx),
             cx,
         );
 
@@ -409,7 +514,20 @@ impl SettingsWindow {
 
     fn render_view_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.current_locale(cx);
-        let current_size = self.config_store.read(cx).config().log_font_size;
+        let (current_size, bg_image, bg_opacity) = {
+            let cfg = self.config_store.read(cx).config();
+            (
+                cfg.log_font_size,
+                cfg.background_image.clone(),
+                cfg.background_opacity,
+            )
+        };
+        let has_bg_image = bg_image.is_some();
+        let bg_name: SharedString = bg_image
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned().into())
+            .unwrap_or_else(|| tr_shared(locale, "settings.bg_image_none"));
         let theme = self.theme;
 
         let font_size_picker = h_flex()
@@ -459,6 +577,64 @@ impl SettingsWindow {
             .child(tr(locale, "settings.theme_dark"))
             .into_any_element();
 
+        let bg_image_controls = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .max_w(px(160.))
+                    .truncate()
+                    .text_xs()
+                    .text_color(if has_bg_image {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(bg_name),
+            )
+            .child(self.flat_action_button(
+                "settings-bg-choose",
+                tr_shared(locale, "settings.bg_image_choose"),
+                |this, _, cx| this.choose_background_image(cx),
+                cx,
+            ))
+            .when(has_bg_image, |this| {
+                this.child(self.flat_action_button(
+                    "settings-bg-clear",
+                    tr_shared(locale, "settings.bg_image_clear"),
+                    |this, _, cx| this.clear_background_image(cx),
+                    cx,
+                ))
+            })
+            .into_any_element();
+
+        let bg_opacity_controls = h_flex()
+            .items_center()
+            .gap_3()
+            .child(
+                div()
+                    .w(px(160.))
+                    .child(
+                        Slider::new(&self.bg_opacity_slider)
+                            .horizontal()
+                            .disabled(!has_bg_image),
+                    ),
+            )
+            .child(
+                div()
+                    .w(px(40.))
+                    .text_right()
+                    .font_family("Consolas")
+                    .text_xs()
+                    .text_color(if has_bg_image {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(format!("{bg_opacity}%")),
+            )
+            .into_any_element();
+
         v_flex()
             .w_full()
             .child(self.render_section_header(SettingsTab::View, locale))
@@ -471,6 +647,16 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.theme_title"),
                 tr_shared(locale, "settings.theme_desc"),
                 theme_badge,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.bg_image_title"),
+                tr_shared(locale, "settings.bg_image_desc"),
+                bg_image_controls,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.bg_opacity_title"),
+                tr_shared(locale, "settings.bg_opacity_desc"),
+                bg_opacity_controls,
             ))
     }
 
