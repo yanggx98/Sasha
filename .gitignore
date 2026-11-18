@@ -7,7 +7,6 @@
 /.agents/
 /.agent-workflow-backups/
 /openspec/
-/AGENTS.md
 /docs/superpowers/
 __pycache__/
 *.pyc
