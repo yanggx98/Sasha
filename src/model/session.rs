@@ -177,6 +177,7 @@ pub struct SessionState {
     #[allow(dead_code)]
     pub active_picker: Option<ActivePickerKind>,
     next_log_id: u64,
+    #[cfg_attr(not(test), allow(dead_code))]
     next_sim_rx_seq: u64,
     rx_line_open: bool,
 }
@@ -458,6 +459,7 @@ impl SessionState {
         }
     }
 
+    #[cfg(test)]
     /// Injects a clearly-labelled simulated RX event.
     /// When receive display is paused, the event is retained until resume.
     pub fn inject_simulated_rx(&mut self, timestamp: impl Into<String>, bytes: Vec<u8>) {
@@ -469,6 +471,7 @@ impl SessionState {
         self.record_log(entry);
     }
 
+    #[cfg(test)]
     /// Deterministically injects the next simulated RX payload for reproducible verification.
     pub fn inject_next_deterministic_simulated_rx(&mut self, timestamp: impl Into<String>) -> u64 {
         self.next_sim_rx_seq += 1;

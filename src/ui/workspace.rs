@@ -134,7 +134,8 @@ impl SessionTab {
         log_buffer_limit: usize,
         cx: &mut Context<SashaApp>,
     ) -> Self {
-        let mut state = SessionState::new_simulated_demo();
+        let mut state =
+            SessionState::new_real_session(crate::model::config::SerialConfig::default(), false);
         state.set_log_buffer_limit(log_buffer_limit);
         let motion = UiMotionState::new(
             state.receive.hex_mode,
@@ -1052,20 +1053,6 @@ impl SashaApp {
                 cx.notify();
             }
         }
-    }
-
-    fn enter_simulated_from_start_page(&mut self, cx: &mut Context<Self>) {
-        let log_buffer_limit = self.saved_log_buffer_limit(cx);
-        let tab = self.active_tab_mut();
-        tab.disconnect_real_serial(None);
-        tab.state = SessionState::new_simulated_demo();
-        tab.state.set_log_buffer_limit(log_buffer_limit);
-        tab.sync_motion_and_selection_from_state();
-        tab.send_input = None;
-        tab._send_subscription = None;
-        tab.send_error = None;
-        tab.page = AppPage::Workspace;
-        cx.notify();
     }
 
     fn start_serial_rx_loop(
@@ -2065,13 +2052,6 @@ impl SashaApp {
         cx.notify();
     }
 
-    pub fn inject_simulated_rx_event(&mut self, cx: &mut Context<Self>) {
-        self.active_tab_mut()
-            .state
-            .inject_next_deterministic_simulated_rx(current_timestamp_hms_ms());
-        cx.notify();
-    }
-
     pub fn toggle_send_display_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let send_input = self.active_tab().send_input.clone();
         if let Some(input) = &send_input {
@@ -2901,10 +2881,6 @@ impl Render for SashaApp {
             let on_connect = Rc::new(move |_: &mut Window, cx: &mut App| {
                 let _ = weak.update(cx, |this, cx| this.connect_from_start_page(cx));
             });
-            let weak = cx.entity().downgrade();
-            let on_enter_simulated = Rc::new(move |_: &mut Window, cx: &mut App| {
-                let _ = weak.update(cx, |this, cx| this.enter_simulated_from_start_page(cx));
-            });
 
             return v_flex()
                 .id("sasha-root")
@@ -2938,7 +2914,6 @@ impl Render for SashaApp {
                                     on_select_parity,
                                     on_select_stop_bits,
                                     on_connect,
-                                    on_enter_simulated,
                                 )
                                 .flow_control_callbacks(
                                     on_select_flow,
@@ -3360,17 +3335,6 @@ impl Render for SashaApp {
                     return;
                 }
                 if this.handle_quick_shortcut(event, cx) {
-                    cx.stop_propagation();
-                    return;
-                }
-
-                // Deterministic simulated RX event injection path for verification (F9 or Ctrl+Shift+R).
-                let is_sim_rx_shortcut = event.keystroke.key.eq_ignore_ascii_case("f9")
-                    || (event.keystroke.modifiers.control
-                        && event.keystroke.modifiers.shift
-                        && event.keystroke.key.eq_ignore_ascii_case("r"));
-                if is_sim_rx_shortcut && this.active_tab().state.is_simulated_session {
-                    this.inject_simulated_rx_event(cx);
                     cx.stop_propagation();
                     return;
                 }

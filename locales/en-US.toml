@@ -25,7 +25,6 @@ stop_bits = "Stop Bits"
 flow = "Flow"
 dtr_rts_init = "Start high"
 connect_btn = "Connect & Open Terminal →"
-sim_btn = "Skip connection, open simulated session"
 
 [badge]
 current = "Current"

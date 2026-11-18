@@ -6,7 +6,7 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{self, Locale, tr, tr_shared};
+use crate::i18n::{Locale, tr, tr_shared};
 use crate::model::config::{BAUD_RATE_PRESETS, parse_baud_rate_for};
 use crate::model::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use crate::serial::{DetectedPort, enumerate_serial_ports_for};
@@ -146,7 +146,6 @@ pub struct StartPage {
     on_select_parity: SelectParityCallback,
     on_select_stop_bits: SelectStopBitsCallback,
     on_connect: StartActionCallback,
-    on_enter_simulated: StartActionCallback,
     on_select_flow: Option<SelectFlowControlCallback>,
     on_toggle_dtr: Option<StartActionCallback>,
     on_toggle_rts: Option<StartActionCallback>,
@@ -169,7 +168,6 @@ impl StartPage {
         on_select_parity: SelectParityCallback,
         on_select_stop_bits: SelectStopBitsCallback,
         on_connect: StartActionCallback,
-        on_enter_simulated: StartActionCallback,
     ) -> Self {
         Self {
             theme,
@@ -186,7 +184,6 @@ impl StartPage {
             on_select_parity,
             on_select_stop_bits,
             on_connect,
-            on_enter_simulated,
             on_select_flow: None,
             on_toggle_dtr: None,
             on_toggle_rts: None,
@@ -272,7 +269,6 @@ impl RenderOnce for StartPage {
         let on_enable_manual = self.on_enable_manual_port.clone();
         let on_toggle_baud = self.on_toggle_baud_dropdown.clone();
         let on_connect = self.on_connect.clone();
-        let on_enter_sim = self.on_enter_simulated.clone();
 
         let port_section = v_flex()
             .w_full()
@@ -837,22 +833,6 @@ impl RenderOnce for StartPage {
                         on_connect(window, cx);
                     })
                     .child(tr(locale, "start.connect_btn")),
-            )
-            .child(
-                div()
-                    .id("start-enter-simulated")
-                    .px_2()
-                    .py_1()
-                    .rounded(px(6.))
-                    .text_xs()
-                    .text_color(theme.text_secondary)
-                    .hover(|s| s.text_color(theme.text_primary))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        cx.stop_propagation();
-                        on_enter_sim(window, cx);
-                    })
-                    .child(tr(locale, "start.sim_btn")),
             );
 
         div()
