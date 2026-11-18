@@ -38,6 +38,7 @@ pub struct TabRail {
     on_close_tab: TabCloseCallback,
     on_new_tab: TabNewCallback,
     on_open_settings: SettingsOpenCallback,
+    update_available: bool,
 }
 
 impl TabRail {
@@ -49,6 +50,7 @@ impl TabRail {
         on_close_tab: TabCloseCallback,
         on_new_tab: TabNewCallback,
         on_open_settings: SettingsOpenCallback,
+        update_available: bool,
     ) -> Self {
         Self {
             theme,
@@ -58,6 +60,7 @@ impl TabRail {
             on_close_tab,
             on_new_tab,
             on_open_settings,
+            update_available,
         }
     }
 }
@@ -66,7 +69,17 @@ impl RenderOnce for TabRail {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let new_tooltip = tr_shared(self.locale, "tab.new_tooltip");
         let new_label = tr_shared(self.locale, "tab.new_label");
-        let settings_tooltip = tr_shared(self.locale, "tab.settings_tooltip");
+        let update_available = self.update_available;
+        let settings_tooltip: SharedString = if update_available {
+            format!(
+                "{} · {}",
+                tr_shared(self.locale, "tab.settings_tooltip"),
+                tr_shared(self.locale, "settings.update_dot_tooltip")
+            )
+            .into()
+        } else {
+            tr_shared(self.locale, "tab.settings_tooltip")
+        };
         let settings_label = tr_shared(self.locale, "tab.settings_label");
         let theme = self.theme;
         let locale = self.locale;
@@ -243,7 +256,16 @@ impl RenderOnce for TabRail {
                                 on_open_settings(window, cx);
                             })
                             .child(Icon::new(LucideIcon::Settings).size(px(12.)))
-                            .child(settings_label),
+                            .child(settings_label)
+                            .when(update_available, |this| {
+                                this.child(
+                                    div()
+                                        .id("tab-rail-update-dot")
+                                        .size(px(6.))
+                                        .rounded_full()
+                                        .bg(theme.accent_blue_hover),
+                                )
+                            }),
                     ),
             )
     }

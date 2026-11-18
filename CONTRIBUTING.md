@@ -41,6 +41,15 @@ cargo test --locked
 Use short, imperative messages, preferably in the Conventional Commits style used in
 the history, for example `feat(ui): add log search` or `fix(serial): ...`.
 
+## Publishing a release
+
+The in-app updater reads GitHub Releases. Tag releases as `vX.Y.Z` (or `vX.Y.Z-pre`),
+matching `version` in `Cargo.toml`, and attach the Windows build from
+`cargo build --release --locked` as `sasha-windows-x86_64.exe`. GitHub records a SHA-256
+digest for uploaded assets, which the updater requires; alternatively upload a
+`sasha-windows-x86_64.exe.sha256` file. Releases without a verifiable asset still
+notify users but link to the release page instead of installing.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under

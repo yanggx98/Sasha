@@ -207,6 +207,37 @@ pub fn theme_dir_desc(locale: Locale, path: &str) -> String {
     .into_owned()
 }
 
+pub fn update_available(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.available",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_downloading(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.downloading",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_installed(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.installed",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_failed(locale: Locale, detail: &str) -> String {
+    rust_i18n::t!("update.failed", locale = locale.code(), detail = detail).into_owned()
+}
+
 pub fn theme_unknown(locale: Locale, id: &str) -> String {
     rust_i18n::t!("settings.theme_unknown", locale = locale.code(), id = id).into_owned()
 }

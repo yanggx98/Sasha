@@ -89,6 +89,9 @@ pub struct AppConfig {
     /// Last timed-send interval (ms) used in the send card.
     #[serde(default = "default_timer_interval_ms")]
     pub timer_interval_ms: u32,
+    /// Check GitHub Releases for a newer version once at startup.
+    #[serde(default = "default_auto_check_updates")]
+    pub auto_check_updates: bool,
 }
 
 impl Default for AppConfig {
@@ -105,6 +108,7 @@ impl Default for AppConfig {
             theme: DEFAULT_THEME_ID.to_string(),
             quick_commands: Vec::new(),
             timer_interval_ms: DEFAULT_TIMER_INTERVAL_MS,
+            auto_check_updates: true,
         }
     }
 }
@@ -133,6 +137,10 @@ where
 
 fn default_log_buffer_limit() -> u32 {
     DEFAULT_LOG_BUFFER_LIMIT
+}
+
+fn default_auto_check_updates() -> bool {
+    true
 }
 
 fn default_timer_interval_ms() -> u32 {
@@ -821,5 +829,21 @@ timer_interval_ms = 1
         .unwrap();
         let clamped = ConfigStore::load_from_path(path);
         assert_eq!(clamped.config().timer_interval_ms, 10);
+    }
+
+    #[test]
+    fn auto_check_updates_defaults_on_and_roundtrips() {
+        let dir = TempDir::new("auto-check-updates");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert!(store.config().auto_check_updates);
+
+        store.update(|cfg| cfg.auto_check_updates = false).unwrap();
+        assert!(
+            !ConfigStore::load_from_path(path)
+                .config()
+                .auto_check_updates
+        );
     }
 }

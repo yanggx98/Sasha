@@ -57,6 +57,7 @@ use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager};
+use crate::ui::update_manager::{UpdateHandle, UpdateManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPage {
@@ -452,6 +453,8 @@ pub struct SashaApp {
     theme: NanoTheme,
     theme_manager: Entity<ThemeManager>,
     _theme_subscription: Subscription,
+    update_manager: Entity<UpdateManager>,
+    _update_subscription: Subscription,
     config_store: Entity<ConfigStore>,
     last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
@@ -517,6 +520,8 @@ impl SashaApp {
         let _config_subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
         let theme_manager = ThemeHandle::get(cx);
         let _theme_subscription = cx.observe(&theme_manager, |_, _, cx| cx.notify());
+        let update_manager = UpdateHandle::get(cx);
+        let _update_subscription = cx.observe(&update_manager, |_, _, cx| cx.notify());
         let initial_theme = theme_manager.read(cx).nano();
         let (locale, initial_scripts, log_buffer_limit) = {
             let cfg = config_store.read(cx).config();
@@ -534,6 +539,8 @@ impl SashaApp {
             theme: initial_theme,
             theme_manager,
             _theme_subscription,
+            update_manager,
+            _update_subscription,
             config_store,
             last_locale: locale,
             settings_window: None,
@@ -2743,6 +2750,7 @@ impl SashaApp {
             on_close_tab,
             on_new_tab,
             on_open_settings,
+            self.update_manager.read(cx).has_update(),
         )
     }
 

@@ -6,6 +6,7 @@ mod scripting;
 mod serial;
 mod session_service;
 mod ui;
+mod update;
 
 use gpui_kit::component::TitleBar;
 use gpui_kit::*;
@@ -13,14 +14,17 @@ use gpui_kit::*;
 use crate::model::ConfigStore;
 use crate::ui::SashaApp;
 use crate::ui::theme_manager::ThemeManager;
+use crate::ui::update_manager::UpdateManager;
 
 fn main() {
+    update::cleanup_leftovers();
     application().with_assets(assets::AllAssets).run(|cx| {
         init(cx);
         let config_store = cx.new(|_| ConfigStore::load_default());
         // Applies the configured theme (default: built-in dark) to the global gpui
         // `Theme`, including the native-red window-close danger colors.
         ThemeManager::init(config_store.clone(), cx);
+        UpdateManager::init(&config_store, cx);
 
         let bounds = Bounds::centered(None, size(px(1000.), px(660.)), cx);
         let options = WindowOptions {

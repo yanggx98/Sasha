@@ -13,6 +13,7 @@ use crate::model::settings::{
 };
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager, ThemeSelectError};
+use crate::ui::update_manager::{UpdateHandle, UpdateManager, UpdateState};
 use crate::ui::workspace::image_format_for_path;
 
 const HEADER_HEIGHT: Pixels = px(38.);
@@ -83,6 +84,8 @@ pub struct SettingsWindow {
     /// Last theme-folder / theme-selection problem shown in the warnings area.
     theme_notice: Option<String>,
     _theme_subscription: Subscription,
+    update_manager: Entity<UpdateManager>,
+    _update_subscription: Subscription,
     config_store: Entity<ConfigStore>,
     active_tab: SettingsTab,
     save_error: Option<String>,
@@ -100,6 +103,8 @@ impl SettingsWindow {
         let subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
         let theme_manager = ThemeHandle::get(cx);
         let theme_subscription = cx.observe(&theme_manager, |_, _, cx| cx.notify());
+        let update_manager = UpdateHandle::get(cx);
+        let update_subscription = cx.observe(&update_manager, |_, _, cx| cx.notify());
         let initial_theme = theme_manager.read(cx).nano();
         let initial_opacity = config_store.read(cx).config().background_opacity as f32;
         let bg_opacity_slider = cx.new(|_| {
@@ -128,6 +133,8 @@ impl SettingsWindow {
             theme_menu_open: false,
             theme_notice: None,
             _theme_subscription: theme_subscription,
+            update_manager,
+            _update_subscription: update_subscription,
             config_store,
             active_tab: SettingsTab::General,
             save_error: None,
@@ -304,6 +311,115 @@ impl SettingsWindow {
         });
         self.save_error = result.err();
         cx.notify();
+    }
+
+    fn set_auto_check_updates(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.auto_check_updates = enabled);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
+    /// Status line, detail and action buttons for the About page's update area.
+    fn render_update_status(&self, locale: Locale, cx: &mut Context<Self>) -> AnyElement {
+        let theme = self.theme;
+        let state = self.update_manager.read(cx).state().clone();
+        let (status, buttons): (String, Vec<AnyElement>) = match &state {
+            UpdateState::Idle => (String::new(), vec![self.update_check_button(locale, cx)]),
+            UpdateState::Checking => (tr(locale, "update.checking").into_owned(), Vec::new()),
+            UpdateState::UpToDate => (
+                tr(locale, "update.up_to_date").into_owned(),
+                vec![self.update_check_button(locale, cx)],
+            ),
+            UpdateState::Available(release) => {
+                let mut buttons = Vec::new();
+                if release.asset.is_some() {
+                    buttons.push(self.flat_action_button(
+                        "settings-update-install",
+                        tr_shared(locale, "update.install"),
+                        |this, _, cx| {
+                            this.update_manager
+                                .update(cx, |manager, cx| manager.download_and_install(cx));
+                        },
+                        cx,
+                    ));
+                }
+                buttons.push(self.update_notes_button(locale, release.page_url.clone(), cx));
+                (
+                    i18n::update_available(locale, &release.version.to_string()),
+                    buttons,
+                )
+            }
+            UpdateState::Downloading(release) => (
+                i18n::update_downloading(locale, &release.version.to_string()),
+                Vec::new(),
+            ),
+            UpdateState::Installed(release) => (
+                i18n::update_installed(locale, &release.version.to_string()),
+                vec![self.flat_action_button(
+                    "settings-update-restart",
+                    tr_shared(locale, "update.restart"),
+                    |this, _, cx| {
+                        this.update_manager
+                            .update(cx, |manager, cx| manager.restart(cx));
+                    },
+                    cx,
+                )],
+            ),
+            UpdateState::Failed(detail, release) => {
+                let mut buttons = vec![self.update_check_button(locale, cx)];
+                if let Some(release) = release {
+                    buttons.push(self.update_notes_button(locale, release.page_url.clone(), cx));
+                }
+                (i18n::update_failed(locale, detail), buttons)
+            }
+        };
+
+        v_flex()
+            .items_center()
+            .gap_2()
+            .when(!status.is_empty(), |this| {
+                this.child(
+                    div()
+                        .max_w(px(360.))
+                        .text_center()
+                        .text_color(theme.text_secondary)
+                        .child(status),
+                )
+            })
+            .when(!buttons.is_empty(), |this| {
+                this.child(h_flex().gap_1p5().children(buttons))
+            })
+            .into_any_element()
+    }
+
+    fn update_check_button(&self, locale: Locale, cx: &mut Context<Self>) -> AnyElement {
+        self.flat_action_button(
+            "settings-update-check",
+            tr_shared(locale, "update.check"),
+            |this, _, cx| {
+                this.update_manager
+                    .update(cx, |manager, cx| manager.check(cx));
+            },
+            cx,
+        )
+    }
+
+    fn update_notes_button(
+        &self,
+        locale: Locale,
+        url: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.flat_action_button(
+            "settings-update-notes",
+            tr_shared(locale, "update.release_notes"),
+            move |_, _, cx| cx.open_url(&url),
+            cx,
+        )
     }
 
     fn copy_text(&self, text: &str, cx: &mut Context<Self>) {
@@ -535,6 +651,46 @@ impl SettingsWindow {
             )
             .into_any_element();
 
+        let auto_check = self.config_store.read(cx).config().auto_check_updates;
+        let auto_check_picker = h_flex()
+            .p_0p5()
+            .rounded(px(6.))
+            .bg(theme.bg_card)
+            .gap_0p5()
+            .children(
+                [(true, "settings.on"), (false, "settings.off")]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (value, key))| {
+                        let selected = auto_check == value;
+                        div()
+                            .id(ElementId::named_usize("settings-auto-update", idx))
+                            .px_2p5()
+                            .py_1()
+                            .rounded(px(4.))
+                            .text_xs()
+                            .cursor_pointer()
+                            .when(selected, |this| {
+                                this.bg(theme.bg_toggle_active)
+                                    .text_color(theme.accent_blue_hover)
+                                    .font_weight(FontWeight::MEDIUM)
+                            })
+                            .when(!selected, |this| {
+                                this.text_color(theme.text_secondary)
+                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_auto_check_updates(value, cx);
+                                }),
+                            )
+                            .child(tr_shared(locale, key))
+                    }),
+            )
+            .into_any_element();
+
         let reset_btn = self.flat_action_button(
             "settings-reset-defaults",
             tr_shared(locale, "settings.reset_btn"),
@@ -554,6 +710,11 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.stream_scope_title"),
                 tr_shared(locale, "settings.stream_scope_desc"),
                 scope_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.auto_update_title"),
+                tr_shared(locale, "settings.auto_update_desc"),
+                auto_check_picker,
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.config_path_title"),
@@ -931,7 +1092,8 @@ impl SettingsWindow {
                         tr(locale, "settings.created_by"),
                         APP_AUTHOR
                     )))
-                    .child(div().mt_3().child(github_actions)),
+                    .child(div().mt_3().child(github_actions))
+                    .child(div().mt_2().child(self.render_update_status(locale, cx))),
             )
     }
 
