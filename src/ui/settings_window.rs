@@ -924,7 +924,7 @@ impl SettingsWindow {
                             .items_center()
                             .gap_1()
                             .child(tr(locale, "settings.ai_assisted"))
-                            .child("DeepSeek · Grok · ChatGPT · Gemini"),
+                            .child("DeepSeek · Grok · ChatGPT · Gemini · Claude"),
                     )
                     .child(div().child(format!(
                         "{} {}",
