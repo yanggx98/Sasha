@@ -98,6 +98,13 @@ btn = "Send"
 btn_sim = "Send (Sim)"
 btn_disconnected = "Disconnected, cannot send"
 btn_sim_disconnected = "Sim disconnected, cannot send"
+timer_play_tooltip = "Start timed send"
+timer_pause_tooltip = "Pause timed send"
+timer_enable_tooltip = "Enable timed send"
+timer_toggle_disconnected = "Disconnected, cannot start timed send"
+timer_disable_tooltip = "Cancel timed send"
+timer_interval_placeholder = "Interval"
+timer_unit = "ms"
 
 [err]
 data_bits = "Data bits must be 5, 6, 7, or 8"
@@ -114,6 +121,9 @@ hex_non_utf8 = "HEX bytes cannot be decoded as valid UTF-8 text"
 send_empty = "Payload is empty, nothing sent"
 send_sim_disconnected = "Sim disconnected: click \"Sim Connect\" in the bottom bar first"
 send_disconnected = "Serial disconnected: click \"Connect\" in the bottom bar first"
+timer_interval = "Interval must be a whole number from %{min} to %{max} ms"
+timer_enabled = "Timed send is enabled: cancel it before sending manually"
+timer_running_enter = "Timed send is running: use the pause button to stop it"
 
 [serial]
 rx_closed = "Serial read channel closed"

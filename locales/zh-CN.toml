@@ -98,6 +98,13 @@ btn = "发送"
 btn_sim = "发送（模拟）"
 btn_disconnected = "未连接，无法发送"
 btn_sim_disconnected = "模拟未连接，无法发送"
+timer_play_tooltip = "开始定时发送"
+timer_pause_tooltip = "暂停定时发送"
+timer_enable_tooltip = "启用定时发送"
+timer_toggle_disconnected = "未连接，无法定时发送"
+timer_disable_tooltip = "取消定时发送"
+timer_interval_placeholder = "间隔"
+timer_unit = "ms"
 
 [err]
 data_bits = "数据位仅支持 5、6、7、8"
@@ -114,6 +121,9 @@ hex_non_utf8 = "HEX 字节无法解码为有效 UTF-8 文本，无法切换回�
 send_empty = "发送内容为空，未提交"
 send_sim_disconnected = "模拟未连接：请先点击底栏“模拟连接”"
 send_disconnected = "串口未连接：请先点击底栏“连接”"
+timer_interval = "定时间隔须为 %{min} 到 %{max} 毫秒的整数"
+timer_enabled = "已启用定时发送，请先取消定时发送后再手动发送"
+timer_running_enter = "定时发送中：请点击暂停按钮停止"
 
 [serial]
 rx_closed = "串口读取通道已关闭"

@@ -4,6 +4,7 @@ pub mod quick_command;
 pub mod session;
 pub mod settings;
 pub mod stream_output;
+pub mod timed_send;
 
 #[allow(unused_imports)]
 pub use config::{

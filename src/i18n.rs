@@ -90,6 +90,16 @@ pub fn quick_save_failed(locale: Locale, err: &str) -> String {
     rust_i18n::t!("quick.save_failed", locale = locale.code(), err = err).into_owned()
 }
 
+pub fn timer_interval_error(locale: Locale, min: u32, max: u32) -> String {
+    rust_i18n::t!(
+        "err.timer_interval",
+        locale = locale.code(),
+        min = min,
+        max = max
+    )
+    .into_owned()
+}
+
 pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
     rust_i18n::t!(
         "signal.write_failed",
@@ -293,6 +303,18 @@ mod tests {
         assert_eq!(
             start_frame_header(Locale::EnUs, "▾"),
             "▾ Frame Format (Advanced)"
+        );
+    }
+
+    #[test]
+    fn timer_helpers_format_for_each_locale() {
+        assert_eq!(
+            timer_interval_error(Locale::ZhCn, 10, 3600000),
+            "定时间隔须为 10 到 3600000 毫秒的整数"
+        );
+        assert_eq!(
+            timer_interval_error(Locale::EnUs, 10, 3600000),
+            "Interval must be a whole number from 10 to 3600000 ms"
         );
     }
 }

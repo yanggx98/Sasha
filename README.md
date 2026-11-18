@@ -138,6 +138,23 @@ hex = true
 
 Invalid or duplicate-id entries in `config.toml` are skipped on load without discarding the rest of the configuration, and a notice is shown in the Quick send section.
 
+## Timed send
+
+An always-visible capsule `[⏱ | 1000 ms]` sits immediately left of the send button in the send card's bottom row and repeats the input box content at a fixed interval. Clicking the clock icon only toggles **enabled** (enter or leave timed-send mode); it never sends by itself. The right part is the interval (a whole number from 10 to 3600000 ms) and the last value is remembered (`timer_interval_ms` in `config.toml`). The capsule is greyed out while disconnected and cannot be enabled.
+
+Three states:
+
+- **Off**: grey outline on a transparent fill; the send button is the normal send `↑`.
+- **Enabled (standby)**: solid accent fill; the send button becomes Play `▶`. Click it (or press Ctrl+Enter in the input box) to start. The interval draft and the content are validated first, and an invalid one shows an error and does not start.
+- **Running**: a breathing dot on the icon and the send button becomes Pause `⏸`. Pause stops sending but stays enabled, and the button goes back to `▶`. Ctrl+Enter in the input box is ignored with a hint while running (it is never treated as pause). Clicking the clock icon again cancels the enabled state (stopping a running timer too).
+
+The first send happens immediately on start, then at a fixed rate. If the app stalls, missed cycles are skipped rather than replayed. If the port cannot keep up with the interval (e.g. low baud rate), cycles are also skipped once too many timed sends are waiting, so the TX queue never fills up.
+
+- While enabled (including standby) manual sending is disabled: normal send from the input box, `Alt+1` … `Alt+9` and the quick send panel do nothing and show a hint. Script sends are not blocked.
+- The input text, the H toggle, bottom-bar HEX send and line ending can be edited while running and apply from the next cycle. The interval field holds a draft: it is committed on Enter or when the field loses focus and then applies from the next cycle (a soft tint marks an uncommitted draft). Enter only commits and never starts. An invalid draft is reverted to the previous valid interval with an error.
+- Every cycle re-validates the draft before sending: empty content or invalid HEX stops the timer with an error and the capsule stays enabled, so you can fix the content and press Play again.
+- Pause, a write failure, or scripts or quick send filling the TX queue stop the timer with an error (and stay enabled); a disconnect, closing the session or cancelling the enabled state also stops it and clears the enabled state. Reconnecting does not resume it. The state is per session and is not persisted.
+
 ## Preferences
 
 Open **Settings** from the sidebar. Preferences are saved to `config.toml` beside

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
@@ -14,10 +14,17 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{
-    Locale, bottom_buffer_label, quick_save_failed, quick_skipped, signal_write_failed, tr,
-    tr_shared,
+    Locale, bottom_buffer_label, quick_save_failed, quick_skipped, signal_write_failed,
+    timer_interval_error, tr, tr_shared,
 };
 use crate::model::log::format_hex_input_with_cursor;
+use crate::model::timed_send::{
+    MAX_TIMER_INTERVAL_MS, MIN_TIMER_INTERVAL_MS, DraftCommit, EnterAction, IconAction, SendButtonAction, StopCause, TickOutcome, TimedSendState, commit_interval_draft,
+    draft_is_pending, interval_for_start, next_deadline,
+    should_skip_cycle, should_stop_on_tx_error, tick_outcome,
+    enabled_after_stop, enter_action, icon_click_action, manual_send_blocked, send_button_action,
+    stop_cause_for, timer_reply_is_current,
+};
 use crate::model::quick_command::{
     QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
     visible_rows,
@@ -32,7 +39,7 @@ use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
 use crate::ui::log_view::{LogView, log_row_height_hint};
-use crate::ui::motion::UiMotionState;
+use crate::ui::motion::{TransitionFlag, UiMotionState};
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::quick_command_window::{
     QuickCommandWindow, QuickFillSource, persist_quick_commands,
@@ -44,7 +51,7 @@ use crate::ui::script_panel::{
     dragged_panel_width, panel_is_compact, panel_width,
 };
 use crate::ui::search_bar::LogSearchBar;
-use crate::ui::send_card::SendCard;
+use crate::ui::send_card::{SendCard, TimerControls};
 use crate::ui::settings_window::SettingsWindow;
 use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
@@ -78,6 +85,15 @@ struct SessionTab {
     session_service: SessionService,
     send_input: Option<Entity<TextareaState>>,
     _send_subscription: Option<Subscription>,
+    timer: TimedSendState,
+    timer_flag: TransitionFlag,
+    /// Bumped on every timer start; lets late TX replies detect they belong to an older run.
+    timer_run_id: u64,
+    /// Timed sends enqueued whose write has not finished yet (current run only).
+    timer_pending: u32,
+    timer_task: Option<Task<()>>,
+    timer_input: Option<Entity<InputState>>,
+    _timer_input_sub: Option<Subscription>,
     send_error: Option<SharedString>,
     quick_error: Option<SharedString>,
     quick_collapsed: bool,
@@ -150,6 +166,13 @@ impl SessionTab {
             session_service: SessionService::new(),
             send_input: None,
             _send_subscription: None,
+            timer: TimedSendState::default(),
+            timer_flag: TransitionFlag::default(),
+            timer_run_id: 0,
+            timer_pending: 0,
+            timer_task: None,
+            timer_input: None,
+            _timer_input_sub: None,
             send_error: None,
             quick_error: None,
             quick_collapsed: false,
@@ -383,7 +406,23 @@ impl SessionTab {
             .collect()
     }
 
+    /// Stops the repeating send (no-op when idle). Dropping the task cancels it.
+    fn stop_timer(&mut self) {
+        self.timer.running = false;
+        self.timer_task = None;
+    }
+
+    /// Stops the timer; whether the capsule stays enabled follows `enabled_after_stop`.
+    fn stop_timer_for(&mut self, cause: StopCause) {
+        self.stop_timer();
+        if !enabled_after_stop(cause) {
+            self.timer.enabled = false;
+            self.timer_flag.set(false);
+        }
+    }
+
     fn disconnect_real_serial(&mut self, error: Option<String>) {
+        self.stop_timer_for(StopCause::Disconnected);
         self.serial_rx_task = None;
         self.session_service.disconnect(error.clone());
         self.script_manager.handle_disconnect(error.clone());
@@ -428,6 +467,8 @@ pub struct SashaApp {
 enum SendErrorSlot {
     SendCard,
     QuickPanel,
+    /// Repeating send; behaves like `SendCard` but stops the timer on failure.
+    Timer,
 }
 
 fn send_payload_error_text(
@@ -451,7 +492,7 @@ fn send_payload_error_text(
 impl SessionTab {
     fn set_send_error(&mut self, slot: SendErrorSlot, text: Option<SharedString>) {
         match slot {
-            SendErrorSlot::SendCard => self.send_error = text,
+            SendErrorSlot::SendCard | SendErrorSlot::Timer => self.send_error = text,
             SendErrorSlot::QuickPanel => self.quick_error = text,
         }
     }
@@ -581,6 +622,11 @@ impl SashaApp {
             if let Some(input) = &tab.start_baud_input {
                 input.update(cx, |state, cx| {
                     state.set_placeholder(tr(locale, "start.baud_placeholder"), window, cx);
+                });
+            }
+            if let Some(input) = &tab.timer_input {
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(tr(locale, "send.timer_interval_placeholder"), window, cx);
                 });
             }
             if let Some(input) = &tab.send_input {
@@ -1228,10 +1274,6 @@ impl SashaApp {
         .detach();
     }
 
-    fn handle_serial_disconnected(&mut self, error: Option<String>, cx: &mut Context<Self>) {
-        self.disconnect_real_serial(error, cx);
-    }
-
     fn toggle_connection(&mut self, cx: &mut Context<Self>) {
         let is_sim = self.active_tab().state.is_simulated_session;
         let is_conn = self.active_tab().state.connection.is_connected();
@@ -1491,6 +1533,8 @@ impl SashaApp {
             .set(tab.state.connection.is_connected());
         if tab.state.connection.is_connected() {
             tab.send_error = None;
+        } else {
+            tab.stop_timer_for(StopCause::Disconnected);
         }
         cx.notify();
     }
@@ -2083,21 +2127,28 @@ impl SashaApp {
 
     fn enqueue_real_tx(
         &mut self,
+        tab_id: u64,
         bytes: Vec<u8>,
         slot: SendErrorSlot,
         cx: &mut Context<Self>,
     ) {
         let locale = self.current_locale(cx);
-        let tab_id = self.active_tab_id;
-        let (service, generation) = {
-            let tab = self.active_tab();
+        let Some((service, generation, timer_run)) = self.tab_mut(tab_id).map(|tab| {
             (
                 tab.session_service.clone(),
                 tab.session_service.generation(),
+                tab.timer_run_id,
             )
+        }) else {
+            return;
         };
         match service.enqueue_tx(generation, bytes, None) {
             Ok(reply_rx) => {
+                if slot == SendErrorSlot::Timer
+                    && let Some(tab) = self.tab_mut(tab_id)
+                {
+                    tab.timer_pending += 1;
+                }
                 cx.spawn(async move |this, cx| {
                     let result = cx
                         .background_executor()
@@ -2109,6 +2160,23 @@ impl SashaApp {
                             return;
                         };
                         tab.drain_tx_completed_logs();
+                        // A reply for an earlier timer run must not touch the current one
+                        // (no stop, no error, no disconnect of a newer connection).
+                        if slot == SendErrorSlot::Timer
+                            && !timer_reply_is_current(
+                                timer_run,
+                                tab.timer_run_id,
+                                tab.timer.running,
+                            )
+                        {
+                            cx.notify();
+                            return;
+                        }
+                        if slot == SendErrorSlot::Timer {
+                            tab.timer_pending = tab.timer_pending.saturating_sub(1);
+                        }
+                        let stop_timer = slot == SendErrorSlot::Timer
+                            && matches!(&result, Ok(Err(err)) if should_stop_on_tx_error(err));
                         match result {
                             Ok(Ok(())) => {
                                 tab.set_send_error(slot, None);
@@ -2145,26 +2213,32 @@ impl SashaApp {
                             }
                             Err(_) => {}
                         }
+                        if stop_timer {
+                            tab.stop_timer_for(StopCause::TxFailed);
+                        }
                         cx.notify();
                     });
                 })
                 .detach();
             }
-            Err(SessionTxError::Disconnected)
-            | Err(SessionTxError::StaleGeneration { .. }) => {
-                self.handle_serial_disconnected(
-                    Some(tr(locale, "err.send_disconnected").into_owned()),
-                    cx,
-                );
-                if slot == SendErrorSlot::QuickPanel {
-                    self.active_tab_mut()
-                        .set_send_error(slot, Some(tr_shared(locale, "err.send_disconnected")));
-                    cx.notify();
+            Err(SessionTxError::Disconnected) | Err(SessionTxError::StaleGeneration { .. }) => {
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.disconnect_real_serial(Some(
+                        tr(locale, "err.send_disconnected").into_owned(),
+                    ));
+                    if slot == SendErrorSlot::QuickPanel {
+                        tab.set_send_error(slot, Some(tr_shared(locale, "err.send_disconnected")));
+                    }
                 }
+                cx.notify();
             }
             Err(err) => {
-                self.active_tab_mut()
-                    .set_send_error(slot, Some(err.to_string().into()));
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.set_send_error(slot, Some(err.to_string().into()));
+                    if slot == SendErrorSlot::Timer {
+                        tab.stop_timer_for(StopCause::TxFailed);
+                    }
+                }
                 cx.notify();
             }
         }
@@ -2184,6 +2258,14 @@ impl SashaApp {
         };
 
         let locale = self.current_locale(cx);
+        if manual_send_blocked(self.active_tab().timer.mode()) {
+            self.active_tab_mut().set_send_error(
+                SendErrorSlot::QuickPanel,
+                Some(tr_shared(locale, "err.timer_enabled")),
+            );
+            cx.notify();
+            return;
+        }
         let is_simulated = self.active_tab().state.is_simulated_session;
         if is_simulated {
             let res = self
@@ -2207,7 +2289,7 @@ impl SashaApp {
 
         match self.active_tab().state.prepare_command_bytes(&cmd) {
             Ok(bytes) => {
-                self.enqueue_real_tx(bytes, SendErrorSlot::QuickPanel, cx);
+                self.enqueue_real_tx(self.active_tab_id, bytes, SendErrorSlot::QuickPanel, cx);
             }
             Err(err) => {
                 let msg = send_payload_error_text(locale, false, &err);
@@ -2309,6 +2391,20 @@ impl SashaApp {
     }
 
     pub fn submit_send(&mut self, cx: &mut Context<Self>) {
+        match enter_action(self.active_tab().timer.mode()) {
+            EnterAction::SendNow => {}
+            EnterAction::StartTimer => {
+                self.start_timer(cx);
+                return;
+            }
+            EnterAction::IgnoreRunning => {
+                let locale = self.current_locale(cx);
+                self.active_tab_mut().send_error =
+                    Some(tr_shared(locale, "err.timer_running_enter"));
+                cx.notify();
+                return;
+            }
+        }
         let send_input = self.active_tab().send_input.clone();
         if let Some(input) = &send_input {
             let value = input.read(cx).value().to_string();
@@ -2339,7 +2435,7 @@ impl SashaApp {
 
         match self.active_tab().state.prepare_send_bytes() {
             Ok(bytes) => {
-                self.enqueue_real_tx(bytes, SendErrorSlot::SendCard, cx);
+                self.enqueue_real_tx(self.active_tab_id, bytes, SendErrorSlot::SendCard, cx);
             }
             Err(err) => {
                 let msg = send_payload_error_text(locale, false, &err);
@@ -2348,6 +2444,270 @@ impl SashaApp {
                 cx.notify();
             }
         }
+    }
+
+    fn ensure_timer_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = self.tab_mut(tab_id).and_then(|t| t.timer_input.clone()) {
+            return existing;
+        }
+
+        let locale = self.current_locale(cx);
+        let saved = self.config_store.read(cx).config().timer_interval_ms;
+        let placeholder = tr(locale, "send.timer_interval_placeholder");
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        entity.update(cx, |state, cx| {
+            state.set_value(saved.to_string(), window, cx);
+        });
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, _input, event: &InputEvent, window, cx| match event {
+                // Typing only edits the draft (shown as pending); nothing applies yet.
+                InputEvent::Change => cx.notify(),
+                // Enter only commits the draft; it never starts the timer.
+                InputEvent::PressEnter { .. } if this.active_tab_id == tab_id => {
+                    this.commit_timer_interval(tab_id, window, cx);
+                }
+                InputEvent::Blur => this.commit_timer_interval(tab_id, window, cx),
+                _ => {}
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.timer.interval_ms = saved;
+            tab.timer_input = Some(entity.clone());
+            tab._timer_input_sub = Some(sub);
+        }
+        entity
+    }
+
+    /// Commits the interval field's draft (Enter / blur). A valid value applies from
+    /// the next cycle; an invalid one keeps the previous interval, restores the field
+    /// and shows the interval error.
+    fn commit_timer_interval(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let Some((input, committed)) = self
+            .tab_mut(tab_id)
+            .and_then(|tab| tab.timer_input.clone().map(|i| (i, tab.timer.interval_ms)))
+        else {
+            return;
+        };
+        let draft = input.read(cx).value().to_string();
+        let (text, error) = match commit_interval_draft(&draft, committed) {
+            DraftCommit::Commit(ms) => {
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.timer.interval_ms = ms;
+                }
+                (ms.to_string(), false)
+            }
+            DraftCommit::Reject { restore_ms, .. } => (restore_ms.to_string(), true),
+        };
+        if draft != text {
+            input.update(cx, |state, cx| state.set_value(text, window, cx));
+        }
+        if error && let Some(tab) = self.tab_mut(tab_id) {
+            tab.send_error = Some(
+                timer_interval_error(locale, MIN_TIMER_INTERVAL_MS, MAX_TIMER_INTERVAL_MS).into(),
+            );
+        }
+        cx.notify();
+    }
+
+    fn persist_timer_interval(&self, interval_ms: u32, cx: &mut Context<Self>) {
+        if self.config_store.read(cx).config().timer_interval_ms == interval_ms {
+            return;
+        }
+        self.config_store.update(cx, |store, cx| {
+            let _ = store.update(|cfg| cfg.timer_interval_ms = interval_ms);
+            cx.notify();
+        });
+    }
+
+    /// Icon-segment click: only toggles the enabled state (never sends).
+    pub fn toggle_timer_enabled(&mut self, cx: &mut Context<Self>) {
+        let (enabled, connected) = {
+            let tab = self.active_tab();
+            (tab.timer.enabled, tab.state.connection.is_connected())
+        };
+        match icon_click_action(enabled, connected) {
+            IconAction::Enable => {
+                let tab = self.active_tab_mut();
+                tab.timer.enabled = true;
+                tab.timer_flag.set(true);
+                tab.send_error = None;
+                cx.notify();
+            }
+            IconAction::Disable => {
+                let interval = {
+                    let tab = self.active_tab_mut();
+                    tab.stop_timer_for(StopCause::Disabled);
+                    tab.timer.interval_ms
+                };
+                self.persist_timer_interval(interval, cx);
+                cx.notify();
+            }
+            IconAction::Ignore => {}
+        }
+    }
+
+    /// Send-button click: normal send, play (start) or pause depending on the state.
+    pub fn press_send_button(&mut self, cx: &mut Context<Self>) {
+        match send_button_action(self.active_tab().timer.mode()) {
+            SendButtonAction::SendNow => self.submit_send(cx),
+            SendButtonAction::StartTimer => self.start_timer(cx),
+            SendButtonAction::StopTimer => self.stop_timer_by_user(cx),
+        }
+    }
+
+    /// Validates the interval and the current draft, then starts repeating sends.
+    /// The first send happens immediately; later ones follow at a fixed rate.
+    pub fn start_timer(&mut self, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let locale = self.current_locale(cx);
+        {
+            let tab = self.active_tab();
+            if !tab.timer.enabled || tab.timer.running || !tab.state.connection.is_connected() {
+                return;
+            }
+        }
+        let raw_interval = self
+            .active_tab()
+            .timer_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string());
+        let send_text = self
+            .active_tab()
+            .send_input
+            .as_ref()
+            .map(|input| input.read(cx).value().to_string());
+
+        let interval =
+            interval_for_start(raw_interval.as_deref(), self.active_tab().timer.interval_ms);
+        let Ok(interval) = interval else {
+            self.active_tab_mut().send_error = Some(
+                timer_interval_error(locale, MIN_TIMER_INTERVAL_MS, MAX_TIMER_INTERVAL_MS).into(),
+            );
+            cx.notify();
+            return;
+        };
+
+        {
+            let tab = self.active_tab_mut();
+            if let Some(text) = send_text {
+                tab.state.send.text = text;
+            }
+            if let Err(err) = tab.state.prepare_send_bytes() {
+                tab.send_error = Some(send_payload_error_text(
+                    locale,
+                    tab.state.is_simulated_session,
+                    &err,
+                ));
+                cx.notify();
+                return;
+            }
+            tab.send_error = None;
+            tab.timer.interval_ms = interval;
+            tab.timer.running = true;
+            tab.timer_run_id += 1;
+            tab.timer_pending = 0;
+        }
+        self.persist_timer_interval(interval, cx);
+        let task = self.spawn_timer_task(tab_id, cx);
+        self.active_tab_mut().timer_task = Some(task);
+        cx.notify();
+    }
+
+    /// Pause: stops sending but keeps the capsule enabled.
+    pub fn stop_timer_by_user(&mut self, cx: &mut Context<Self>) {
+        let interval = {
+            let tab = self.active_tab_mut();
+            tab.stop_timer_for(StopCause::Paused);
+            tab.timer.interval_ms
+        };
+        self.persist_timer_interval(interval, cx);
+        cx.notify();
+    }
+
+    fn spawn_timer_task(&self, tab_id: u64, cx: &mut Context<Self>) -> Task<()> {
+        cx.spawn(async move |this, cx| {
+            let mut deadline = Instant::now();
+            loop {
+                let now = Instant::now();
+                if deadline > now {
+                    cx.background_executor().timer(deadline - now).await;
+                }
+                let next = this.update(cx, |app, cx| app.timer_tick(tab_id, cx));
+                let Ok(Some(interval_ms)) = next else {
+                    break;
+                };
+                deadline = next_deadline(
+                    deadline,
+                    Instant::now(),
+                    Duration::from_millis(u64::from(interval_ms)),
+                );
+            }
+        })
+    }
+
+    /// Runs one timed-send cycle against the tab's current draft. Returns the
+    /// interval to wait before the next cycle, or `None` once the timer stopped.
+    fn timer_tick(&mut self, tab_id: u64, cx: &mut Context<Self>) -> Option<u32> {
+        let locale = self.current_locale(cx);
+        let send_text = self
+            .tab_mut(tab_id)?
+            .send_input
+            .clone()
+            .map(|input| input.read(cx).value().to_string());
+        let tab = self.tab_mut(tab_id)?;
+        if !tab.timer.running {
+            return None;
+        }
+        if let Some(text) = send_text {
+            tab.state.send.text = text;
+        }
+
+        if tab.state.is_simulated_session {
+            let result = tab
+                .state
+                .submit_send_with_timestamp(current_timestamp_hms_ms());
+            let next = match result {
+                Ok(_) => {
+                    tab.send_error = None;
+                    Some(tab.timer.interval_ms)
+                }
+                Err(err) => {
+                    tab.stop_timer_for(stop_cause_for(&err));
+                    tab.send_error = Some(send_payload_error_text(locale, true, &err));
+                    None
+                }
+            };
+            cx.notify();
+            return next;
+        }
+
+        if should_skip_cycle(tab.timer_pending) {
+            // The port is not keeping up: skip this cycle rather than overflow the queue.
+            return Some(tab.timer.interval_ms);
+        }
+        match tick_outcome(tab.state.prepare_send_bytes()) {
+            TickOutcome::Send(bytes) => {
+                self.enqueue_real_tx(tab_id, bytes, SendErrorSlot::Timer, cx);
+            }
+            TickOutcome::Stop(err) => {
+                let tab = self.tab_mut(tab_id)?;
+                tab.stop_timer_for(stop_cause_for(&err));
+                tab.send_error = Some(send_payload_error_text(locale, false, &err));
+                cx.notify();
+                return None;
+            }
+        }
+        let tab = self.tab_mut(tab_id)?;
+        tab.timer.running.then_some(tab.timer.interval_ms)
     }
 
     fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2607,6 +2967,11 @@ impl Render for SashaApp {
             tab.sync_log_list_state(log_font_size);
         }
         let send_input = self.ensure_send_input(active_id, window, cx);
+        let timer_input = self.ensure_timer_input(active_id, window, cx);
+        let timer_draft_pending = {
+            let committed = self.active_tab().timer.interval_ms;
+            draft_is_pending(&timer_input.read(cx).value(), committed)
+        };
         let search_open = self.active_tab().log_search.open;
         let search_input = if search_open {
             Some(self.ensure_search_input(active_id, window, cx))
@@ -2636,6 +3001,8 @@ impl Render for SashaApp {
         let is_connected = tab.state.connection.is_connected();
         let is_simulated = tab.state.is_simulated_session;
         let send_error = tab.send_error.clone();
+        let timer_state = tab.timer;
+        let timer_flag = tab.timer_flag;
         let config = tab.state.config.clone();
         let connection = tab.state.connection;
         let conn_action_label = tab.state.connection_action_label_for(locale);
@@ -2941,8 +3308,19 @@ impl Render for SashaApp {
         });
         let weak = cx.entity().downgrade();
         let on_tx_submit = Rc::new(move |_: &mut Window, cx: &mut App| {
-            let _ = weak.update(cx, |this, cx| this.submit_send(cx));
+            let _ = weak.update(cx, |this, cx| this.press_send_button(cx));
         });
+        let weak = cx.entity().downgrade();
+        let on_timer_toggle = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_timer_enabled(cx));
+        });
+        let timer_controls = TimerControls {
+            state: timer_state,
+            input: timer_input,
+            enabled_flag: timer_flag,
+            draft_pending: timer_draft_pending,
+            on_toggle: on_timer_toggle,
+        };
 
         v_flex()
             .id("sasha-root")
@@ -3170,7 +3548,8 @@ impl Render for SashaApp {
                                     send_error,
                                     on_tx_display_hex,
                                     on_tx_submit,
-                                ),
+                                )
+                                .timer(timer_controls),
                             ))
                             .child(BottomBar::new(
                                 self.theme,

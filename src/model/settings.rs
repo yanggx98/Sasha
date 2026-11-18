@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::i18n::Locale;
 
 use super::quick_command::{MAX_QUICK_COMMANDS, QuickCommand};
+use super::timed_send::{DEFAULT_TIMER_INTERVAL_MS, clamp_interval_ms};
 
 /// Default configuration file name stored in the application root directory.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -85,6 +86,9 @@ pub struct AppConfig {
     /// Saved quick-send commands shared across sessions.
     #[serde(default, deserialize_with = "lenient_quick_commands")]
     pub quick_commands: Vec<QuickCommand>,
+    /// Last timed-send interval (ms) used in the send card.
+    #[serde(default = "default_timer_interval_ms")]
+    pub timer_interval_ms: u32,
 }
 
 impl Default for AppConfig {
@@ -100,6 +104,7 @@ impl Default for AppConfig {
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
             theme: DEFAULT_THEME_ID.to_string(),
             quick_commands: Vec::new(),
+            timer_interval_ms: DEFAULT_TIMER_INTERVAL_MS,
         }
     }
 }
@@ -129,6 +134,10 @@ where
 
 fn default_log_buffer_limit() -> u32 {
     DEFAULT_LOG_BUFFER_LIMIT
+}
+
+fn default_timer_interval_ms() -> u32 {
+    DEFAULT_TIMER_INTERVAL_MS
 }
 
 fn default_background_opacity() -> u8 {
@@ -384,6 +393,7 @@ fn migrate_config(config: &mut AppConfig) {
         config.background_image = None;
     }
     config.background_opacity = config.background_opacity.min(100);
+    config.timer_interval_ms = clamp_interval_ms(config.timer_interval_ms);
     let trimmed = config.theme.trim();
     config.theme = if trimmed.is_empty() {
         DEFAULT_THEME_ID.to_string()
@@ -771,5 +781,25 @@ content = "OK"
         assert!(store.config().quick_commands.is_empty());
         assert_eq!(store.skipped_quick_commands(), 0);
         assert!(store.last_load_warning().is_none());
+    }
+
+    #[test]
+    fn timer_interval_defaults_roundtrips_and_clamps() {
+        let dir = TempDir::new("timer-interval");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1
+").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert_eq!(store.config().timer_interval_ms, DEFAULT_TIMER_INTERVAL_MS);
+
+        store.update(|cfg| cfg.timer_interval_ms = 250).unwrap();
+        let reloaded = ConfigStore::load_from_path(path.clone());
+        assert_eq!(reloaded.config().timer_interval_ms, 250);
+
+        fs::write(&path, "version = 1
+timer_interval_ms = 1
+").unwrap();
+        let clamped = ConfigStore::load_from_path(path);
+        assert_eq!(clamped.config().timer_interval_ms, 10);
     }
 }
