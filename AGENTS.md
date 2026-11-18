@@ -28,7 +28,8 @@ cargo fmt               # formatting is enforced in history ("style: apply cargo
 - `src/scripting/` — Lua runtime and API exposed to scripts (tests in `tests.rs`).
 - `src/ui/` — GPUI views; themes in `src/ui/theme*.rs` and `src/ui/theme_assets/`.
 - `src/i18n.rs`, `locales/` — internationalization (`en-US.toml`, `zh-CN.toml`).
-- `docs/` — user docs (`lua-scripting-api.md`), screenshots, example theme.
+- `docs/` — user docs (`usage*.md`, `themes*.md`, `lua-scripting-api.md`; English and
+  `.zh-CN` variants), screenshots, example theme.
 - `scripts/` — example Lua scripts.
 
 ## Conventions
