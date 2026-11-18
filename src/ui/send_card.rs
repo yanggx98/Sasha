@@ -160,8 +160,10 @@ impl RenderOnce for SendCard {
         };
         let (submit_bg_from, submit_bg_to) =
             conn_flag.color_pair(self.theme.bg_hover, self.theme.accent_blue);
-        let (submit_fg_from, submit_fg_to) =
-            conn_flag.color_pair(self.theme.text_muted, contrast_foreground(self.theme.accent_blue));
+        let (submit_fg_from, submit_fg_to) = conn_flag.color_pair(
+            self.theme.text_muted,
+            contrast_foreground(self.theme.accent_blue),
+        );
         let submit_hover_bg = if self.connected {
             self.theme.accent_blue_hover
         } else {
@@ -428,7 +430,11 @@ fn build_timer_row(
                 .min_w_0()
                 .overflow_hidden()
                 .bg(pending_bg)
-                .child(Input::new(&input).appearance(false).disabled(!connected && !state.running)),
+                .child(
+                    Input::new(&input)
+                        .appearance(false)
+                        .disabled(!connected && !state.running),
+                ),
         )
         .child(
             div()

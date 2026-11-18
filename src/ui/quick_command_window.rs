@@ -249,31 +249,32 @@ impl Render for QuickCommandWindow {
             tr_shared(locale, "quick.editor_title_new")
         };
 
-        let move_button = |id: &'static str, icon: LucideIcon, tip_key: &'static str, delta: i32| {
-            div()
-                .id(id)
-                .size(px(26.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .border_1()
-                .border_color(theme.border_card)
-                .cursor_pointer()
-                .text_color(theme.text_secondary)
-                .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                .tooltip(move |window, cx| {
-                    Tooltip::new(tr_shared(locale, tip_key)).build(window, cx)
-                })
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.move_current(delta, cx);
-                    }),
-                )
-                .child(Icon::new(icon).size(px(14.)))
-        };
+        let move_button =
+            |id: &'static str, icon: LucideIcon, tip_key: &'static str, delta: i32| {
+                div()
+                    .id(id)
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(theme.border_card)
+                    .cursor_pointer()
+                    .text_color(theme.text_secondary)
+                    .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(tr_shared(locale, tip_key)).build(window, cx)
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.move_current(delta, cx);
+                        }),
+                    )
+                    .child(Icon::new(icon).size(px(14.)))
+            };
         let le_segment = |id: &'static str, label: SharedString, value: SendLineEnding| {
             Self::segment(theme, id, label, line_ending == value, !hex).on_mouse_down(
                 MouseButton::Left,

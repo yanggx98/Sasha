@@ -25,10 +25,7 @@ pub enum IntervalError {
 
 /// Parses the interval field (whole milliseconds) and enforces the allowed range.
 pub fn parse_interval_ms(raw: &str) -> Result<u32, IntervalError> {
-    let value: u64 = raw
-        .trim()
-        .parse()
-        .map_err(|_| IntervalError::Invalid)?;
+    let value: u64 = raw.trim().parse().map_err(|_| IntervalError::Invalid)?;
     if value < u64::from(MIN_TIMER_INTERVAL_MS) {
         Err(IntervalError::TooSmall)
     } else if value > u64::from(MAX_TIMER_INTERVAL_MS) {
@@ -44,7 +41,10 @@ pub enum DraftCommit {
     /// Valid draft: becomes the interval and applies from the next cycle.
     Commit(u32),
     /// Invalid draft: keep the previous interval, restore the field, report `error`.
-    Reject { restore_ms: u32, error: IntervalError },
+    Reject {
+        restore_ms: u32,
+        error: IntervalError,
+    },
 }
 
 /// Commits the interval draft against the currently committed interval.
@@ -309,9 +309,15 @@ mod tests {
     #[test]
     fn valid_draft_commits_and_applies_from_next_cycle() {
         assert_eq!(commit_interval_draft("250", 1000), DraftCommit::Commit(250));
-        assert_eq!(commit_interval_draft(" 0500 ", 1000), DraftCommit::Commit(500));
+        assert_eq!(
+            commit_interval_draft(" 0500 ", 1000),
+            DraftCommit::Commit(500)
+        );
         // Committing the same value is a no-op commit.
-        assert_eq!(commit_interval_draft("1000", 1000), DraftCommit::Commit(1000));
+        assert_eq!(
+            commit_interval_draft("1000", 1000),
+            DraftCommit::Commit(1000)
+        );
     }
 
     #[test]
@@ -381,7 +387,10 @@ mod tests {
 
     #[test]
     fn send_button_follows_the_three_states() {
-        assert_eq!(send_button_action(TimerMode::Off), SendButtonAction::SendNow);
+        assert_eq!(
+            send_button_action(TimerMode::Off),
+            SendButtonAction::SendNow
+        );
         assert_eq!(
             send_button_action(TimerMode::Armed),
             SendButtonAction::StartTimer
@@ -420,8 +429,12 @@ mod tests {
             stop_cause_for(&SendPayloadError::Disconnected),
             StopCause::Disconnected
         );
-        assert!(enabled_after_stop(stop_cause_for(&SendPayloadError::EmptyInput)));
-        assert!(!enabled_after_stop(stop_cause_for(&SendPayloadError::Disconnected)));
+        assert!(enabled_after_stop(stop_cause_for(
+            &SendPayloadError::EmptyInput
+        )));
+        assert!(!enabled_after_stop(stop_cause_for(
+            &SendPayloadError::Disconnected
+        )));
     }
 
     #[test]
@@ -435,10 +448,7 @@ mod tests {
 
     #[test]
     fn tick_sends_valid_payload_and_stops_on_any_validation_failure() {
-        assert_eq!(
-            tick_outcome(Ok(vec![0x41])),
-            TickOutcome::Send(vec![0x41])
-        );
+        assert_eq!(tick_outcome(Ok(vec![0x41])), TickOutcome::Send(vec![0x41]));
         assert_eq!(
             tick_outcome(Err(SendPayloadError::EmptyInput)),
             TickOutcome::Stop(SendPayloadError::EmptyInput)
@@ -518,7 +528,9 @@ mod tests {
         let depth = simulate_max_queue_depth(10, 25, 60_000, true);
         assert!(depth <= MAX_PENDING_TIMED_SENDS, "depth {depth}");
         // A stalled port (never completes) must not pile up either.
-        assert!(simulate_max_queue_depth(10, u64::MAX / 4, 60_000, true) <= MAX_PENDING_TIMED_SENDS);
+        assert!(
+            simulate_max_queue_depth(10, u64::MAX / 4, 60_000, true) <= MAX_PENDING_TIMED_SENDS
+        );
     }
 
     #[test]

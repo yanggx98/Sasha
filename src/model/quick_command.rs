@@ -379,7 +379,10 @@ mod tests {
             hex: true,
             line_ending: SendLineEnding::None,
         };
-        assert!(matches!(cmd.payload(), Err(SendPayloadError::InvalidHex(_))));
+        assert!(matches!(
+            cmd.payload(),
+            Err(SendPayloadError::InvalidHex(_))
+        ));
 
         cmd.content = "  ".to_string();
         assert_eq!(cmd.payload(), Err(SendPayloadError::EmptyInput));
@@ -512,7 +515,10 @@ mod tests {
 
     #[test]
     fn quick_shortcut_digit_requires_alt_only() {
-        assert_eq!(quick_shortcut_digit(false, true, false, false, "3"), Some(3));
+        assert_eq!(
+            quick_shortcut_digit(false, true, false, false, "3"),
+            Some(3)
+        );
         assert_eq!(quick_shortcut_digit(true, true, false, false, "3"), None);
         assert_eq!(quick_shortcut_digit(false, true, true, false, "3"), None);
         assert_eq!(quick_shortcut_digit(false, true, false, true, "3"), None);
@@ -589,7 +595,10 @@ mod tests {
             make_cmd("c3", "C", "G1", "3"),
         ];
         // Initial display_order: c1(0), c3(2), c2(1) -> Alt+2 is c3
-        assert_eq!(command_for_shortcut(&cmds, 2).map(|c| c.id.as_str()), Some("c3"));
+        assert_eq!(
+            command_for_shortcut(&cmds, 2).map(|c| c.id.as_str()),
+            Some("c3")
+        );
 
         // Edit c3's group to G2 via draft -> id preserved, display_order becomes c1(0), c2(1), c3(2)
         let mut draft = QuickEditorDraft::from_command(&cmds[2]);
@@ -597,11 +606,17 @@ mod tests {
         let edited = draft.to_command(&cmds).expect("valid");
         assert_eq!(edited.id, "c3");
         upsert_command(&mut cmds, edited).expect("upsert");
-        assert_eq!(command_for_shortcut(&cmds, 2).map(|c| c.id.as_str()), Some("c2"));
+        assert_eq!(
+            command_for_shortcut(&cmds, 2).map(|c| c.id.as_str()),
+            Some("c2")
+        );
 
         // Delete c1 -> Alt+1 shifts to c2
         assert!(remove_command(&mut cmds, "c1"));
-        assert_eq!(command_for_shortcut(&cmds, 1).map(|c| c.id.as_str()), Some("c2"));
+        assert_eq!(
+            command_for_shortcut(&cmds, 1).map(|c| c.id.as_str()),
+            Some("c2")
+        );
 
         // Draft with missing editing_id keeps id and appends on upsert
         let mut ghost = QuickEditorDraft::blank();

@@ -123,8 +123,7 @@ where
         let Ok(cmd) = value.try_into::<QuickCommand>() else {
             continue;
         };
-        if cmd.id.trim().is_empty() || cmd.validate().is_err() || !seen_ids.insert(cmd.id.clone())
-        {
+        if cmd.id.trim().is_empty() || cmd.validate().is_err() || !seen_ids.insert(cmd.id.clone()) {
             continue;
         }
         result.push(cmd);
@@ -276,7 +275,11 @@ impl ConfigStore {
                 migrate_config(&mut config);
                 let raw_count = toml::from_str::<toml::Table>(&raw)
                     .ok()
-                    .and_then(|t| t.get("quick_commands").and_then(|v| v.as_array()).map(|a| a.len()))
+                    .and_then(|t| {
+                        t.get("quick_commands")
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len())
+                    })
                     .unwrap_or(0);
                 let skipped = raw_count.saturating_sub(config.quick_commands.len());
                 let warning = if skipped > 0 {
@@ -672,7 +675,10 @@ mod tests {
 
         let mut store = ConfigStore::load_from_path(cfg_path.clone());
         assert_eq!(store.config().background_image, None);
-        assert_eq!(store.config().background_opacity, DEFAULT_BACKGROUND_OPACITY);
+        assert_eq!(
+            store.config().background_opacity,
+            DEFAULT_BACKGROUND_OPACITY
+        );
 
         store
             .update(|cfg| {
@@ -693,12 +699,18 @@ mod tests {
     fn theme_defaults_roundtrips_and_normalizes() {
         let dir = TempDir::new("theme");
         let cfg_path = dir.file(CONFIG_FILE_NAME);
-        fs::write(&cfg_path, "log_font_size = 14
-").unwrap();
+        fs::write(
+            &cfg_path,
+            "log_font_size = 14
+",
+        )
+        .unwrap();
         let mut store = ConfigStore::load_from_path(cfg_path.clone());
         assert_eq!(store.config().theme, "dark");
 
-        store.update(|cfg| cfg.theme = "  ocean ".to_string()).unwrap();
+        store
+            .update(|cfg| cfg.theme = "  ocean ".to_string())
+            .unwrap();
         assert_eq!(store.config().theme, "ocean");
         let reloaded = ConfigStore::load_from_path(cfg_path);
         assert_eq!(reloaded.config().theme, "ocean");
@@ -787,8 +799,12 @@ content = "OK"
     fn timer_interval_defaults_roundtrips_and_clamps() {
         let dir = TempDir::new("timer-interval");
         let path = dir.file(CONFIG_FILE_NAME);
-        fs::write(&path, "version = 1
-").unwrap();
+        fs::write(
+            &path,
+            "version = 1
+",
+        )
+        .unwrap();
         let mut store = ConfigStore::load_from_path(path.clone());
         assert_eq!(store.config().timer_interval_ms, DEFAULT_TIMER_INTERVAL_MS);
 
@@ -796,9 +812,13 @@ content = "OK"
         let reloaded = ConfigStore::load_from_path(path.clone());
         assert_eq!(reloaded.config().timer_interval_ms, 250);
 
-        fs::write(&path, "version = 1
+        fs::write(
+            &path,
+            "version = 1
 timer_interval_ms = 1
-").unwrap();
+",
+        )
+        .unwrap();
         let clamped = ConfigStore::load_from_path(path);
         assert_eq!(clamped.config().timer_interval_ms, 10);
     }

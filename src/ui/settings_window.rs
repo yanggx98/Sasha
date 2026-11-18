@@ -746,12 +746,10 @@ impl SettingsWindow {
                         .text_color(theme.error_text)
                         .child(tr_shared(locale, "settings.theme_warnings_title")),
                 )
-                .children(theme_notice.map(|notice| {
-                    div()
-                        .text_xs()
-                        .text_color(theme.error_text)
-                        .child(notice)
-                }))
+                .children(
+                    theme_notice
+                        .map(|notice| div().text_xs().text_color(theme.error_text).child(notice)),
+                )
                 .children(theme_messages.iter().map(|message| {
                     div()
                         .text_xs()
@@ -796,13 +794,11 @@ impl SettingsWindow {
             .items_center()
             .gap_3()
             .child(
-                div()
-                    .w(px(160.))
-                    .child(
-                        Slider::new(&self.bg_opacity_slider)
-                            .horizontal()
-                            .disabled(!has_bg_image),
-                    ),
+                div().w(px(160.)).child(
+                    Slider::new(&self.bg_opacity_slider)
+                        .horizontal()
+                        .disabled(!has_bg_image),
+                ),
             )
             .child(
                 div()

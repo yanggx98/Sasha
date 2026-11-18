@@ -132,9 +132,7 @@ impl RenderOnce for QuickSendPanel {
                             .rounded(px(5.))
                             .cursor_pointer()
                             .text_color(theme.text_muted)
-                            .hover(move |s| {
-                                s.bg(theme.bg_hover).text_color(theme.text_secondary)
-                            })
+                            .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_secondary))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 on_toggle(group_key.clone(), window, cx);
@@ -237,9 +235,7 @@ impl RenderOnce for QuickSendPanel {
                             .rounded(px(6.))
                             .cursor_pointer()
                             .text_color(theme.text_secondary)
-                            .hover(move |s| {
-                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                            })
+                            .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             .tooltip(move |window, cx| {
                                 Tooltip::new(tooltip.clone()).build(window, cx)
                             })
@@ -247,14 +243,7 @@ impl RenderOnce for QuickSendPanel {
                                 cx.stop_propagation();
                                 on_send(cmd_id.clone(), window, cx);
                             })
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_sm()
-                                    .child(name),
-                            )
+                            .child(div().flex_1().min_w_0().truncate().text_sm().child(name))
                             .when_some(*shortcut, |this, digit| {
                                 this.child(
                                     div()

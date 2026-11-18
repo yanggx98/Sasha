@@ -18,21 +18,21 @@ use crate::i18n::{
     timer_interval_error, tr, tr_shared,
 };
 use crate::model::log::format_hex_input_with_cursor;
-use crate::model::timed_send::{
-    MAX_TIMER_INTERVAL_MS, MIN_TIMER_INTERVAL_MS, DraftCommit, EnterAction, IconAction, SendButtonAction, StopCause, TickOutcome, TimedSendState, commit_interval_draft,
-    draft_is_pending, interval_for_start, next_deadline,
-    should_skip_cycle, should_stop_on_tx_error, tick_outcome,
-    enabled_after_stop, enter_action, icon_click_action, manual_send_blocked, send_button_action,
-    stop_cause_for, timer_reply_is_current,
-};
 use crate::model::quick_command::{
     QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
     visible_rows,
 };
+use crate::model::timed_send::{
+    DraftCommit, EnterAction, IconAction, MAX_TIMER_INTERVAL_MS, MIN_TIMER_INTERVAL_MS,
+    SendButtonAction, StopCause, TickOutcome, TimedSendState, commit_interval_draft,
+    draft_is_pending, enabled_after_stop, enter_action, icon_click_action, interval_for_start,
+    manual_send_blocked, next_deadline, send_button_action, should_skip_cycle,
+    should_stop_on_tx_error, stop_cause_for, tick_outcome, timer_reply_is_current,
+};
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, FlowControl, LogSearchState, LogSelectionModel,
-    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_buffer_usage, format_log_buffer_limit,
-    parse_log_buffer_limit_for,
+    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
+    format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
 };
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
@@ -565,11 +565,7 @@ impl SashaApp {
         (loaded, opacity)
     }
 
-    fn build_background_layer(
-        &self,
-        image: Option<Arc<Image>>,
-        opacity: u8,
-    ) -> Option<AnyElement> {
+    fn build_background_layer(&self, image: Option<Arc<Image>>, opacity: u8) -> Option<AnyElement> {
         let image = image?;
         if opacity == 0 {
             return None;
@@ -626,7 +622,11 @@ impl SashaApp {
             }
             if let Some(input) = &tab.timer_input {
                 input.update(cx, |state, cx| {
-                    state.set_placeholder(tr(locale, "send.timer_interval_placeholder"), window, cx);
+                    state.set_placeholder(
+                        tr(locale, "send.timer_interval_placeholder"),
+                        window,
+                        cx,
+                    );
                 });
             }
             if let Some(input) = &tab.send_input {
@@ -810,11 +810,9 @@ impl SashaApp {
         ) else {
             return false;
         };
-        let command_id = command_for_shortcut(
-            &self.config_store.read(cx).config().quick_commands,
-            digit,
-        )
-        .map(|c| c.id.clone());
+        let command_id =
+            command_for_shortcut(&self.config_store.read(cx).config().quick_commands, digit)
+                .map(|c| c.id.clone());
         if let Some(id) = command_id {
             self.send_quick_command(&id, cx);
             true
@@ -2839,8 +2837,7 @@ impl Render for SashaApp {
         let (bg_image, bg_opacity) = self.sync_background_image(cx);
         let has_bg_image = bg_image.is_some() && bg_opacity > 0;
         let surface_theme = if has_bg_image {
-            self
-                .theme
+            self.theme
                 .with_surface_opacity(self.theme_manager.read(cx).surface_opacity())
         } else {
             self.theme
@@ -3109,7 +3106,8 @@ impl Render for SashaApp {
             )
         };
         let quick_rows = visible_rows(&quick_commands, &quick_query, &quick_collapsed_groups);
-        let skipped_notice = (skipped_count > 0).then(|| quick_skipped(locale, skipped_count).into());
+        let skipped_notice =
+            (skipped_count > 0).then(|| quick_skipped(locale, skipped_count).into());
         let weak = cx.entity().downgrade();
         let on_quick_send = Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| {
@@ -3535,22 +3533,24 @@ impl Render for SashaApp {
                             )
                             // The send card overlaps the strip's lower edge so the strip reads as
                             // a drawer tucked underneath it.
-                            .child(div().w_full().flex_shrink_0().mt(px(-12.)).child(
-                                SendCard::new(
-                                    surface_theme,
-                                    locale,
-                                    send_state,
-                                    is_connected,
-                                    is_simulated,
-                                    motion.tx_display_hex,
-                                    motion.connection,
-                                    send_input,
-                                    send_error,
-                                    on_tx_display_hex,
-                                    on_tx_submit,
-                                )
-                                .timer(timer_controls),
-                            ))
+                            .child(
+                                div().w_full().flex_shrink_0().mt(px(-12.)).child(
+                                    SendCard::new(
+                                        surface_theme,
+                                        locale,
+                                        send_state,
+                                        is_connected,
+                                        is_simulated,
+                                        motion.tx_display_hex,
+                                        motion.connection,
+                                        send_input,
+                                        send_error,
+                                        on_tx_display_hex,
+                                        on_tx_submit,
+                                    )
+                                    .timer(timer_controls),
+                                ),
+                            )
                             .child(BottomBar::new(
                                 self.theme,
                                 locale,
