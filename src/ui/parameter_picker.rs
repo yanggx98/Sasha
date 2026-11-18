@@ -1,0 +1,279 @@
+use std::rc::Rc;
+
+use gpui_kit::assets::IconName as LucideIcon;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder as _;
+use gpui_kit::*;
+
+use crate::i18n::{self, Locale, tr, tr_shared};
+use crate::model::{ActivePickerKind, SerialConfig};
+use crate::ui::motion::animate_popover_enter;
+use crate::ui::theme::NanoTheme;
+
+pub type SelectPresetCallback = Rc<dyn Fn(String, &mut Window, &mut App)>;
+
+/// Top-center VS Code-style quick-select & editable parameter popover (REQ-006, REQ-011).
+/// Rendered without a background scrim so the workspace remains visible and
+/// clicking outside dismisses without blocking other UI interactions.
+#[derive(IntoElement)]
+pub struct ParameterPickerPopover {
+    theme: NanoTheme,
+    locale: Locale,
+    kind: ActivePickerKind,
+    is_simulated: bool,
+    port_presets: Vec<String>,
+    open_epoch: u64,
+    config: SerialConfig,
+    current_override: Option<String>,
+    input: Entity<InputState>,
+    error: Option<SharedString>,
+    on_select_preset: SelectPresetCallback,
+}
+
+impl ParameterPickerPopover {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        theme: NanoTheme,
+        locale: Locale,
+        kind: ActivePickerKind,
+        is_simulated: bool,
+        port_presets: Vec<String>,
+        open_epoch: u64,
+        config: SerialConfig,
+        current_override: Option<String>,
+        input: Entity<InputState>,
+        error: Option<SharedString>,
+        on_select_preset: SelectPresetCallback,
+    ) -> Self {
+        Self {
+            theme,
+            locale,
+            kind,
+            is_simulated,
+            port_presets,
+            open_epoch,
+            config,
+            current_override,
+            input,
+            error,
+            on_select_preset,
+        }
+    }
+}
+
+impl RenderOnce for ParameterPickerPopover {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = self.theme;
+        let locale = self.locale;
+        let current_value = self
+            .current_override
+            .clone()
+            .unwrap_or_else(|| self.config.current_value_str_for(self.kind, locale));
+        let typed_value = self.input.read(cx).value().to_string();
+        let trimmed_typed = typed_value.trim().to_string();
+        let presets = if self.kind == ActivePickerKind::Port && !self.is_simulated {
+            self.port_presets
+        } else {
+            self.kind.presets_for(locale)
+        };
+        let title: SharedString = if self.kind == ActivePickerKind::Port && !self.is_simulated {
+            tr_shared(locale, "picker.title_port")
+        } else {
+            self.kind.title_for(locale).into()
+        };
+        let has_exact_preset = presets.iter().any(|p| p == &trimmed_typed);
+        let allows_input = self.kind.allows_custom_input();
+        let input_border = if self.error.is_some() {
+            theme.error_text
+        } else {
+            theme.accent_blue
+        };
+
+        // Frame is 328px rather than the planned ~300px so the longest
+        // placeholder (text-sm, ~277px) is not clipped. Padding 8px,
+        // section gap 4px, radius 8px. Title and hint stay on one line.
+        let popover = v_flex()
+            .id("parameter-picker-popover")
+            .relative()
+            .w(px(328.))
+            .p_2()
+            .gap_1()
+            .rounded(px(8.))
+            .bg(theme.bg_popover)
+            .border_1()
+            .border_color(theme.border_popover)
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_primary)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .whitespace_nowrap()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(tr(locale, "picker.hint_keys")),
+                    ),
+            )
+            .when(allows_input, |this| {
+                // Input::Medium is h_8 (32px) with its own padding. The 1px
+                // border is outside that box, so the frame is 34px.
+                this.child(
+                    div()
+                        .id("parameter-picker-input-box")
+                        .w_full()
+                        .rounded(px(6.))
+                        .bg(theme.bg_canvas)
+                        .border_1()
+                        .border_color(input_border)
+                        .child(Input::new(&self.input).appearance(false).cleanable(true)),
+                )
+            })
+            .when_some(self.error, |this, err| {
+                this.child(
+                    div()
+                        .id("parameter-picker-error")
+                        .w_full()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(6.))
+                        .bg(theme.error_bg)
+                        .text_xs()
+                        .text_color(theme.error_text)
+                        .child(err),
+                )
+            })
+            .child(
+                v_flex()
+                    .id("parameter-picker-presets")
+                    .w_full()
+                    .gap_0p5()
+                    .when(
+                        allows_input && !trimmed_typed.is_empty() && !has_exact_preset,
+                        |this| {
+                            let custom_val = trimmed_typed.clone();
+                            let on_select = self.on_select_preset.clone();
+                            this.child(
+                                h_flex()
+                                    .id("picker-custom-apply")
+                                    .w_full()
+                                    .min_h(px(24.))
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .px_2()
+                                    .line_height(px(16.))
+                                    .rounded(px(6.))
+                                    .bg(theme.bg_toggle_active)
+                                    .hover(|s| s.bg(theme.bg_hover))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        on_select(custom_val.clone(), window, cx);
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(theme.text_primary)
+                                            .child(i18n::picker_apply_value(
+                                                locale,
+                                                &trimmed_typed,
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .whitespace_nowrap()
+                                            .text_xs()
+                                            .text_color(theme.sim_badge_text)
+                                            .child("Enter"),
+                                    ),
+                            )
+                        },
+                    )
+                    .when(presets.is_empty() && trimmed_typed.is_empty(), |this| {
+                        this.child(
+                            div()
+                                .w_full()
+                                .px_2()
+                                .py_1p5()
+                                .text_xs()
+                                .text_color(theme.text_muted)
+                                .child(tr(locale, "picker.no_ports")),
+                        )
+                    })
+                    .children(presets.into_iter().enumerate().map(|(idx, preset)| {
+                        let is_current = preset == current_value;
+                        let preset_for_click = preset.clone();
+                        let on_select = self.on_select_preset.clone();
+
+                        h_flex()
+                            .id(("picker-preset", idx))
+                            .w_full()
+                            .min_h(px(24.))
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .px_2()
+                            .line_height(px(16.))
+                            .rounded(px(6.))
+                            .when(is_current, |this| this.bg(theme.bg_toggle_active))
+                            .hover(|s| s.bg(theme.bg_hover))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                on_select(preset_for_click.clone(), window, cx);
+                            })
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_xs()
+                                    .text_color(if is_current {
+                                        theme.text_primary
+                                    } else {
+                                        theme.text_secondary
+                                    })
+                                    .child(preset),
+                            )
+                            .when(is_current, |this| {
+                                this.child(
+                                    h_flex()
+                                        .flex_shrink_0()
+                                        .items_center()
+                                        .gap_1()
+                                        .whitespace_nowrap()
+                                        .text_xs()
+                                        .text_color(theme.accent_blue_hover)
+                                        .child(
+                                            Icon::new(LucideIcon::Check)
+                                                .size(px(12.))
+                                                .text_color(theme.accent_blue_hover),
+                                        )
+                                        .child(tr(locale, "badge.current")),
+                                )
+                            })
+                    })),
+            );
+
+        animate_popover_enter(popover, self.open_epoch)
+    }
+}

@@ -1,0 +1,20 @@
+pub mod bottom_bar;
+pub mod log_view;
+pub mod motion;
+pub mod parameter_picker;
+pub mod quick_command_window;
+pub mod quick_send_panel;
+pub mod receive_toolbar;
+pub mod script_panel;
+pub mod search_bar;
+pub mod send_card;
+pub mod settings_window;
+pub mod start_page;
+pub mod tab_rail;
+pub mod theme;
+pub mod theme_manager;
+pub mod theme_store;
+pub mod update_manager;
+pub mod workspace;
+
+pub use workspace::SashaApp;

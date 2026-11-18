@@ -1,0 +1,351 @@
+use std::borrow::Cow;
+
+use gpui_kit::SharedString;
+use serde::{Deserialize, Serialize};
+
+use crate::ui::theme_store::{ThemeErrorKind, ThemeMessage};
+
+/// Supported UI locales backed by `locales/<code >.toml` via `rust-i18n`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum Locale {
+    #[default]
+    #[serde(rename = "zh-CN")]
+    ZhCn,
+    #[serde(rename = "en-US")]
+    EnUs,
+}
+
+impl Locale {
+    pub const ALL: [Self; 2] = [Self::ZhCn, Self::EnUs];
+
+    /// Locale identifier matching `locales/<code>.toml`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ZhCn => "zh-CN",
+            Self::EnUs => "en-US",
+        }
+    }
+
+    /// Native display name shown in language selectors regardless of current locale.
+    pub fn native_name(self) -> &'static str {
+        match self {
+            Self::ZhCn => "简体中文",
+            Self::EnUs => "English",
+        }
+    }
+}
+
+/// Looks up a translation key for `locale` from the compiled `locales/*.toml` tables.
+pub fn tr(locale: Locale, key: &'static str) -> Cow<'static, str> {
+    rust_i18n::t!(key, locale = locale.code())
+}
+
+/// Looks up a translation key as a GPUI [`SharedString`].
+pub fn tr_shared(locale: Locale, key: &'static str) -> SharedString {
+    tr(locale, key).into()
+}
+
+pub fn start_frame_header(locale: Locale, chevron: &str) -> String {
+    rust_i18n::t!(
+        "start.frame_header",
+        locale = locale.code(),
+        chevron = chevron
+    )
+    .into_owned()
+}
+
+pub fn picker_apply_value(locale: Locale, value: &str) -> String {
+    rust_i18n::t!("picker.apply_value", locale = locale.code(), value = value).into_owned()
+}
+
+pub fn bottom_buffer_label(locale: Locale, used: &str, limit: &str) -> String {
+    rust_i18n::t!(
+        "bottom.buffer",
+        locale = locale.code(),
+        used = used,
+        limit = limit
+    )
+    .into_owned()
+}
+
+pub fn err_buffer_limit(locale: Locale, min: &str, max: &str) -> String {
+    rust_i18n::t!(
+        "err.buffer_limit",
+        locale = locale.code(),
+        min = min,
+        max = max
+    )
+    .into_owned()
+}
+
+pub fn quick_skipped(locale: Locale, count: usize) -> String {
+    rust_i18n::t!("quick.skipped", locale = locale.code(), count = count).into_owned()
+}
+
+pub fn quick_shortcut_hint(locale: Locale, digit: usize) -> String {
+    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), digit = digit).into_owned()
+}
+
+pub fn quick_save_failed(locale: Locale, err: &str) -> String {
+    rust_i18n::t!("quick.save_failed", locale = locale.code(), err = err).into_owned()
+}
+
+pub fn timer_interval_error(locale: Locale, min: u32, max: u32) -> String {
+    rust_i18n::t!(
+        "err.timer_interval",
+        locale = locale.code(),
+        min = min,
+        max = max
+    )
+    .into_owned()
+}
+
+pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
+    rust_i18n::t!(
+        "signal.write_failed",
+        locale = locale.code(),
+        line = line,
+        detail = detail
+    )
+    .into_owned()
+}
+
+pub fn settings_save_error(locale: Locale, err: &str) -> String {
+    rust_i18n::t!("settings.save_error", locale = locale.code(), err = err).into_owned()
+}
+
+pub fn serial_usb_mfg(locale: Locale, mfg: &str) -> String {
+    rust_i18n::t!("serial.usb_mfg", locale = locale.code(), mfg = mfg).into_owned()
+}
+
+pub fn serial_usb_vid_pid(locale: Locale, vid: u16, pid: u16) -> String {
+    let vid_hex = format!("{vid:04X}");
+    let pid_hex = format!("{pid:04X}");
+    rust_i18n::t!(
+        "serial.usb_vid_pid",
+        locale = locale.code(),
+        vid = vid_hex,
+        pid = pid_hex
+    )
+    .into_owned()
+}
+
+pub fn serial_err_invalid_input(locale: Locale, detail: &str) -> String {
+    rust_i18n::t!(
+        "serial.err_invalid_input",
+        locale = locale.code(),
+        detail = detail
+    )
+    .into_owned()
+}
+
+pub fn serial_format_error(locale: Locale, action: &str, port: &str, detail: &str) -> String {
+    rust_i18n::t!(
+        "serial.format_error",
+        locale = locale.code(),
+        action = action,
+        port = port,
+        detail = detail
+    )
+    .into_owned()
+}
+
+pub fn serial_action_open_failed(locale: Locale) -> String {
+    tr(locale, "serial.action_open_failed").into_owned()
+}
+
+pub fn serial_action_clone_failed(locale: Locale) -> String {
+    tr(locale, "serial.action_clone_failed").into_owned()
+}
+
+pub fn serial_action_spawn_failed(locale: Locale) -> String {
+    tr(locale, "serial.action_spawn_failed").into_owned()
+}
+
+pub fn serial_action_write_failed(locale: Locale) -> String {
+    tr(locale, "serial.action_write_failed").into_owned()
+}
+
+pub fn serial_action_flush_failed(locale: Locale) -> String {
+    tr(locale, "serial.action_flush_failed").into_owned()
+}
+
+pub fn scripts_status_failed(locale: Locale, error: &str) -> String {
+    rust_i18n::t!(
+        "scripts.status_failed",
+        locale = locale.code(),
+        error = error
+    )
+    .into_owned()
+}
+
+pub fn scripts_running_tooltip(locale: Locale, count: usize) -> String {
+    rust_i18n::t!(
+        "scripts.running_tooltip",
+        locale = locale.code(),
+        count = count
+    )
+    .into_owned()
+}
+
+pub fn theme_status_fallback(locale: Locale, active: &str, configured: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_status_fallback",
+        locale = locale.code(),
+        active = active,
+        configured = configured
+    )
+    .into_owned()
+}
+
+pub fn theme_dir_desc(locale: Locale, path: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_dir_desc",
+        locale = locale.code(),
+        path = path
+    )
+    .into_owned()
+}
+
+pub fn update_available(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.available",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_downloading(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.downloading",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_installed(locale: Locale, version: &str) -> String {
+    rust_i18n::t!(
+        "update.installed",
+        locale = locale.code(),
+        version = version
+    )
+    .into_owned()
+}
+
+pub fn update_failed(locale: Locale, detail: &str) -> String {
+    rust_i18n::t!("update.failed", locale = locale.code(), detail = detail).into_owned()
+}
+
+pub fn theme_unknown(locale: Locale, id: &str) -> String {
+    rust_i18n::t!("settings.theme_unknown", locale = locale.code(), id = id).into_owned()
+}
+
+pub fn theme_open_failed(locale: Locale, err: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_open_failed",
+        locale = locale.code(),
+        err = err
+    )
+    .into_owned()
+}
+
+/// Renders a structured theme message in `locale`; file names, field names and
+/// parser details are passed through verbatim.
+pub fn theme_message(locale: Locale, message: &ThemeMessage) -> String {
+    let code = locale.code();
+    match message {
+        ThemeMessage::FallbackMissing { id } => rust_i18n::t!(
+            "settings.theme_msg_fallback_missing",
+            locale = code,
+            id = id
+        )
+        .into_owned(),
+        ThemeMessage::FallbackBroken { id, detail } => rust_i18n::t!(
+            "settings.theme_msg_fallback_broken",
+            locale = code,
+            id = id,
+            detail = detail
+        )
+        .into_owned(),
+        ThemeMessage::File(err) if err.kind == ThemeErrorKind::Conflict => rust_i18n::t!(
+            "settings.theme_msg_file_conflict",
+            locale = code,
+            file = &err.file
+        )
+        .into_owned(),
+        ThemeMessage::File(err) => {
+            let detail = match &err.field {
+                Some(field) => format!("{field}: {}", err.message),
+                None => err.message.clone(),
+            };
+            rust_i18n::t!(
+                "settings.theme_msg_file_error",
+                locale = code,
+                file = &err.file,
+                detail = detail
+            )
+            .into_owned()
+        }
+        ThemeMessage::SaveFailed(err) => {
+            rust_i18n::t!("settings.theme_msg_save_failed", locale = code, err = err).into_owned()
+        }
+        ThemeMessage::DirCreateFailed { path, error } => rust_i18n::t!(
+            "settings.theme_msg_dir_failed",
+            locale = code,
+            path = path,
+            err = error
+        )
+        .into_owned(),
+        ThemeMessage::WatchUnavailable(err) => {
+            rust_i18n::t!("settings.theme_msg_watch_failed", locale = code, err = err).into_owned()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locales_resolve_distinct_non_empty_strings_from_toml() {
+        let zh_title = tr(Locale::ZhCn, "start.title");
+        let en_title = tr(Locale::EnUs, "start.title");
+        assert_eq!(zh_title, "连接串口设备");
+        assert_eq!(en_title, "Connect Serial Port");
+
+        assert_ne!(
+            tr(Locale::ZhCn, "settings.tab_general"),
+            tr(Locale::EnUs, "settings.tab_general")
+        );
+        assert_eq!(Locale::ZhCn.native_name(), "简体中文");
+        assert_eq!(Locale::EnUs.native_name(), "English");
+    }
+
+    #[test]
+    fn dynamic_helpers_format_for_each_locale() {
+        assert_eq!(picker_apply_value(Locale::ZhCn, "9600"), "应用输入值: 9600");
+        assert_eq!(
+            picker_apply_value(Locale::EnUs, "9600"),
+            "Apply value: 9600"
+        );
+        assert_eq!(start_frame_header(Locale::ZhCn, "▸"), "▸ 帧格式（高级）");
+        assert_eq!(
+            start_frame_header(Locale::EnUs, "▾"),
+            "▾ Frame Format (Advanced)"
+        );
+    }
+
+    #[test]
+    fn timer_helpers_format_for_each_locale() {
+        assert_eq!(
+            timer_interval_error(Locale::ZhCn, 10, 3600000),
+            "定时间隔须为 10 到 3600000 毫秒的整数"
+        );
+        assert_eq!(
+            timer_interval_error(Locale::EnUs, 10, 3600000),
+            "Interval must be a whole number from 10 to 3600000 ms"
+        );
+    }
+}
