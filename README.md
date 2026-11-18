@@ -99,6 +99,7 @@ requires valid UTF-8.
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
 | `Ctrl+1` … `Ctrl+8` | Switch to the corresponding session |
 | `Ctrl+9` | Switch to the last session |
+| `Alt+1` … `Alt+9` | Send the corresponding command in the quick send list |
 | `Ctrl+C` | Copy selected text from the focused editor or log area |
 | `Enter` / `Esc` in a parameter picker | Confirm / cancel the parameter change |
 
@@ -113,6 +114,29 @@ The receive text/HEX mode at activation is fixed for that capture. Text follows 
 New or empty files receive one UTF-8 BOM to help Windows editors recognize their encoding. Appending to a nonempty file neither inserts another BOM nor changes existing content. UTF-16/UTF-32 BOM files are rejected; choose a new file. Existing BOMless logs that display incorrectly are not automatically repaired; start capture in a new file.
 
 Writes run in the background and flush application buffers after each record. Pausing, clearing, memory trimming, switching tabs and disconnecting do not stop capture. Stopping drains queued records in the background; closing a session waits for them to drain, and normal app exit drains them within the framework shutdown window. File errors or a full writer queue stop capture and display an error above the toolbar.
+
+### Quick send
+
+The **Quick send** section sits in the right dock below **Scripts**. Each saved command stores `id`, `name`, optional `group`, `content`, `hex`, and `line_ending` (`"none"`, `"crlf"`, or `"lf"`, ignored when `hex = true`). Click any command to send it directly using its own HEX/line-ending settings without modifying the send card draft, or press `Alt+1` … `Alt+9` in the workspace to send the first 9 commands in display order (across groups, regardless of search filter or collapsed groups). Commands are shared across sessions and persisted in `config.toml`:
+
+```toml
+[[quick_commands]]
+id = "qc-1"
+name = "AT"
+group = "Init"
+content = "AT"
+hex = false
+line_ending = "crlf"
+
+[[quick_commands]]
+id = "qc-2"
+name = "Ping"
+group = "Init"
+content = "AA 55 01"
+hex = true
+```
+
+Invalid or duplicate-id entries in `config.toml` are skipped on load without discarding the rest of the configuration, and a notice is shown in the Quick send section.
 
 ## Preferences
 

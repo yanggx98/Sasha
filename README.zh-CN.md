@@ -95,8 +95,32 @@ HEX 使用空格分隔的两位字节，例如 `0A FF 1B`。文本模式可选�
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个会话 |
 | `Ctrl+1` … `Ctrl+8` | 切换到对应位置的会话 |
 | `Ctrl+9` | 切换到最后一个会话 |
+| `Alt+1` … `Alt+9` | 发送快捷发送列表中对应位置的命令 |
 | `Ctrl+C` | 复制当前编辑器或日志区选中的文字 |
 | 参数浮层中的 `Enter` / `Esc` | 确认 / 取消参数修改 |
+
+## 快捷发送
+
+**快捷发送**区块位于右侧栏**脚本**区块下方。每条命令保存 `id`、`name`、可选 `group`、`content`、`hex` 与 `line_ending`（`"none"` / `"crlf"` / `"lf"`，开启 `hex = true` 时忽略）。点击命令会按其自带的 HEX 与换行符设置直接发送，不会改动发送卡输入框和底栏状态；在工作区按 `Alt+1` … `Alt+9` 可发送展示顺序中的前 9 条命令（跨分组计数，不受搜索过滤或折叠影响）。命令在所有会话间共享，并持久化在 `config.toml` 中：
+
+```toml
+[[quick_commands]]
+id = "qc-1"
+name = "AT"
+group = "设备初始化"
+content = "AT"
+hex = false
+line_ending = "crlf"
+
+[[quick_commands]]
+id = "qc-2"
+name = "Ping"
+group = "设备初始化"
+content = "AA 55 01"
+hex = true
+```
+
+`config.toml` 中单条格式损坏或 `id` 重复的命令会在加载时被忽略，不影响其余配置，并在快捷发送区块内提示。
 
 ## 偏好设置
 
