@@ -23,7 +23,7 @@ data_bits = "Data Bits"
 parity = "Parity"
 stop_bits = "Stop Bits"
 flow = "Flow"
-dtr_rts_init = "Initial levels"
+dtr_rts_init = "Start high"
 connect_btn = "Connect & Open Terminal →"
 sim_btn = "Skip connection, open simulated session"
 

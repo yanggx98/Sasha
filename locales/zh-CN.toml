@@ -23,7 +23,7 @@ data_bits = "数据位"
 parity = "校验位"
 stop_bits = "停止位"
 flow = "流控"
-dtr_rts_init = "初始电平"
+dtr_rts_init = "初始置高"
 connect_btn = "连接并进入终端 →"
 sim_btn = "先不连接，进入模拟会话"
 

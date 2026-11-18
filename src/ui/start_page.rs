@@ -577,10 +577,11 @@ impl RenderOnce for StartPage {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .child(
                         div()
+                            .w(px(48.))
+                            .flex_none()
                             .text_xs()
                             .text_color(theme.text_secondary)
                             .child(tr(locale, "start.data_bits")),
@@ -614,10 +615,11 @@ impl RenderOnce for StartPage {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .child(
                         div()
+                            .w(px(48.))
+                            .flex_none()
                             .text_xs()
                             .text_color(theme.text_secondary)
                             .child(tr(locale, "start.parity")),
@@ -651,10 +653,11 @@ impl RenderOnce for StartPage {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .child(
                         div()
+                            .w(px(48.))
+                            .flex_none()
                             .text_xs()
                             .text_color(theme.text_secondary)
                             .child(tr(locale, "start.stop_bits")),
@@ -701,10 +704,11 @@ impl RenderOnce for StartPage {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .child(
                         div()
+                            .w(px(48.))
+                            .flex_none()
                             .text_xs()
                             .text_color(theme.text_secondary)
                             .child(tr(locale, "start.flow")),
@@ -737,10 +741,11 @@ impl RenderOnce for StartPage {
                 h_flex()
                     .w_full()
                     .items_center()
-                    .justify_between()
                     .gap_2()
                     .child(
                         div()
+                            .w(px(48.))
+                            .flex_none()
                             .text_xs()
                             .text_color(theme.text_secondary)
                             .child(tr(locale, "start.dtr_rts_init")),
@@ -866,7 +871,7 @@ impl RenderOnce for StartPage {
                     .id("start-page-content")
                     .flex_shrink_0()
                     .my_auto()
-                    .w(px(540.))
+                    .w(px(528.))
                     .max_w_full()
                     .gap(px(14.))
                     .child(
