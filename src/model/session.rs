@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+use serde::{Deserialize, Serialize};
+
 use crate::i18n::{Locale, tr};
 
 use super::log::format_hex_bytes;
@@ -86,7 +88,8 @@ impl Default for ReceiveViewState {
 }
 
 /// Line ending appended to outgoing text payloads on send (ignored in HEX send mode).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SendLineEnding {
     #[default]
     None,
@@ -568,6 +571,30 @@ impl SessionState {
         timestamp: impl Into<String>,
     ) -> Result<Vec<u8>, SendPayloadError> {
         let bytes = self.prepare_send_bytes()?;
+        let ts = timestamp.into();
+        self.record_tx_bytes(&bytes, &ts);
+        Ok(bytes)
+    }
+
+    /// Validates connection and generates outgoing payload bytes for a quick command
+    /// without mutating `self.send.*`.
+    pub fn prepare_command_bytes(
+        &self,
+        cmd: &super::quick_command::QuickCommand,
+    ) -> Result<Vec<u8>, SendPayloadError> {
+        if !self.connection.is_connected() {
+            return Err(SendPayloadError::Disconnected);
+        }
+        cmd.payload()
+    }
+
+    /// Validates and submits a quick command as a TX log entry (used by simulated sessions).
+    pub fn submit_command_with_timestamp(
+        &mut self,
+        cmd: &super::quick_command::QuickCommand,
+        timestamp: impl Into<String>,
+    ) -> Result<Vec<u8>, SendPayloadError> {
+        let bytes = self.prepare_command_bytes(cmd)?;
         let ts = timestamp.into();
         self.record_tx_bytes(&bytes, &ts);
         Ok(bytes)
@@ -1177,5 +1204,85 @@ mod tests {
         assert_eq!(state.logs.len(), 1);
         assert_eq!(state.retained_while_paused.len(), 1);
         assert_eq!(state.retained_while_paused[0].id, 10);
+    }
+
+    #[test]
+    fn command_send_does_not_touch_draft() {
+        use super::super::quick_command::QuickCommand;
+
+        let mut state = SessionState::new_simulated_demo();
+        state.connection = SimulatedConnectionState::Connected;
+        state.send.text = "draft".to_string();
+        state.send.send_hex = true;
+        state.send.line_ending = SendLineEnding::Lf;
+        let prev_tx = state.counters.tx_bytes;
+
+        let cmd = QuickCommand {
+            id: "c1".to_string(),
+            name: "AT".to_string(),
+            group: String::new(),
+            content: "AT".to_string(),
+            hex: false,
+            line_ending: SendLineEnding::CrLf,
+        };
+        let bytes = state
+            .submit_command_with_timestamp(&cmd, "12:00:00.000")
+            .expect("command send");
+        assert_eq!(bytes, b"AT\r\n");
+        assert_eq!(state.send.text, "draft");
+        assert!(state.send.send_hex);
+        assert_eq!(state.send.line_ending, SendLineEnding::Lf);
+        assert_eq!(state.counters.tx_bytes, prev_tx + 4);
+        assert_eq!(state.logs.last().unwrap().direction, LogDirection::Tx);
+    }
+
+    #[test]
+    fn command_send_when_disconnected_records_nothing() {
+        use super::super::quick_command::QuickCommand;
+
+        let mut state = SessionState::new_simulated_demo();
+        state.connection = SimulatedConnectionState::Disconnected;
+        let prev_tx = state.counters.tx_bytes;
+        let prev_logs = state.logs.len();
+
+        let cmd = QuickCommand {
+            id: "c1".to_string(),
+            name: "AT".to_string(),
+            group: String::new(),
+            content: "AT".to_string(),
+            hex: false,
+            line_ending: SendLineEnding::None,
+        };
+        assert_eq!(
+            state.submit_command_with_timestamp(&cmd, "12:00:00.000"),
+            Err(SendPayloadError::Disconnected)
+        );
+        assert_eq!(state.counters.tx_bytes, prev_tx);
+        assert_eq!(state.logs.len(), prev_logs);
+    }
+
+    #[test]
+    fn command_send_invalid_hex_records_nothing() {
+        use super::super::quick_command::QuickCommand;
+
+        let mut state = SessionState::new_simulated_demo();
+        state.connection = SimulatedConnectionState::Connected;
+        let prev_tx = state.counters.tx_bytes;
+        let prev_logs = state.logs.len();
+
+        let cmd = QuickCommand {
+            id: "c1".to_string(),
+            name: "BadHex".to_string(),
+            group: String::new(),
+            content: "ZZ".to_string(),
+            hex: true,
+            line_ending: SendLineEnding::None,
+        };
+        assert!(matches!(
+            state.submit_command_with_timestamp(&cmd, "12:00:00.000"),
+            Err(SendPayloadError::InvalidHex(_))
+        ));
+        assert_eq!(state.counters.tx_bytes, prev_tx);
+        assert_eq!(state.logs.len(), prev_logs);
     }
 }

@@ -1,10 +1,13 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::i18n::Locale;
+
+use super::quick_command::{MAX_QUICK_COMMANDS, QuickCommand};
 
 /// Default configuration file name stored in the application root directory.
 pub const CONFIG_FILE_NAME: &str = "config.toml";
@@ -79,6 +82,9 @@ pub struct AppConfig {
     /// Selected theme id (`dark`, `light`, or a file stem in the `themes` directory).
     #[serde(default = "default_theme_id")]
     pub theme: String,
+    /// Saved quick-send commands shared across sessions.
+    #[serde(default, deserialize_with = "lenient_quick_commands")]
+    pub quick_commands: Vec<QuickCommand>,
 }
 
 impl Default for AppConfig {
@@ -93,8 +99,32 @@ impl Default for AppConfig {
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
             theme: DEFAULT_THEME_ID.to_string(),
+            quick_commands: Vec::new(),
         }
     }
+}
+
+fn lenient_quick_commands<'de, D>(deserializer: D) -> Result<Vec<QuickCommand>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let values = Vec::<toml::Value>::deserialize(deserializer)?;
+    let mut result = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for value in values {
+        if result.len() >= MAX_QUICK_COMMANDS {
+            break;
+        }
+        let Ok(cmd) = value.try_into::<QuickCommand>() else {
+            continue;
+        };
+        if cmd.id.trim().is_empty() || cmd.validate().is_err() || !seen_ids.insert(cmd.id.clone())
+        {
+            continue;
+        }
+        result.push(cmd);
+    }
+    Ok(result)
 }
 
 fn default_log_buffer_limit() -> u32 {
@@ -196,6 +226,7 @@ pub struct ConfigStore {
     path: PathBuf,
     config: AppConfig,
     last_load_warning: Option<String>,
+    quick_commands_skipped: usize,
 }
 
 impl ConfigStore {
@@ -215,6 +246,7 @@ impl ConfigStore {
                 path,
                 config: AppConfig::default(),
                 last_load_warning: None,
+                quick_commands_skipped: 0,
             };
         }
 
@@ -225,6 +257,7 @@ impl ConfigStore {
                     path,
                     config: AppConfig::default(),
                     last_load_warning: Some(format!("Failed to read config file: {err}")),
+                    quick_commands_skipped: 0,
                 };
             }
         };
@@ -232,10 +265,21 @@ impl ConfigStore {
         match toml::from_str::<AppConfig>(&raw) {
             Ok(mut config) => {
                 migrate_config(&mut config);
+                let raw_count = toml::from_str::<toml::Table>(&raw)
+                    .ok()
+                    .and_then(|t| t.get("quick_commands").and_then(|v| v.as_array()).map(|a| a.len()))
+                    .unwrap_or(0);
+                let skipped = raw_count.saturating_sub(config.quick_commands.len());
+                let warning = if skipped > 0 {
+                    Some(format!("Skipped {skipped} invalid quick command(s)"))
+                } else {
+                    None
+                };
                 Self {
                     path,
                     config,
-                    last_load_warning: None,
+                    last_load_warning: warning,
+                    quick_commands_skipped: skipped,
                 }
             }
             Err(err) => {
@@ -249,6 +293,7 @@ impl ConfigStore {
                     last_load_warning: Some(format!(
                         "Corrupted config file ({err}); {backup_note}"
                     )),
+                    quick_commands_skipped: 0,
                 }
             }
         }
@@ -272,10 +317,19 @@ impl ConfigStore {
         self.last_load_warning.as_deref()
     }
 
+    /// Returns the number of invalid/duplicate quick commands skipped on load.
+    pub fn skipped_quick_commands(&self) -> usize {
+        self.quick_commands_skipped
+    }
+
     /// Mutates the configuration in memory without writing to disk.
     pub fn update_in_memory(&mut self, mutate: impl FnOnce(&mut AppConfig)) {
+        let prev_quick_commands = self.config.quick_commands.clone();
         mutate(&mut self.config);
         migrate_config(&mut self.config);
+        if self.config.quick_commands != prev_quick_commands {
+            self.quick_commands_skipped = 0;
+        }
     }
 
     /// Mutates the configuration in memory and atomically persists it to disk.
@@ -287,6 +341,7 @@ impl ConfigStore {
     /// Resets the configuration to [`AppConfig::default()`] and persists it to disk.
     pub fn reset_to_default(&mut self) -> Result<(), String> {
         self.config = AppConfig::default();
+        self.quick_commands_skipped = 0;
         self.save()
     }
 
@@ -640,5 +695,81 @@ mod tests {
 
         store.update_in_memory(|cfg| cfg.theme = "   ".to_string());
         assert_eq!(store.config().theme, "dark");
+    }
+
+    #[test]
+    fn config_roundtrip_preserves_content_exactly() {
+        use crate::model::SendLineEnding;
+
+        let dir = TempDir::new("quick-roundtrip");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        let cmd = QuickCommand {
+            id: "qc-1".to_string(),
+            name: "Exact".to_string(),
+            group: "G1".to_string(),
+            content: " a\r\nb 你好 ".to_string(),
+            hex: false,
+            line_ending: SendLineEnding::CrLf,
+        };
+        store
+            .update(|cfg| cfg.quick_commands = vec![cmd.clone()])
+            .expect("save quick commands");
+
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().quick_commands, vec![cmd]);
+        assert_eq!(reloaded.skipped_quick_commands(), 0);
+    }
+
+    #[test]
+    fn config_skips_invalid_and_duplicate_commands() {
+        let dir = TempDir::new("quick-skip");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        let toml_text = r#"
+version = 1
+locale = "en-US"
+log_font_size = 15
+
+[[quick_commands]]
+id = "c1"
+name = "First"
+content = "AT"
+
+[[quick_commands]]
+id = "bad"
+name = "MissingContent"
+
+[[quick_commands]]
+id = "c1"
+name = "DuplicateId"
+content = "AT+RST"
+
+[[quick_commands]]
+id = "c2"
+name = "Second"
+content = "OK"
+"#;
+        fs::write(&cfg_path, toml_text).expect("write toml");
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().locale, Locale::EnUs);
+        assert_eq!(store.config().log_font_size, 15);
+        assert_eq!(store.config().quick_commands.len(), 2);
+        assert_eq!(store.config().quick_commands[0].id, "c1");
+        assert_eq!(store.config().quick_commands[1].id, "c2");
+        assert_eq!(store.skipped_quick_commands(), 2);
+        assert!(store.last_load_warning().is_some());
+    }
+
+    #[test]
+    fn old_config_without_quick_commands_loads() {
+        let dir = TempDir::new("quick-old");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&cfg_path, "version = 1\nlocale = \"zh-CN\"\n").expect("write old toml");
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert!(store.config().quick_commands.is_empty());
+        assert_eq!(store.skipped_quick_commands(), 0);
+        assert!(store.last_load_warning().is_none());
     }
 }

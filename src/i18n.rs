@@ -78,6 +78,18 @@ pub fn err_buffer_limit(locale: Locale, min: &str, max: &str) -> String {
     .into_owned()
 }
 
+pub fn quick_skipped(locale: Locale, count: usize) -> String {
+    rust_i18n::t!("quick.skipped", locale = locale.code(), count = count).into_owned()
+}
+
+pub fn quick_shortcut_hint(locale: Locale, digit: usize) -> String {
+    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), digit = digit).into_owned()
+}
+
+pub fn quick_save_failed(locale: Locale, err: &str) -> String {
+    rust_i18n::t!("quick.save_failed", locale = locale.code(), err = err).into_owned()
+}
+
 pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
     rust_i18n::t!(
         "signal.write_failed",

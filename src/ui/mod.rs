@@ -2,6 +2,8 @@ pub mod bottom_bar;
 pub mod log_view;
 pub mod motion;
 pub mod parameter_picker;
+pub mod quick_command_window;
+pub mod quick_send_panel;
 pub mod receive_toolbar;
 pub mod script_panel;
 pub mod search_bar;

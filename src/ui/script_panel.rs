@@ -89,9 +89,12 @@ pub struct ScriptPanel {
     pub items: Vec<ScriptPanelItem>,
     pub load_error: Option<SharedString>,
     pub compact: bool,
+    pub collapsed: bool,
+    pub max_height_limited: bool,
     pub on_load: ToolbarActionCallback,
     pub on_collapse: ToolbarActionCallback,
     pub on_expand: ToolbarActionCallback,
+    pub on_toggle_section: ToolbarActionCallback,
     pub on_run: RunScriptCallback,
     pub on_stop: StopScriptCallback,
     pub on_remove: RemoveScriptCallback,
@@ -281,12 +284,19 @@ impl RenderOnce for ScriptPanel {
 
         v_flex()
             .id("script-panel")
-            .size_full()
+            .w_full()
             .min_h_0()
             .min_w_0()
+            // 脚本区始终按内容高度排布，不占满剩余空间，避免把下方区块标题挤到底部。
+            .flex_none()
+            .when(!self.compact && !self.collapsed, |this| {
+                if self.max_height_limited {
+                    this.max_h(relative(0.4))
+                } else {
+                    this.max_h(relative(0.9))
+                }
+            })
             .bg(self.theme.bg_canvas)
-            .border_l_1()
-            .border_color(self.theme.border_card)
             .occlude()
             .when(self.compact, |this| {
                 this.child(
@@ -318,14 +328,27 @@ impl RenderOnce for ScriptPanel {
                 )
             })
             .when(!self.compact, |this| {
+                let section_icon = if self.collapsed {
+                    LucideIcon::ChevronRight
+                } else {
+                    LucideIcon::ChevronDown
+                };
                 this.child(
                     h_flex()
                         .h(px(38.))
                         .flex_shrink_0()
+                        .items_center()
                         .px_3()
                         .gap_1()
-                        .border_b_1()
+                        // 折叠时下方快捷发送区块已有上边线，这里不再画，避免两条线叠成一条粗线。
+                        .when(!self.collapsed, |this| this.border_b_1())
                         .border_color(self.theme.border_card)
+                        .child(self.compact_action(
+                            "script-section-toggle",
+                            section_icon,
+                            tr_shared(locale, "quick.collapse_section"),
+                            Some(self.on_toggle_section.clone()),
+                        ))
                         .child(
                             div()
                                 .id("script-title-drag")
@@ -355,39 +378,40 @@ impl RenderOnce for ScriptPanel {
                         )),
                 )
             })
-            .child(
-                v_flex()
-                    .id("script-list")
-                    .flex_1()
-                    .min_h_0()
-                    .px_1p5()
-                    .py_1()
-                    .gap_0p5()
-                    .overflow_y_scroll()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .when(rows.is_empty() && !self.compact, |this| {
-                        this.child(
-                            div()
-                                .p_3()
-                                .text_xs()
-                                .text_color(self.theme.text_muted)
-                                .child(tr_shared(locale, "scripts.empty")),
-                        )
-                    })
-                    .children(rows)
-                    .when_some(
-                        self.load_error.clone().filter(|_| !self.compact),
-                        |this, error| {
+            .when(self.compact || !self.collapsed, |this| {
+                this.child(
+                    v_flex()
+                        .id("script-list")
+                        .when(!self.compact, |this| this.min_h_0())
+                        .px_1p5()
+                        .py_1()
+                        .gap_0p5()
+                        .overflow_y_scroll()
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when(rows.is_empty() && !self.compact, |this| {
                             this.child(
                                 div()
                                     .p_3()
                                     .text_xs()
-                                    .text_color(self.theme.error_text)
-                                    .child(error),
+                                    .text_color(self.theme.text_muted)
+                                    .child(tr_shared(locale, "scripts.empty")),
                             )
-                        },
-                    ),
-            )
+                        })
+                        .children(rows)
+                        .when_some(
+                            self.load_error.clone().filter(|_| !self.compact),
+                            |this, error| {
+                                this.child(
+                                    div()
+                                        .p_3()
+                                        .text_xs()
+                                        .text_color(self.theme.error_text)
+                                        .child(error),
+                                )
+                            },
+                        ),
+                )
+            })
     }
 }
 

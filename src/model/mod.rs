@@ -1,5 +1,6 @@
 pub mod config;
 pub mod log;
+pub mod quick_command;
 pub mod session;
 pub mod settings;
 pub mod stream_output;

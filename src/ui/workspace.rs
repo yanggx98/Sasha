@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -13,12 +13,19 @@ use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{Locale, bottom_buffer_label, signal_write_failed, tr, tr_shared};
+use crate::i18n::{
+    Locale, bottom_buffer_label, quick_save_failed, quick_skipped, signal_write_failed, tr,
+    tr_shared,
+};
 use crate::model::log::format_hex_input_with_cursor;
+use crate::model::quick_command::{
+    QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
+    visible_rows,
+};
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, FlowControl, LogSearchState, LogSelectionModel,
-    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
-    format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
+    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_buffer_usage, format_log_buffer_limit,
+    parse_log_buffer_limit_for,
 };
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
@@ -27,6 +34,10 @@ use crate::ui::bottom_bar::{BottomBar, SignalControls};
 use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::motion::UiMotionState;
 use crate::ui::parameter_picker::ParameterPickerPopover;
+use crate::ui::quick_command_window::{
+    QuickCommandWindow, QuickFillSource, persist_quick_commands,
+};
+use crate::ui::quick_send_panel::QuickSendPanel;
 use crate::ui::receive_toolbar::ReceiveToolbar;
 use crate::ui::script_panel::{
     ResizeScriptPanel, SCRIPT_PANEL_MIN_WIDTH, SCRIPT_PANEL_WIDTH, ScriptPanel, ScriptPanelItem,
@@ -68,6 +79,14 @@ struct SessionTab {
     send_input: Option<Entity<TextareaState>>,
     _send_subscription: Option<Subscription>,
     send_error: Option<SharedString>,
+    quick_error: Option<SharedString>,
+    quick_collapsed: bool,
+    scripts_collapsed: bool,
+    quick_query: String,
+    quick_collapsed_groups: HashSet<String>,
+    quick_search_input: Option<Entity<InputState>>,
+    _quick_search_sub: Option<Subscription>,
+    quick_pending_delete: Option<String>,
     log_focus: FocusHandle,
     log_list_state: ListState,
     /// `(item count, font size)` last given a uniform row-height hint.
@@ -132,6 +151,14 @@ impl SessionTab {
             send_input: None,
             _send_subscription: None,
             send_error: None,
+            quick_error: None,
+            quick_collapsed: false,
+            scripts_collapsed: false,
+            quick_query: String::new(),
+            quick_collapsed_groups: HashSet::new(),
+            quick_search_input: None,
+            _quick_search_sub: None,
+            quick_pending_delete: None,
             log_focus: cx.focus_handle(),
             log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             row_hint_key: None,
@@ -388,12 +415,46 @@ pub struct SashaApp {
     config_store: Entity<ConfigStore>,
     last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
+    quick_editor_window: Option<AnyWindowHandle>,
     _config_subscription: Subscription,
     picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
     picker_error: Option<SharedString>,
     cached_bg_image: Option<(PathBuf, Option<Arc<Image>>)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SendErrorSlot {
+    SendCard,
+    QuickPanel,
+}
+
+fn send_payload_error_text(
+    locale: Locale,
+    is_simulated: bool,
+    err: &SendPayloadError,
+) -> SharedString {
+    match err {
+        SendPayloadError::Disconnected => {
+            if is_simulated {
+                tr_shared(locale, "err.send_sim_disconnected")
+            } else {
+                tr_shared(locale, "err.send_disconnected")
+            }
+        }
+        SendPayloadError::EmptyInput => tr_shared(locale, "err.send_empty"),
+        SendPayloadError::InvalidHex(_) => tr_shared(locale, "err.invalid_hex"),
+    }
+}
+
+impl SessionTab {
+    fn set_send_error(&mut self, slot: SendErrorSlot, text: Option<SharedString>) {
+        match slot {
+            SendErrorSlot::SendCard => self.send_error = text,
+            SendErrorSlot::QuickPanel => self.quick_error = text,
+        }
+    }
 }
 
 impl SashaApp {
@@ -434,6 +495,7 @@ impl SashaApp {
             config_store,
             last_locale: locale,
             settings_window: None,
+            quick_editor_window: None,
             _config_subscription,
             picker_port_presets: Vec::new(),
             picker_input: None,
@@ -578,6 +640,7 @@ impl SashaApp {
         self.picker_error = None;
         for tab in &mut self.tabs {
             tab.state.active_picker = None;
+            tab.quick_pending_delete = None;
         }
     }
 
@@ -684,6 +747,34 @@ impl SashaApp {
             return true;
         }
         false
+    }
+
+    fn handle_quick_shortcut(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let tab = self.active_tab();
+        if tab.page != AppPage::Workspace || tab.state.active_picker.is_some() {
+            return false;
+        }
+        let mods = &event.keystroke.modifiers;
+        let Some(digit) = quick_shortcut_digit(
+            mods.control,
+            mods.alt,
+            mods.shift,
+            mods.platform,
+            &event.keystroke.key,
+        ) else {
+            return false;
+        };
+        let command_id = command_for_shortcut(
+            &self.config_store.read(cx).config().quick_commands,
+            digit,
+        )
+        .map(|c| c.id.clone());
+        if let Some(id) = command_id {
+            self.send_quick_command(&id, cx);
+            true
+        } else {
+            false
+        }
     }
 
     fn ensure_start_manual_port_input(
@@ -1516,6 +1607,48 @@ impl SashaApp {
         entity
     }
 
+    fn ensure_quick_search_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        if let Some(existing) = self
+            .tabs
+            .iter()
+            .find(|t| t.id == tab_id)
+            .and_then(|t| t.quick_search_input.clone())
+        {
+            return existing;
+        }
+
+        let placeholder = tr_shared(
+            self.config_store.read(cx).config().locale,
+            "quick.search_placeholder",
+        );
+        let entity = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        let sub = cx.subscribe_in(
+            &entity,
+            window,
+            move |this, input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let query = input.read(cx).value().to_string();
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        tab.quick_query = query;
+                    }
+                    cx.notify();
+                }
+            },
+        );
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.quick_search_input = Some(entity.clone());
+            tab._quick_search_sub = Some(sub);
+        }
+
+        entity
+    }
+
     pub fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_id = self.active_tab_id;
         let locale = self.config_store.read(cx).config().locale;
@@ -1948,6 +2081,233 @@ impl SashaApp {
         cx.notify();
     }
 
+    fn enqueue_real_tx(
+        &mut self,
+        bytes: Vec<u8>,
+        slot: SendErrorSlot,
+        cx: &mut Context<Self>,
+    ) {
+        let locale = self.current_locale(cx);
+        let tab_id = self.active_tab_id;
+        let (service, generation) = {
+            let tab = self.active_tab();
+            (
+                tab.session_service.clone(),
+                tab.session_service.generation(),
+            )
+        };
+        match service.enqueue_tx(generation, bytes, None) {
+            Ok(reply_rx) => {
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { reply_rx.recv() })
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        let locale = app.current_locale(cx);
+                        let Some(tab) = app.tab_mut(tab_id) else {
+                            return;
+                        };
+                        tab.drain_tx_completed_logs();
+                        match result {
+                            Ok(Ok(())) => {
+                                tab.set_send_error(slot, None);
+                            }
+                            Ok(Err(SessionTxError::Disconnected))
+                            | Ok(Err(SessionTxError::StaleGeneration { .. })) => {
+                                if tab.state.connection.is_connected() {
+                                    tab.disconnect_real_serial(Some(
+                                        tr(locale, "err.send_disconnected").into_owned(),
+                                    ));
+                                    // 发送卡沿用原行为（仅走断开流程）；快捷面板另显示自己的错误。
+                                    if slot == SendErrorSlot::QuickPanel {
+                                        tab.set_send_error(
+                                            slot,
+                                            Some(tr_shared(locale, "err.send_disconnected")),
+                                        );
+                                    }
+                                } else {
+                                    tab.set_send_error(
+                                        slot,
+                                        Some(tr_shared(locale, "err.send_disconnected")),
+                                    );
+                                }
+                            }
+                            Ok(Err(SessionTxError::WriteFailed(err))) => {
+                                tab.set_send_error(slot, Some(err.into()));
+                            }
+                            Ok(Err(SessionTxError::Cancelled)) => {}
+                            Ok(Err(SessionTxError::QueueFull)) => {
+                                tab.set_send_error(
+                                    slot,
+                                    Some(SessionTxError::QueueFull.to_string().into()),
+                                );
+                            }
+                            Err(_) => {}
+                        }
+                        cx.notify();
+                    });
+                })
+                .detach();
+            }
+            Err(SessionTxError::Disconnected)
+            | Err(SessionTxError::StaleGeneration { .. }) => {
+                self.handle_serial_disconnected(
+                    Some(tr(locale, "err.send_disconnected").into_owned()),
+                    cx,
+                );
+                if slot == SendErrorSlot::QuickPanel {
+                    self.active_tab_mut()
+                        .set_send_error(slot, Some(tr_shared(locale, "err.send_disconnected")));
+                    cx.notify();
+                }
+            }
+            Err(err) => {
+                self.active_tab_mut()
+                    .set_send_error(slot, Some(err.to_string().into()));
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn send_quick_command(&mut self, command_id: &str, cx: &mut Context<Self>) {
+        let Some(cmd) = self
+            .config_store
+            .read(cx)
+            .config()
+            .quick_commands
+            .iter()
+            .find(|c| c.id == command_id)
+            .cloned()
+        else {
+            return;
+        };
+
+        let locale = self.current_locale(cx);
+        let is_simulated = self.active_tab().state.is_simulated_session;
+        if is_simulated {
+            let res = self
+                .active_tab_mut()
+                .state
+                .submit_command_with_timestamp(&cmd, current_timestamp_hms_ms());
+            match res {
+                Ok(_) => {
+                    self.active_tab_mut()
+                        .set_send_error(SendErrorSlot::QuickPanel, None);
+                }
+                Err(err) => {
+                    let msg = send_payload_error_text(locale, true, &err);
+                    self.active_tab_mut()
+                        .set_send_error(SendErrorSlot::QuickPanel, Some(msg));
+                }
+            }
+            cx.notify();
+            return;
+        }
+
+        match self.active_tab().state.prepare_command_bytes(&cmd) {
+            Ok(bytes) => {
+                self.enqueue_real_tx(bytes, SendErrorSlot::QuickPanel, cx);
+            }
+            Err(err) => {
+                let msg = send_payload_error_text(locale, false, &err);
+                self.active_tab_mut()
+                    .set_send_error(SendErrorSlot::QuickPanel, Some(msg));
+                cx.notify();
+            }
+        }
+    }
+
+    fn persist_quick_commands(
+        &self,
+        commands: Vec<QuickCommand>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        persist_quick_commands(&self.config_store, commands, cx)
+    }
+
+    /// 在独立窗口中新建（`editing = None`）或编辑快捷命令。
+    fn open_quick_editor(&mut self, editing: Option<String>, cx: &mut Context<Self>) {
+        let draft = match editing {
+            Some(ref id) => {
+                let Some(cmd) = self
+                    .config_store
+                    .read(cx)
+                    .config()
+                    .quick_commands
+                    .iter()
+                    .find(|c| &c.id == id)
+                else {
+                    return;
+                };
+                QuickEditorDraft::from_command(cmd)
+            }
+            None => QuickEditorDraft::blank(),
+        };
+
+        let fill = {
+            let tab = self.active_tab();
+            let text = tab
+                .send_input
+                .as_ref()
+                .map(|input| input.read(cx).value().to_string())
+                .unwrap_or_else(|| tab.state.send.text.clone());
+            QuickFillSource {
+                text,
+                hex: tab.state.send.send_hex,
+                line_ending: tab.state.send.line_ending,
+            }
+        };
+
+        // 同一时间只保留一个编辑窗口：已有则先关闭，再打开新的。
+        if let Some(handle) = self.quick_editor_window.take() {
+            let _ = handle.update(cx, |_, window, _| window.remove_window());
+        }
+
+        let bounds = Bounds::centered(None, size(px(480.), px(500.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(420.), px(440.))),
+            is_resizable: true,
+            ..TitleBar::window_options()
+        };
+        let config_store = self.config_store.clone();
+        if let Ok((handle, _)) = open_window(options, cx, move |window, cx| {
+            let store = config_store.clone();
+            let draft = draft.clone();
+            let fill = fill.clone();
+            cx.new(move |cx| QuickCommandWindow::new(store, draft, fill, window, cx))
+        }) {
+            self.quick_editor_window = Some(handle);
+        }
+    }
+
+    fn delete_quick_command(&mut self, tab_id: u64, id: String, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let mut next_commands = self.config_store.read(cx).config().quick_commands.clone();
+        if !remove_command(&mut next_commands, &id) {
+            if let Some(tab) = self.tab_mut(tab_id) {
+                tab.quick_pending_delete = None;
+            }
+            cx.notify();
+            return;
+        }
+
+        if let Err(err) = self.persist_quick_commands(next_commands, cx) {
+            if let Some(tab) = self.tab_mut(tab_id) {
+                tab.quick_error = Some(quick_save_failed(locale, &err).into());
+                tab.quick_pending_delete = None;
+            }
+            cx.notify();
+            return;
+        }
+
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.quick_pending_delete = None;
+        }
+        cx.notify();
+    }
+
     pub fn submit_send(&mut self, cx: &mut Context<Self>) {
         let send_input = self.active_tab().send_input.clone();
         if let Some(input) = &send_input {
@@ -1964,102 +2324,30 @@ impl SashaApp {
                 .submit_send_with_timestamp(current_timestamp_hms_ms());
             match res {
                 Ok(_) => {
-                    self.active_tab_mut().send_error = None;
+                    self.active_tab_mut()
+                        .set_send_error(SendErrorSlot::SendCard, None);
                 }
-                Err(SendPayloadError::Disconnected) => {
-                    self.active_tab_mut().send_error =
-                        Some(tr_shared(locale, "err.send_sim_disconnected"));
-                }
-                Err(SendPayloadError::EmptyInput) => {
-                    self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_empty"));
-                }
-                Err(SendPayloadError::InvalidHex(_)) => {
-                    self.active_tab_mut().send_error = Some(tr_shared(locale, "err.invalid_hex"));
+                Err(err) => {
+                    let msg = send_payload_error_text(locale, true, &err);
+                    self.active_tab_mut()
+                        .set_send_error(SendErrorSlot::SendCard, Some(msg));
                 }
             }
             cx.notify();
             return;
         }
 
-        let prepared = self.active_tab().state.prepare_send_bytes();
-        match prepared {
+        match self.active_tab().state.prepare_send_bytes() {
             Ok(bytes) => {
-                let tab_id = self.active_tab_id;
-                let (service, generation) = {
-                    let tab = self.active_tab();
-                    (
-                        tab.session_service.clone(),
-                        tab.session_service.generation(),
-                    )
-                };
-                match service.enqueue_tx(generation, bytes, None) {
-                    Ok(reply_rx) => {
-                        cx.spawn(async move |this, cx| {
-                            let result = cx
-                                .background_executor()
-                                .spawn(async move { reply_rx.recv() })
-                                .await;
-                            let _ = this.update(cx, |app, cx| {
-                                let locale = app.current_locale(cx);
-                                let Some(tab) = app.tab_mut(tab_id) else {
-                                    return;
-                                };
-                                tab.drain_tx_completed_logs();
-                                match result {
-                                    Ok(Ok(())) => {
-                                        tab.send_error = None;
-                                    }
-                                    Ok(Err(SessionTxError::Disconnected))
-                                    | Ok(Err(SessionTxError::StaleGeneration { .. })) => {
-                                        if tab.state.connection.is_connected() {
-                                            tab.disconnect_real_serial(Some(
-                                                tr(locale, "err.send_disconnected").into_owned(),
-                                            ));
-                                        } else {
-                                            tab.send_error =
-                                                Some(tr_shared(locale, "err.send_disconnected"));
-                                        }
-                                    }
-                                    Ok(Err(SessionTxError::WriteFailed(err))) => {
-                                        tab.send_error = Some(err.into());
-                                    }
-                                    Ok(Err(SessionTxError::Cancelled)) => {}
-                                    Ok(Err(SessionTxError::QueueFull)) => {
-                                        tab.send_error =
-                                            Some(SessionTxError::QueueFull.to_string().into());
-                                    }
-                                    Err(_) => {}
-                                }
-                                cx.notify();
-                            });
-                        })
-                        .detach();
-                        return;
-                    }
-                    Err(SessionTxError::Disconnected)
-                    | Err(SessionTxError::StaleGeneration { .. }) => {
-                        self.handle_serial_disconnected(
-                            Some(tr(locale, "err.send_disconnected").into_owned()),
-                            cx,
-                        );
-                        return;
-                    }
-                    Err(err) => {
-                        self.active_tab_mut().send_error = Some(err.to_string().into());
-                    }
-                }
+                self.enqueue_real_tx(bytes, SendErrorSlot::SendCard, cx);
             }
-            Err(SendPayloadError::Disconnected) => {
-                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_disconnected"));
-            }
-            Err(SendPayloadError::EmptyInput) => {
-                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.send_empty"));
-            }
-            Err(SendPayloadError::InvalidHex(_)) => {
-                self.active_tab_mut().send_error = Some(tr_shared(locale, "err.invalid_hex"));
+            Err(err) => {
+                let msg = send_payload_error_text(locale, false, &err);
+                self.active_tab_mut()
+                    .set_send_error(SendErrorSlot::SendCard, Some(msg));
+                cx.notify();
             }
         }
-        cx.notify();
     }
 
     fn open_settings(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -2392,18 +2680,134 @@ impl Render for SashaApp {
         let on_remove_script = Rc::new(move |path: PathBuf, _: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.remove_script(active_id, path, cx));
         });
+        let weak = cx.entity().downgrade();
+        let on_toggle_scripts_section = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.scripts_collapsed = !tab.scripts_collapsed;
+                    cx.notify();
+                }
+            });
+        });
+        let scripts_collapsed = tab.scripts_collapsed;
+        let quick_collapsed = tab.quick_collapsed;
+        let quick_query = tab.quick_query.clone();
+        let quick_collapsed_groups = tab.quick_collapsed_groups.clone();
+        let quick_error = tab.quick_error.clone();
+        let quick_pending_delete = tab.quick_pending_delete.clone();
         let script_panel = ScriptPanel {
             theme: surface_theme,
             locale,
             items: script_items,
             load_error: tab.script_load_error.clone(),
             compact: panel_is_compact(script_panel_width),
+            collapsed: scripts_collapsed,
+            max_height_limited: !quick_collapsed,
             on_load: on_load_scripts,
             on_collapse: on_collapse_scripts,
-            on_expand: on_expand_scripts,
+            on_expand: on_expand_scripts.clone(),
+            on_toggle_section: on_toggle_scripts_section,
             on_run: on_run_script,
             on_stop: on_stop_script,
             on_remove: on_remove_script,
+        };
+
+        let quick_search_input = self.ensure_quick_search_input(active_id, window, cx);
+        let (quick_commands, skipped_count) = {
+            let store = self.config_store.read(cx);
+            (
+                store.config().quick_commands.clone(),
+                store.skipped_quick_commands(),
+            )
+        };
+        let quick_rows = visible_rows(&quick_commands, &quick_query, &quick_collapsed_groups);
+        let skipped_notice = (skipped_count > 0).then(|| quick_skipped(locale, skipped_count).into());
+        let weak = cx.entity().downgrade();
+        let on_quick_send = Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.quick_pending_delete = None;
+                }
+                this.send_quick_command(&id, cx);
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_toggle_group = Rc::new(move |group: String, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.quick_pending_delete = None;
+                    if !tab.quick_collapsed_groups.remove(&group) {
+                        tab.quick_collapsed_groups.insert(group);
+                    }
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_toggle_section = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.quick_collapsed = !tab.quick_collapsed;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_new = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.open_quick_editor(None, cx);
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_edit = Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.open_quick_editor(Some(id), cx);
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_delete = Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.quick_pending_delete = Some(id);
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_confirm_delete = Rc::new(move |id: String, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.delete_quick_command(active_id, id, cx);
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_quick_cancel_delete = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.quick_pending_delete = None;
+                    cx.notify();
+                }
+            });
+        });
+        let quick_send_panel = QuickSendPanel {
+            theme: surface_theme,
+            locale,
+            commands: quick_commands,
+            rows: quick_rows,
+            search_input: quick_search_input,
+            error: quick_error,
+            skipped_notice,
+            collapsed: quick_collapsed,
+            compact: panel_is_compact(script_panel_width),
+            pending_delete: quick_pending_delete,
+            on_send: on_quick_send,
+            on_toggle_group: on_quick_toggle_group,
+            on_toggle_section: on_quick_toggle_section,
+            on_expand_dock: on_expand_scripts,
+            on_new: on_quick_new,
+            on_edit: on_quick_edit,
+            on_delete: on_quick_delete,
+            on_confirm_delete: on_quick_confirm_delete,
+            on_cancel_delete: on_quick_cancel_delete,
         };
 
         let weak_for_pick = cx.entity().downgrade();
@@ -2555,6 +2959,10 @@ impl Render for SashaApp {
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.handle_tab_shortcut(event, window, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
+                if this.handle_quick_shortcut(event, cx) {
                     cx.stop_propagation();
                     return;
                 }
@@ -2770,7 +3178,15 @@ impl Render for SashaApp {
                             .h_full()
                             .flex_shrink_0()
                             .overflow_hidden()
-                            .child(script_panel)
+                            .child(
+                                v_flex()
+                                    .size_full()
+                                    .bg(surface_theme.bg_canvas)
+                                    .border_l_1()
+                                    .border_color(self.theme.border_card)
+                                    .child(script_panel)
+                                    .child(quick_send_panel),
+                            )
                             .child(
                                 resize_handle("script-resize", Axis::Horizontal)
                                     .inside(HandleEdge::Leading)
