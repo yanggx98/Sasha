@@ -389,8 +389,8 @@ impl Default for SerialConfig {
             parity: Parity::None,
             stop_bits: StopBits::One,
             flow_control: FlowControl::None,
-            dtr: true,
-            rts: true,
+            dtr: false,
+            rts: false,
         }
     }
 }
