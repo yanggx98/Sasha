@@ -5,9 +5,16 @@
 <h1 align="center">Sasha</h1>
 <p align="center">English · <a href="README.zh-CN.md">简体中文</a></p>
 
-Sasha is a Rust desktop application built with GPUI. It brings serial connections,
-text and HEX inspection, and multiple independent sessions into a compact dark
-interface.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only" /></a>
+  <img src="https://img.shields.io/badge/Rust-2024_edition-orange" alt="Rust 2024 edition" />
+  <img src="https://img.shields.io/badge/platform-Windows-lightgrey" alt="Platform: Windows" />
+</p>
+
+Sasha is an open-source serial port debugging tool for the desktop, written in Rust
+with GPUI. It combines multiple independent sessions, text and HEX inspection, quick
+and timed sending, Lua scripting, live log streaming, and customizable themes in a
+compact, native interface.
 
 ## Preview
 
@@ -18,12 +25,11 @@ interface.
   </tr>
   <tr>
     <td><a href="docs/images/sasha-connection.png"><img src="docs/images/sasha-connection.png" alt="Serial port selection and communication settings" width="100%" /></a></td>
-    <td><a href="docs/images/sasha-terminal.png"><img src="docs/images/sasha-terminal.png" alt="Simulated terminal session showing Sasha v0.1.0" width="100%" /></a></td>
+    <td><a href="docs/images/sasha-terminal.png"><img src="docs/images/sasha-terminal.png" alt="Example terminal session showing received and sent data" width="100%" /></a></td>
   </tr>
 </table>
 
-Click either screenshot to view it at full size. The terminal preview shows a
-simulated session.
+Click either screenshot to view it at full size.
 
 The project is under active development. Windows is the current development and
 validation platform; macOS and Linux builds have not been verified.
@@ -32,11 +38,19 @@ validation platform; macOS and Linux builds have not been verified.
 
 - **Multiple sessions** — open, switch, and close connections from the right sidebar.
 - **Serial configuration** — discover available ports or enter one manually; configure
-  baud rate, data bits, parity, and stop bits.
+  baud rate, data bits, parity, stop bits, flow control, and DTR/RTS signals.
 - **Receive inspection** — switch between text and HEX, toggle timestamps, pause
-  display updates, control auto-scroll, select and copy text, and export visible logs.
+  display updates, control auto-scroll, search the log, select and copy text, and
+  export visible logs.
 - **Flexible sending** — send UTF-8 text or HEX bytes, with optional CRLF or LF
   endings for text messages. Input HEX display and HEX sending are separate controls.
+- **Quick and timed send** — keep reusable commands in a grouped panel with `Alt+1` …
+  `Alt+9` shortcuts, or repeat the send field content at a fixed interval.
+- **Lua scripting** — automate serial workflows with the built-in Lua 5.4 runtime; no
+  separate Lua installation is needed. See the [scripting API](docs/lua-scripting-api.md).
+- **Live stream output** — append all RX/TX logs of a session to a file in real time.
+- **Themes** — built-in Dark and Light themes, custom TOML themes with live reload, and
+  an optional workspace background image.
 - **Connection feedback** — monitor connection state and RX/TX byte counters.
 - **Native editing** — a blinking block caret in the send field, with normal text
   selection and editing behavior.
@@ -63,7 +77,7 @@ cargo build --release --locked
 
 The Windows executable is written to `target/release/sasha.exe`.
 The first build downloads dependencies; subsequent builds can run offline once
-those dependencies are cached. Keep the `vendor/` directory when copying the source.
+those dependencies are cached.
 
 ## Getting started
 
@@ -71,9 +85,6 @@ those dependencies are cached. Keep the `vendor/` directory when copying the sou
 2. Set the communication parameters to match your device, then connect.
 3. Inspect incoming data in the log area and enter outgoing data in the send field.
 4. Use the arrow button to send. Create additional sessions from the sidebar.
-
-To explore without a device, choose **Enter simulated session** on the connection
-page. Simulated data and connection states are labeled separately from real ones.
 
 ### Text and HEX controls
 
@@ -109,7 +120,7 @@ Click `⇥` in the receive toolbar and choose an output path. Existing files are
 
 Under **Settings → General → Stream output scope**, choose **Current buffer and future** or **Future only** (default). The former snapshots that session's retained visible and paused logs when the file is ready, then records subsequent events in order; cleared or trimmed history and other sessions are excluded. The latter records only events after the file is ready and capture is attached. This global preference is persisted and applies to the next capture; changing it does not backfill an active file again.
 
-The receive text/HEX mode at activation is fixed for that capture. Text follows device LF/CRLF line endings, prefixing each line once with its first byte's timestamp, direction and simulated-data marker. Consecutive RX chunks continue the same line, and unfinished lines are written immediately. Direction or simulated-marker changes separate unfinished lines; TX events remain separate, and stopping terminates an unfinished line. Text is decoded incrementally as UTF-8, preserving readable Unicode, CR/LF, tabs and backslashes. NUL and other controls appear as `\0` or `\xHH`; invalid UTF-8 bytes are also escaped. Only up to three trailing bytes of a split character wait for completion; stopping or changing direction escapes any incomplete bytes. For binary data, select HEX before starting capture; HEX continues to record all bytes per transfer event.
+The receive text/HEX mode at activation is fixed for that capture. Text follows device LF/CRLF line endings, prefixing each line once with its first byte's timestamp and direction. Consecutive RX chunks continue the same line, and unfinished lines are written immediately. Direction changes separate unfinished lines; TX events remain separate, and stopping terminates an unfinished line. Text is decoded incrementally as UTF-8, preserving readable Unicode, CR/LF, tabs and backslashes. NUL and other controls appear as `\0` or `\xHH`; invalid UTF-8 bytes are also escaped. Only up to three trailing bytes of a split character wait for completion; stopping or changing direction escapes any incomplete bytes. For binary data, select HEX before starting capture; HEX continues to record all bytes per transfer event.
 
 New or empty files receive one UTF-8 BOM to help Windows editors recognize their encoding. Appending to a nonempty file neither inserts another BOM nor changes existing content. UTF-16/UTF-32 BOM files are rejected; choose a new file. Existing BOMless logs that display incorrectly are not automatically repaired; start capture in a new file.
 
@@ -233,7 +244,6 @@ text_muted = "#6B8394"
   added when display resumes.
 - Real serial connections support one or two stop bits. The 1.5-stop-bit option
   is rejected by the current backend.
-- A simulated session is a UI preview, not a hardware loopback test.
 
 ## Development
 
@@ -242,25 +252,24 @@ cargo check --locked
 cargo test --locked
 ```
 
-Tests cover data formatting, send validation, session behavior, configuration, and
-native caret geometry. Hardware communication and desktop interaction also need
-manual testing on the target system.
+Tests cover data formatting, send validation, session behavior, configuration,
+scripting, and stream output. Hardware communication and desktop interaction also
+need manual testing on the target system.
 
 ```text
 src/
   main.rs          Application startup
   i18n.rs          English and Simplified Chinese strings
   serial.rs        Port discovery and serial I/O
-  model/           Sessions, logs, serial parameters, and preferences
-  ui/              Workspace, connection page, send field, and settings
+  session_service.rs  Per-session I/O, send queue, and scripting bridge
+  model/           Sessions, logs, quick commands, timed send, stream output, config
+  scripting/       Lua runtime and the `serial` / `task` / `log` APIs
+  ui/              Workspace, connection page, send card, panels, themes, settings
 assets/icons/      Application artwork
-vendor/            Local GPUI dependency and patch notes
+locales/           English and Simplified Chinese strings
+docs/              Lua API reference, theme example, README images
+scripts/           Example Lua scripts
 ```
-
-Sasha patches `gpui-base` 0.9.1 locally to support per-input native caret styling
-and hiding the send-field hint while focused. The original caret lifecycle is
-retained. See [the patch documentation](vendor/README.md) for provenance, licensing,
-and upgrade guidance.
 
 ## Acknowledgements
 
@@ -273,7 +282,12 @@ Sasha is built on the work of these open-source projects:
   [Zed repository](https://github.com/zed-industries/zed).
 
 AI tools used during the development of Sasha include **DeepSeek, Grok, ChatGPT,
-and Gemini**.
+Gemini, and Claude**.
+
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and
+checks to run before opening a pull request.
 
 ## Feedback
 
@@ -287,5 +301,4 @@ For UI issues, a screenshot and display scaling setting are helpful.
 Sasha is licensed under the **GNU General Public License v3.0 only
 (GPL-3.0-only)**. See [LICENSE](LICENSE) for the full terms.
 
-Vendored GPUI code retains its [Apache-2.0 license](vendor/gpui-base/LICENSE-APACHE);
-other dependencies retain their respective licenses.
+Dependencies, including GPUI (Apache-2.0), retain their respective licenses.
