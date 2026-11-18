@@ -2669,6 +2669,26 @@ impl Render for SashaApp {
             });
         });
         let weak = cx.entity().downgrade();
+        let on_open_scripts = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_WIDTH;
+                    tab.scripts_collapsed = false;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_open_quick = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_WIDTH;
+                    tab.quick_collapsed = false;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
         let on_run_script = Rc::new(move |path: PathBuf, _: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.run_script(active_id, path, cx));
         });
@@ -2705,7 +2725,8 @@ impl Render for SashaApp {
             max_height_limited: !quick_collapsed,
             on_load: on_load_scripts,
             on_collapse: on_collapse_scripts,
-            on_expand: on_expand_scripts.clone(),
+            on_expand: on_expand_scripts,
+            on_open_section: on_open_scripts,
             on_toggle_section: on_toggle_scripts_section,
             on_run: on_run_script,
             on_stop: on_stop_script,
@@ -2802,7 +2823,7 @@ impl Render for SashaApp {
             on_send: on_quick_send,
             on_toggle_group: on_quick_toggle_group,
             on_toggle_section: on_quick_toggle_section,
-            on_expand_dock: on_expand_scripts,
+            on_expand_dock: on_open_quick,
             on_new: on_quick_new,
             on_edit: on_quick_edit,
             on_delete: on_quick_delete,

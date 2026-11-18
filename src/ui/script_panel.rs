@@ -7,10 +7,61 @@ use gpui_kit::component::{Icon, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{Locale, scripts_status_failed, tr_shared};
+use crate::i18n::{Locale, scripts_running_tooltip, scripts_status_failed, tr_shared};
 use crate::scripting::{ScriptStatus, StopReason};
 use crate::ui::receive_toolbar::ToolbarActionCallback;
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_store::contrast_foreground;
+
+/// 折叠成图标栏时，脚本与快捷发送共用的入口按钮：同尺寸、同悬停样式，
+/// 可选的角标显示数量（为 0 时不显示）。
+pub fn rail_button(
+    theme: NanoTheme,
+    id: &'static str,
+    icon: LucideIcon,
+    tooltip: SharedString,
+    badge: Option<usize>,
+    action: ToolbarActionCallback,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .relative()
+        .w_full()
+        .h(px(34.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .text_color(theme.text_secondary)
+        .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+        .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            cx.stop_propagation();
+            action(window, cx);
+        })
+        .child(Icon::new(icon).size(px(16.)))
+        .when_some(badge.filter(|count| *count > 0), move |this, count| {
+            this.child(
+                div()
+                    .absolute()
+                    .top(px(2.))
+                    .right(px(6.))
+                    .min_w(px(14.))
+                    .h(px(14.))
+                    .px_1()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .bg(theme.accent_blue)
+                    .text_color(contrast_foreground(theme.accent_blue))
+                    .text_size(px(9.))
+                    .child(count.to_string()),
+            )
+        })
+}
 
 pub type RunScriptCallback = Rc<dyn Fn(PathBuf, &mut Window, &mut App)>;
 pub type StopScriptCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
@@ -94,6 +145,8 @@ pub struct ScriptPanel {
     pub on_load: ToolbarActionCallback,
     pub on_collapse: ToolbarActionCallback,
     pub on_expand: ToolbarActionCallback,
+    /// 图标栏中的脚本图标：展开侧栏并打开脚本区块。
+    pub on_open_section: ToolbarActionCallback,
     pub on_toggle_section: ToolbarActionCallback,
     pub on_run: RunScriptCallback,
     pub on_stop: StopScriptCallback,
@@ -158,9 +211,16 @@ impl ScriptPanel {
 impl RenderOnce for ScriptPanel {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let locale = self.locale;
+        let running_count = self
+            .items
+            .iter()
+            .filter(|item| item.status.as_ref().is_some_and(ScriptStatus::is_active))
+            .count();
+        // 折叠成图标栏时不逐条列出脚本，只显示一个带运行数量的入口图标。
         let rows = self
             .items
             .iter()
+            .take(if self.compact { 0 } else { usize::MAX })
             .enumerate()
             .map(|(index, item)| {
                 let path = &item.path;
@@ -176,28 +236,6 @@ impl RenderOnce for ScriptPanel {
                     format!("{}\n{}", path.display(), status_text).into();
                 let path_to_remove = path.clone();
                 let on_remove = self.on_remove.clone();
-                if self.compact {
-                    return h_flex()
-                        .id(("script-row", index))
-                        .h(px(34.))
-                        .w_full()
-                        .flex_shrink_0()
-                        .justify_center()
-                        .gap(px(3.))
-                        .rounded(px(6.))
-                        .hover(|s| s.bg(self.theme.bg_hover))
-                        .tooltip(move |window, cx| {
-                            Tooltip::new(row_tooltip.clone()).build(window, cx)
-                        })
-                        .child(
-                            Icon::new(LucideIcon::FileCode)
-                                .size(px(16.))
-                                .text_color(self.theme.text_secondary),
-                        )
-                        .child(div().size(px(5.)).rounded_full().bg(dot_color))
-                        .into_any_element();
-                }
-
                 let is_active = item.status.as_ref().is_some_and(ScriptStatus::is_active);
                 let (action_icon, action_tooltip, action_cb): (
                     LucideIcon,
@@ -309,16 +347,6 @@ impl RenderOnce for ScriptPanel {
                         .gap(px(4.))
                         .border_b_1()
                         .border_color(self.theme.border_card)
-                        .child(
-                            self.compact_action(
-                                "script-load",
-                                LucideIcon::Plus,
-                                self.load_error
-                                    .clone()
-                                    .unwrap_or_else(|| tr_shared(locale, "scripts.load")),
-                                Some(self.on_load.clone()),
-                            ),
-                        )
                         .child(self.compact_action(
                             "script-expand",
                             LucideIcon::ChevronLeft,
@@ -388,6 +416,21 @@ impl RenderOnce for ScriptPanel {
                         .gap_0p5()
                         .overflow_y_scroll()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .when(self.compact, |this| {
+                            let tooltip: SharedString = if running_count > 0 {
+                                scripts_running_tooltip(locale, running_count).into()
+                            } else {
+                                tr_shared(locale, "scripts.title")
+                            };
+                            this.child(rail_button(
+                                self.theme,
+                                "script-rail",
+                                LucideIcon::FileCode,
+                                tooltip,
+                                Some(running_count),
+                                self.on_open_section.clone(),
+                            ))
+                        })
                         .when(rows.is_empty() && !self.compact, |this| {
                             this.child(
                                 div()

@@ -10,6 +10,7 @@ use gpui_kit::*;
 use crate::i18n::{Locale, quick_shortcut_hint, tr_shared};
 use crate::model::quick_command::{QuickCommand, QuickRow};
 use crate::ui::receive_toolbar::ToolbarActionCallback;
+use crate::ui::script_panel::rail_button;
 use crate::ui::theme::NanoTheme;
 
 pub type QuickIdCallback = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -73,31 +74,22 @@ impl RenderOnce for QuickSendPanel {
         let theme = self.theme;
 
         if self.compact {
+            // 图标栏：与脚本图标同样式，紧挨在脚本图标下方，不再单独画分割线和撑满高度。
             return v_flex()
                 .id("quick-send-panel")
                 .w_full()
-                .flex_1()
-                .min_h_0()
+                .flex_none()
+                .px_1p5()
                 .bg(theme.bg_canvas)
-                .border_t_1()
-                .border_color(theme.border_card)
                 .occlude()
-                .child(
-                    h_flex()
-                        .w_full()
-                        .h(px(38.))
-                        .flex_shrink_0()
-                        .items_center()
-                        .justify_center()
-                        .child(self.action_icon(
-                            "quick-expand",
-                            LucideIcon::Zap,
-                            tr_shared(locale, "quick.title"),
-                            px(24.),
-                            px(15.),
-                            self.on_expand_dock.clone(),
-                        )),
-                )
+                .child(rail_button(
+                    theme,
+                    "quick-rail",
+                    LucideIcon::Zap,
+                    tr_shared(locale, "quick.title"),
+                    None,
+                    self.on_expand_dock.clone(),
+                ))
                 .into_any_element();
         }
 
