@@ -207,7 +207,11 @@ impl RenderOnce for ScriptPanel {
                             on_stop(run_id, window, cx)
                         }) as ToolbarActionCallback
                     });
-                    (LucideIcon::Square, tr_shared(locale, "scripts.stop"), stop_cb)
+                    (
+                        LucideIcon::Square,
+                        tr_shared(locale, "scripts.stop"),
+                        stop_cb,
+                    )
                 } else if item.can_run {
                     let path_to_run = path.clone();
                     let on_run = self.on_run.clone();
@@ -234,7 +238,10 @@ impl RenderOnce for ScriptPanel {
                     .gap_2()
                     .rounded(px(6.))
                     .text_color(self.theme.text_secondary)
-                    .hover(|s| s.bg(self.theme.bg_hover).text_color(self.theme.text_primary))
+                    .hover(|s| {
+                        s.bg(self.theme.bg_hover)
+                            .text_color(self.theme.text_primary)
+                    })
                     .child(
                         div()
                             .size(px(5.))

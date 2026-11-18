@@ -78,46 +78,49 @@ fn register_serial_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
     serial.set("read", read_fn)?;
 
     let wait_ctx = ctx.clone();
-    let wait_text_fn = lua.create_function(move |lua, (pattern_val, timeout_val): (Value, Value)| {
-        let pattern = expect_bytes_arg(pattern_val, "serial.wait_text", 1)?;
-        if pattern.is_empty() {
-            return Err(mlua::Error::RuntimeError(
-                "bad argument #1 to 'serial.wait_text' (pattern must not be empty)".to_string(),
-            ));
-        }
-        let timeout_ms = parse_optional_timeout_ms(timeout_val, "serial.wait_text", 2)?;
+    let wait_text_fn =
+        lua.create_function(move |lua, (pattern_val, timeout_val): (Value, Value)| {
+            let pattern = expect_bytes_arg(pattern_val, "serial.wait_text", 1)?;
+            if pattern.is_empty() {
+                return Err(mlua::Error::RuntimeError(
+                    "bad argument #1 to 'serial.wait_text' (pattern must not be empty)".to_string(),
+                ));
+            }
+            let timeout_ms = parse_optional_timeout_ms(timeout_val, "serial.wait_text", 2)?;
 
-        wait_ctx.check_abort().map_err(mlua::Error::external)?;
-        wait_ctx.drain_pending_rx().map_err(mlua::Error::external)?;
+            wait_ctx.check_abort().map_err(mlua::Error::external)?;
+            wait_ctx.drain_pending_rx().map_err(mlua::Error::external)?;
 
-        if let Some(matched) = wait_ctx.rx_buffer.borrow_mut().take_match(&pattern) {
-            return Ok(MultiValue::from_vec(vec![Value::String(
-                lua.create_string(&matched)?,
-            )]));
-        }
+            if let Some(matched) = wait_ctx.rx_buffer.borrow_mut().take_match(&pattern) {
+                return Ok(MultiValue::from_vec(vec![Value::String(
+                    lua.create_string(&matched)?,
+                )]));
+            }
 
-        if timeout_ms > 0 {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-            while wait_ctx
-                .wait_for_rx_chunk(deadline)
-                .map_err(mlua::Error::external)?
-            {
-                if let Some(matched) = wait_ctx.rx_buffer.borrow_mut().take_match(&pattern) {
-                    return Ok(MultiValue::from_vec(vec![Value::String(
-                        lua.create_string(&matched)?,
-                    )]));
+            if timeout_ms > 0 {
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                while wait_ctx
+                    .wait_for_rx_chunk(deadline)
+                    .map_err(mlua::Error::external)?
+                {
+                    if let Some(matched) = wait_ctx.rx_buffer.borrow_mut().take_match(&pattern) {
+                        return Ok(MultiValue::from_vec(vec![Value::String(
+                            lua.create_string(&matched)?,
+                        )]));
+                    }
                 }
             }
-        }
 
-        timeout_pair(lua)
-    })?;
+            timeout_pair(lua)
+        })?;
     serial.set("wait_text", wait_text_fn)?;
 
     let clear_ctx = ctx.clone();
     let clear_rx_fn = lua.create_function(move |_, ()| {
         clear_ctx.check_abort().map_err(mlua::Error::external)?;
-        clear_ctx.drain_pending_rx().map_err(mlua::Error::external)?;
+        clear_ctx
+            .drain_pending_rx()
+            .map_err(mlua::Error::external)?;
         clear_ctx.rx_buffer.borrow_mut().clear();
         Ok(())
     })?;
@@ -148,9 +151,8 @@ fn register_task_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
     task.set("sleep", sleep_fn)?;
 
     let cancel_ctx = ctx.clone();
-    let is_cancelled_fn = lua.create_function(move |_, ()| {
-        Ok(cancel_ctx.shared.cancel_token.load(Ordering::Acquire))
-    })?;
+    let is_cancelled_fn = lua
+        .create_function(move |_, ()| Ok(cancel_ctx.shared.cancel_token.load(Ordering::Acquire)))?;
     task.set("is_cancelled", is_cancelled_fn)?;
 
     lua.globals().set("task", task)?;

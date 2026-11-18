@@ -1,28 +1,47 @@
 use std::rc::Rc;
 
 use gpui_kit::assets::IconName as LucideIcon;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, h_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::Locale;
-use crate::model::{ActivePickerKind, SerialConfig, SessionCounters, SimulatedConnectionState};
+use crate::i18n::{Locale, tr, tr_shared};
+use crate::model::{
+    ActivePickerKind, FlowControl, ModemSignals, SerialConfig, SessionCounters,
+    SimulatedConnectionState,
+};
+use crate::session_service::ControlLine;
 use crate::ui::motion::{STATUS_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
 
 pub type PickParamCallback = Rc<dyn Fn(ActivePickerKind, &mut Window, &mut App)>;
 pub type ToggleConnectionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
+pub type ToggleLineCallback = Rc<dyn Fn(ControlLine, &mut Window, &mut App)>;
+
+/// Modem signal controls rendered on the bottom bar's right side.
+#[derive(Clone)]
+pub struct SignalControls {
+    /// Latest sampled CTS/DSR/CD/RI levels.
+    pub signals: ModemSignals,
+    /// `true` only for a connected real-hardware session.
+    pub interactive: bool,
+    /// `true` for the simulated demo session (controls are disabled).
+    pub simulated: bool,
+    /// Folds CTS/DSR/CD/RI into a single summary dot when width is tight.
+    pub compact: bool,
+    pub on_toggle: ToggleLineCallback,
+}
 
 /// Bottom parameter & status bar (REQ-005, REQ-011).
 /// Directly displays clickable port, baud rate, data bits, parity, stop bits,
-/// connection action/status, and RX/TX byte counters.
+/// flow control, connection action, modem signal controls, and RX/TX byte counters.
 #[derive(IntoElement)]
 pub struct BottomBar {
     theme: NanoTheme,
     locale: Locale,
     config: SerialConfig,
     connection: SimulatedConnectionState,
-    status_label: SharedString,
     action_label: SharedString,
     connection_flag: TransitionFlag,
     counters: SessionCounters,
@@ -30,6 +49,7 @@ pub struct BottomBar {
     active_picker: Option<ActivePickerKind>,
     on_pick: PickParamCallback,
     on_toggle_connection: ToggleConnectionCallback,
+    signal_controls: SignalControls,
 }
 
 impl BottomBar {
@@ -39,7 +59,6 @@ impl BottomBar {
         locale: Locale,
         config: SerialConfig,
         connection: SimulatedConnectionState,
-        status_label: impl Into<SharedString>,
         action_label: impl Into<SharedString>,
         connection_flag: TransitionFlag,
         counters: SessionCounters,
@@ -47,13 +66,13 @@ impl BottomBar {
         active_picker: Option<ActivePickerKind>,
         on_pick: PickParamCallback,
         on_toggle_connection: ToggleConnectionCallback,
+        signal_controls: SignalControls,
     ) -> Self {
         Self {
             theme,
             locale,
             config,
             connection,
-            status_label: status_label.into(),
             action_label: action_label.into(),
             connection_flag,
             counters,
@@ -61,7 +80,132 @@ impl BottomBar {
             active_picker,
             on_pick,
             on_toggle_connection,
+            signal_controls,
         }
+    }
+
+    /// DTR/RTS toggle chip. RTS is locked while RTS/CTS flow control owns the line.
+    fn line_toggle(&self, id: &'static str, line: ControlLine) -> AnyElement {
+        let theme = self.theme;
+        let (label, level) = match line {
+            ControlLine::Dtr => ("DTR", self.config.dtr),
+            ControlLine::Rts => ("RTS", self.config.rts),
+        };
+        let rts_locked =
+            line == ControlLine::Rts && self.config.flow_control == FlowControl::Hardware;
+        let enabled = self.signal_controls.interactive && !rts_locked;
+        let on_toggle = self.signal_controls.on_toggle.clone();
+        let tooltip = if rts_locked {
+            Some(tr_shared(self.locale, "signal.rts_locked"))
+        } else if self.signal_controls.simulated {
+            Some(tr_shared(self.locale, "signal.sim_disabled"))
+        } else {
+            None
+        };
+
+        div()
+            .id(id)
+            .px_1p5()
+            .py_0p5()
+            .rounded(px(4.))
+            .text_xs()
+            .when(level && enabled, |this| {
+                this.bg(theme.bg_toggle_active)
+                    .text_color(theme.accent_blue_hover)
+            })
+            .when(!level && enabled, |this| {
+                this.text_color(theme.text_secondary)
+            })
+            .when(!enabled, |this| {
+                this.text_color(theme.text_muted).opacity(0.5)
+            })
+            .when(enabled, |this| {
+                this.hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        on_toggle(line, window, cx);
+                    })
+            })
+            .when_some(tooltip, |this, text| {
+                this.tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
+            })
+            .child(label)
+            .into_any_element()
+    }
+
+    /// Read-only indicator dot for one modem input line (`None` = unknown).
+    fn signal_light(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        level: Option<bool>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let active = self.signal_controls.interactive;
+        let color = match (active, level) {
+            (true, Some(true)) => theme.status_connected,
+            _ => theme.text_muted,
+        };
+        let dim = !active || level.is_none();
+        let unknown = tr_shared(self.locale, "signal.unknown");
+        h_flex()
+            .id(id)
+            .items_center()
+            .gap_1()
+            .when(dim, |this| this.opacity(0.5))
+            .when(active && level.is_none(), |this| {
+                this.tooltip(move |window, cx| Tooltip::new(unknown.clone()).build(window, cx))
+            })
+            .child(div().size(px(7.)).rounded_full().bg(color))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.text_secondary)
+                    .child(label),
+            )
+            .into_any_element()
+    }
+
+    /// Compact summary dot for CTS/DSR/CD/RI used on narrow windows.
+    fn signal_summary(&self) -> AnyElement {
+        let theme = self.theme;
+        let locale = self.locale;
+        let signals = self.signal_controls.signals;
+        let active = self.signal_controls.interactive;
+        let any_high = [signals.cts, signals.dsr, signals.cd, signals.ri]
+            .into_iter()
+            .any(|v| v == Some(true));
+        let all_unknown = [signals.cts, signals.dsr, signals.cd, signals.ri]
+            .into_iter()
+            .all(|v| v.is_none());
+        let color = if active && any_high {
+            theme.status_connected
+        } else {
+            theme.text_muted
+        };
+        let level_str = |v: Option<bool>| match v {
+            Some(true) => tr(locale, "signal.high"),
+            Some(false) => tr(locale, "signal.low"),
+            None => tr(locale, "signal.unknown"),
+        };
+        let summary: SharedString = format!(
+            "CTS: {} · DSR: {} · CD: {} · RI: {}",
+            level_str(signals.cts),
+            level_str(signals.dsr),
+            level_str(signals.cd),
+            level_str(signals.ri),
+        )
+        .into();
+
+        h_flex()
+            .id("signal-summary")
+            .items_center()
+            .gap_1()
+            .when(!active || all_unknown, |this| this.opacity(0.5))
+            .tooltip(move |window, cx| Tooltip::new(summary.clone()).build(window, cx))
+            .child(div().size(px(7.)).rounded_full().bg(color))
+            .into_any_element()
     }
 
     fn param_item(
@@ -104,8 +248,6 @@ impl RenderOnce for BottomBar {
         };
         let (conn_from, conn_to) =
             conn_flag.color_pair(self.theme.status_disconnected, self.theme.status_connected);
-        let (badge_bg_from, badge_bg_to) =
-            conn_flag.color_pair(self.theme.sim_badge_bg, rgba(0x3FB9501F).into());
         let on_toggle = self.on_toggle_connection.clone();
 
         let connection_btn = animate_toggle_colors(
@@ -128,23 +270,6 @@ impl RenderOnce for BottomBar {
             conn_flag,
             STATUS_TRANSITION_MS,
             move |el, delta| el.text_color(lerp_color(conn_from, conn_to, delta)),
-        );
-
-        let status_badge = animate_toggle_colors(
-            div()
-                .id("sim-connection-status")
-                .px_1p5()
-                .py_0p5()
-                .rounded(px(4.))
-                .text_xs()
-                .child(self.status_label.clone()),
-            "sim-connection-status-anim",
-            conn_flag,
-            STATUS_TRANSITION_MS,
-            move |el, delta| {
-                el.bg(lerp_color(badge_bg_from, badge_bg_to, delta))
-                    .text_color(lerp_color(conn_from, conn_to, delta))
-            },
         );
 
         h_flex()
@@ -184,8 +309,12 @@ impl RenderOnce for BottomBar {
                         ActivePickerKind::StopBits,
                         self.config.stop_bits.label(),
                     ))
-                    .child(connection_btn)
-                    .child(status_badge),
+                    .child(self.param_item(
+                        "param-flow",
+                        ActivePickerKind::FlowControl,
+                        self.config.flow_control.label_for(self.locale),
+                    ))
+                    .child(connection_btn),
             )
             .child(
                 h_flex()
@@ -193,6 +322,39 @@ impl RenderOnce for BottomBar {
                     .gap_3()
                     .text_xs()
                     .text_color(self.theme.text_secondary)
+                    .child(
+                        h_flex()
+                            .id("signal-controls")
+                            .items_center()
+                            .gap_1p5()
+                            .child(self.line_toggle("signal-dtr", ControlLine::Dtr))
+                            .child(self.line_toggle("signal-rts", ControlLine::Rts))
+                            .when(self.signal_controls.compact, |this| {
+                                this.child(self.signal_summary())
+                            })
+                            .when(!self.signal_controls.compact, |this| {
+                                this.child(self.signal_light(
+                                    "signal-cts",
+                                    "CTS",
+                                    self.signal_controls.signals.cts,
+                                ))
+                                .child(self.signal_light(
+                                    "signal-dsr",
+                                    "DSR",
+                                    self.signal_controls.signals.dsr,
+                                ))
+                                .child(self.signal_light(
+                                    "signal-cd",
+                                    "CD",
+                                    self.signal_controls.signals.cd,
+                                ))
+                                .child(self.signal_light(
+                                    "signal-ri",
+                                    "RI",
+                                    self.signal_controls.signals.ri,
+                                ))
+                            }),
+                    )
                     .child(self.param_item(
                         "param-buffer",
                         ActivePickerKind::BufferLimit,

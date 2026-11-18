@@ -5,16 +5,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::i18n::{
     self, Locale, serial_action_clone_failed, serial_action_flush_failed,
     serial_action_open_failed, serial_action_spawn_failed, serial_action_write_failed, tr,
 };
-use crate::model::{DataBits, Parity, SerialConfig, StopBits};
+use crate::model::{DataBits, FlowControl, ModemSignals, Parity, SerialConfig, StopBits};
 
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
 const READ_BUFFER_SIZE: usize = 4096;
+/// Minimum interval between modem input line samples.
+const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
 /// A serial port discovered on the host machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +29,8 @@ pub struct DetectedPort {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SerialEvent {
     Rx(Vec<u8>),
+    /// Modem input lines changed (emitted once at start and on every change).
+    Signals(ModemSignals),
     Disconnected(String),
 }
 
@@ -46,6 +50,28 @@ impl SerialWriteHandle {
 impl crate::session_service::PortWriter for SerialWriteHandle {
     fn write_all_and_flush(&mut self, data: &[u8]) -> Result<(), String> {
         self.write_bytes(data)
+    }
+
+    fn set_dtr(&mut self, level: bool) -> Result<(), String> {
+        self.port
+            .write_data_terminal_ready(level)
+            .map_err(|err| err.description)
+    }
+
+    fn set_rts(&mut self, level: bool) -> Result<(), String> {
+        self.port
+            .write_request_to_send(level)
+            .map_err(|err| err.description)
+    }
+}
+
+/// Samples the modem input lines; unsupported or failing lines become `None`.
+fn sample_signals(port: &mut dyn serialport::SerialPort) -> ModemSignals {
+    ModemSignals {
+        cts: port.read_clear_to_send().ok(),
+        dsr: port.read_data_set_ready().ok(),
+        cd: port.read_carrier_detect().ok(),
+        ri: port.read_ring_indicator().ok(),
     }
 }
 
@@ -77,15 +103,22 @@ impl SerialConnection {
         let parity = map_parity(config.parity);
         let stop_bits = map_stop_bits(config.stop_bits, locale)?;
 
-        let port = serialport::new(port_name, config.baud_rate)
+        let mut port = serialport::new(port_name, config.baud_rate)
             .data_bits(data_bits)
             .parity(parity)
             .stop_bits(stop_bits)
+            .flow_control(map_flow_control(config.flow_control))
             .timeout(READ_TIMEOUT)
             .open()
             .map_err(|err| {
                 format_serial_error(locale, &serial_action_open_failed(locale), port_name, &err)
             })?;
+
+        // Initial modem output levels are best-effort: some drivers reject them.
+        let _ = port.write_data_terminal_ready(config.dtr);
+        if config.flow_control != FlowControl::Hardware {
+            let _ = port.write_request_to_send(config.rts);
+        }
 
         let mut reader_port = port.try_clone().map_err(|err| {
             format_serial_error(locale, &serial_action_clone_failed(locale), port_name, &err)
@@ -99,7 +132,19 @@ impl SerialConnection {
             .name(format!("sasha-serial-rx-{port_name}"))
             .spawn(move || {
                 let mut buf = [0u8; READ_BUFFER_SIZE];
+                let mut last_signals: Option<ModemSignals> = None;
+                let mut last_poll: Option<Instant> = None;
                 while !stop_clone.load(Ordering::Acquire) {
+                    if last_poll.is_none_or(|at| at.elapsed() >= SIGNAL_POLL_INTERVAL) {
+                        last_poll = Some(Instant::now());
+                        let signals = sample_signals(&mut *reader_port);
+                        if last_signals != Some(signals) {
+                            last_signals = Some(signals);
+                            if tx.send(SerialEvent::Signals(signals)).is_err() {
+                                break;
+                            }
+                        }
+                    }
                     match reader_port.read(&mut buf) {
                         Ok(0) => continue,
                         Ok(n) => {
@@ -170,12 +215,10 @@ fn write_port_bytes(
     locale: Locale,
     data: &[u8],
 ) -> Result<(), String> {
-    port.write_all(data).map_err(|err| {
-        format_io_error(locale, &serial_action_write_failed(locale), &err)
-    })?;
-    port.flush().map_err(|err| {
-        format_io_error(locale, &serial_action_flush_failed(locale), &err)
-    })?;
+    port.write_all(data)
+        .map_err(|err| format_io_error(locale, &serial_action_write_failed(locale), &err))?;
+    port.flush()
+        .map_err(|err| format_io_error(locale, &serial_action_flush_failed(locale), &err))?;
     Ok(())
 }
 
@@ -269,6 +312,14 @@ fn map_parity(parity: Parity) -> serialport::Parity {
     }
 }
 
+fn map_flow_control(flow: FlowControl) -> serialport::FlowControl {
+    match flow {
+        FlowControl::None => serialport::FlowControl::None,
+        FlowControl::Hardware => serialport::FlowControl::Hardware,
+        FlowControl::Software => serialport::FlowControl::Software,
+    }
+}
+
 fn map_stop_bits(stop_bits: StopBits, locale: Locale) -> Result<serialport::StopBits, String> {
     match stop_bits {
         StopBits::One => Ok(serialport::StopBits::One),
@@ -302,11 +353,7 @@ fn format_io_error(locale: Locale, action: &str, err: &std::io::Error) -> String
     }
 }
 
-fn describe_io_error_kind(
-    locale: Locale,
-    kind: std::io::ErrorKind,
-    fallback: &str,
-) -> String {
+fn describe_io_error_kind(locale: Locale, kind: std::io::ErrorKind, fallback: &str) -> String {
     match kind {
         std::io::ErrorKind::PermissionDenied => {
             tr(locale, "serial.err_permission_denied").into_owned()
@@ -393,6 +440,22 @@ mod tests {
             .err()
             .expect("1.5 stop bits should be rejected");
         assert!(err.contains("1.5"));
+    }
+
+    #[test]
+    fn flow_control_maps_to_serialport() {
+        assert_eq!(
+            map_flow_control(FlowControl::None),
+            serialport::FlowControl::None
+        );
+        assert_eq!(
+            map_flow_control(FlowControl::Hardware),
+            serialport::FlowControl::Hardware
+        );
+        assert_eq!(
+            map_flow_control(FlowControl::Software),
+            serialport::FlowControl::Software
+        );
     }
 
     #[test]

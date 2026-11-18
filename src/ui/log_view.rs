@@ -173,6 +173,17 @@ fn color_highlight(color: Hsla) -> HighlightStyle {
     }
 }
 
+/// Height of one single-line log row before it has been measured.
+///
+/// GPUI's default line height is φ times the font size. Each row also has
+/// `pb_1` (4px). The list only measures the viewport plus a little overdraw,
+/// so rows above that would otherwise contribute 0 and the scrollbar would
+/// hit the top of its track while earlier logs were still above.
+pub(crate) fn log_row_height_hint(font_size: u16) -> Pixels {
+    let line_height = (font_size as f32 * 1.618_034).round();
+    px(line_height + 4.)
+}
+
 /// One selectable log row. The string is the copyable line; `[模拟]` is not included.
 struct LogLineText {
     id: ElementId,
@@ -362,5 +373,74 @@ impl Element for LogLineText {
         self.styled
             .paint(id, inspector_id, bounds, &mut (), &mut (), window, cx);
         window.set_cursor_style(CursorStyle::IBeam, hitbox);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui::prelude::*;
+    use gpui::{ListAlignment, ListState, Render, TestAppContext, div, list, point, px, size};
+
+    use super::log_row_height_hint;
+
+    #[test]
+    fn row_height_hint_tracks_the_log_font_size() {
+        assert_eq!(log_row_height_hint(14), px(27.));
+        assert!(log_row_height_hint(24) > log_row_height_hint(10));
+    }
+
+    /// Rows the list has not measured must still occupy space. Otherwise
+    /// dragging the scrollbar to the top lands on the first measured row.
+    #[gpui::test]
+    fn scrollbar_top_is_the_first_row_when_unseen_rows_have_a_height(cx: &mut TestAppContext) {
+        let mut cx = cx.add_empty_window();
+        let hinted =
+            ListState::new(40, ListAlignment::Top, px(10.)).with_uniform_item_height(px(30.));
+        let unhinted = ListState::new(40, ListAlignment::Top, px(10.));
+
+        struct TestView(ListState);
+        impl Render for TestView {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                _: &mut gpui::Context<Self>,
+            ) -> impl IntoElement {
+                list(self.0.clone(), |_, _, _| {
+                    div().h(px(30.)).w_full().into_any()
+                })
+                .w_full()
+                .h_full()
+            }
+        }
+
+        let draw = |state: &ListState, cx: &mut gpui::VisualTestContext| {
+            cx.draw(point(px(0.), px(0.)), size(px(100.), px(40.)), |_, cx| {
+                cx.new(|_| TestView(state.clone())).into_any_element()
+            });
+        };
+
+        // The first layout clears height hints because it has no previous
+        // item width. Reapplying after that layout is what keeps them.
+        hinted.scroll_to_end();
+        draw(&hinted, &mut cx);
+        let _ = hinted.clone().with_uniform_item_height(px(30.));
+        draw(&hinted, &mut cx);
+        hinted.set_offset_from_scrollbar(point(px(0.), px(0.)));
+
+        unhinted.scroll_to_end();
+        draw(&unhinted, &mut cx);
+        draw(&unhinted, &mut cx);
+        unhinted.set_offset_from_scrollbar(point(px(0.), px(0.)));
+
+        assert_eq!(
+            hinted.logical_scroll_top().item_ix,
+            0,
+            "a height hint makes the top of the scrollbar the first row"
+        );
+        assert_ne!(
+            unhinted.logical_scroll_top().item_ix,
+            0,
+            "without a hint the scrollbar top stops at the first measured row"
+        );
     }
 }

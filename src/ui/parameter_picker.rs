@@ -83,6 +83,7 @@ impl RenderOnce for ParameterPickerPopover {
             self.kind.title_for(locale).into()
         };
         let has_exact_preset = presets.iter().any(|p| p == &trimmed_typed);
+        let allows_input = self.kind.allows_custom_input();
         let input_border = if self.error.is_some() {
             theme.error_text
         } else {
@@ -130,19 +131,20 @@ impl RenderOnce for ParameterPickerPopover {
                             .child(tr(locale, "picker.hint_keys")),
                     ),
             )
-            .child(
+            .when(allows_input, |this| {
                 // Input::Medium is h_8 (32px) with its own padding. The 1px
-                // border is outside that box, so the frame is 34px. Extra
-                // wrapper padding would stack on the control's own inset.
-                div()
-                    .id("parameter-picker-input-box")
-                    .w_full()
-                    .rounded(px(6.))
-                    .bg(theme.bg_canvas)
-                    .border_1()
-                    .border_color(input_border)
-                    .child(Input::new(&self.input).appearance(false).cleanable(true)),
-            )
+                // border is outside that box, so the frame is 34px.
+                this.child(
+                    div()
+                        .id("parameter-picker-input-box")
+                        .w_full()
+                        .rounded(px(6.))
+                        .bg(theme.bg_canvas)
+                        .border_1()
+                        .border_color(input_border)
+                        .child(Input::new(&self.input).appearance(false).cleanable(true)),
+                )
+            })
             .when_some(self.error, |this, err| {
                 this.child(
                     div()
@@ -162,45 +164,51 @@ impl RenderOnce for ParameterPickerPopover {
                     .id("parameter-picker-presets")
                     .w_full()
                     .gap_0p5()
-                    .when(!trimmed_typed.is_empty() && !has_exact_preset, |this| {
-                        let custom_val = trimmed_typed.clone();
-                        let on_select = self.on_select_preset.clone();
-                        this.child(
-                            h_flex()
-                                .id("picker-custom-apply")
-                                .w_full()
-                                .min_h(px(24.))
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .px_2()
-                                .line_height(px(16.))
-                                .rounded(px(6.))
-                                .bg(theme.bg_toggle_active)
-                                .hover(|s| s.bg(theme.bg_hover))
-                                .cursor_pointer()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                    cx.stop_propagation();
-                                    on_select(custom_val.clone(), window, cx);
-                                })
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .text_xs()
-                                        .text_color(theme.text_primary)
-                                        .child(i18n::picker_apply_value(locale, &trimmed_typed)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .whitespace_nowrap()
-                                        .text_xs()
-                                        .text_color(theme.sim_badge_text)
-                                        .child("Enter"),
-                                ),
-                        )
-                    })
+                    .when(
+                        allows_input && !trimmed_typed.is_empty() && !has_exact_preset,
+                        |this| {
+                            let custom_val = trimmed_typed.clone();
+                            let on_select = self.on_select_preset.clone();
+                            this.child(
+                                h_flex()
+                                    .id("picker-custom-apply")
+                                    .w_full()
+                                    .min_h(px(24.))
+                                    .items_center()
+                                    .justify_between()
+                                    .gap_2()
+                                    .px_2()
+                                    .line_height(px(16.))
+                                    .rounded(px(6.))
+                                    .bg(theme.bg_toggle_active)
+                                    .hover(|s| s.bg(theme.bg_hover))
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                        cx.stop_propagation();
+                                        on_select(custom_val.clone(), window, cx);
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_xs()
+                                            .text_color(theme.text_primary)
+                                            .child(i18n::picker_apply_value(
+                                                locale,
+                                                &trimmed_typed,
+                                            )),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .whitespace_nowrap()
+                                            .text_xs()
+                                            .text_color(theme.sim_badge_text)
+                                            .child("Enter"),
+                                    ),
+                            )
+                        },
+                    )
                     .when(presets.is_empty() && trimmed_typed.is_empty(), |this| {
                         this.child(
                             div()

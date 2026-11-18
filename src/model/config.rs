@@ -20,10 +20,16 @@ pub enum ActivePickerKind {
     DataBits,
     Parity,
     StopBits,
+    FlowControl,
     BufferLimit,
 }
 
 impl ActivePickerKind {
+    /// Whether the picker accepts free-form typed values in addition to presets.
+    pub fn allows_custom_input(self) -> bool {
+        !matches!(self, Self::FlowControl)
+    }
+
     #[allow(dead_code)]
     pub fn title(self) -> Cow<'static, str> {
         self.title_for(Locale::ZhCn)
@@ -36,6 +42,7 @@ impl ActivePickerKind {
             Self::DataBits => tr(locale, "picker.title_data_bits"),
             Self::Parity => tr(locale, "picker.title_parity"),
             Self::StopBits => tr(locale, "picker.title_stop_bits"),
+            Self::FlowControl => tr(locale, "picker.title_flow"),
             Self::BufferLimit => tr(locale, "picker.title_buffer"),
         }
     }
@@ -52,6 +59,7 @@ impl ActivePickerKind {
             Self::DataBits => tr(locale, "picker.placeholder_data_bits"),
             Self::Parity => tr(locale, "picker.placeholder_parity"),
             Self::StopBits => tr(locale, "picker.placeholder_stop_bits"),
+            Self::FlowControl => tr(locale, "picker.placeholder_flow"),
             Self::BufferLimit => tr(locale, "picker.placeholder_buffer"),
         }
     }
@@ -79,6 +87,10 @@ impl ActivePickerKind {
             Self::StopBits => StopBits::ALL
                 .iter()
                 .map(|s| s.label().to_string())
+                .collect(),
+            Self::FlowControl => FlowControl::ALL
+                .iter()
+                .map(|f| f.label_for(locale).to_string())
                 .collect(),
             Self::BufferLimit => LOG_BUFFER_LIMIT_PRESETS
                 .iter()
@@ -213,6 +225,54 @@ impl fmt::Display for StopBits {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FlowControl {
+    #[default]
+    None,
+    Hardware,
+    Software,
+}
+
+impl FlowControl {
+    pub const ALL: [Self; 3] = [Self::None, Self::Hardware, Self::Software];
+
+    pub fn label(self) -> Cow<'static, str> {
+        self.label_for(Locale::ZhCn)
+    }
+
+    pub fn label_for(self, locale: Locale) -> Cow<'static, str> {
+        match self {
+            Self::None => tr(locale, "flow.none"),
+            Self::Hardware => Cow::Borrowed("RTS/CTS"),
+            Self::Software => Cow::Borrowed("XON/XOFF"),
+        }
+    }
+
+    /// Parses a preset label (fixed options only; no free-form aliases).
+    pub fn parse_for(raw: &str, locale: Locale) -> Result<Self, Cow<'static, str>> {
+        let trimmed = raw.trim();
+        Self::ALL
+            .into_iter()
+            .find(|f| f.label_for(locale) == trimmed)
+            .ok_or_else(|| tr(locale, "err.flow_control"))
+    }
+}
+
+impl fmt::Display for FlowControl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.label())
+    }
+}
+
+/// Latest sampled modem input lines. `None` means unknown / unsupported.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ModemSignals {
+    pub cts: Option<bool>,
+    pub dsr: Option<bool>,
+    pub cd: Option<bool>,
+    pub ri: Option<bool>,
+}
+
 /// Validates a simulated port name input.
 #[allow(dead_code)]
 pub fn parse_port(raw: &str) -> Result<String, Cow<'static, str>> {
@@ -252,6 +312,11 @@ pub struct SerialConfig {
     pub data_bits: DataBits,
     pub parity: Parity,
     pub stop_bits: StopBits,
+    pub flow_control: FlowControl,
+    /// DTR level applied when the port opens (and mirrored by the live toggle).
+    pub dtr: bool,
+    /// RTS level applied when the port opens (ignored under RTS/CTS flow control).
+    pub rts: bool,
 }
 
 impl SerialConfig {
@@ -267,6 +332,7 @@ impl SerialConfig {
             ActivePickerKind::DataBits => self.data_bits.label().to_string(),
             ActivePickerKind::Parity => self.parity.label_for(locale).to_string(),
             ActivePickerKind::StopBits => self.stop_bits.label().to_string(),
+            ActivePickerKind::FlowControl => self.flow_control.label_for(locale).to_string(),
             ActivePickerKind::BufferLimit => String::new(),
         }
     }
@@ -303,6 +369,9 @@ impl SerialConfig {
             ActivePickerKind::StopBits => {
                 self.stop_bits = StopBits::parse_for(raw, locale)?;
             }
+            ActivePickerKind::FlowControl => {
+                self.flow_control = FlowControl::parse_for(raw, locale)?;
+            }
             ActivePickerKind::BufferLimit => {
                 parse_log_buffer_limit_for(raw, locale)?;
             }
@@ -319,6 +388,9 @@ impl Default for SerialConfig {
             data_bits: DataBits::Eight,
             parity: Parity::None,
             stop_bits: StopBits::One,
+            flow_control: FlowControl::None,
+            dtr: true,
+            rts: true,
         }
     }
 }
@@ -410,5 +482,32 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(cfg.stop_bits, StopBits::OnePointFive);
+    }
+
+    #[test]
+    fn flow_control_accepts_only_fixed_presets() {
+        let mut cfg = SerialConfig::default();
+        assert_eq!(cfg.flow_control, FlowControl::None);
+        assert!(!ActivePickerKind::FlowControl.allows_custom_input());
+        assert!(ActivePickerKind::Parity.allows_custom_input());
+
+        for label in ActivePickerKind::FlowControl.presets_for(Locale::ZhCn) {
+            assert!(
+                cfg.apply_picker_value(ActivePickerKind::FlowControl, &label)
+                    .is_ok()
+            );
+        }
+        assert_eq!(cfg.flow_control, FlowControl::Software);
+
+        assert!(
+            cfg.apply_picker_value(ActivePickerKind::FlowControl, "hardware")
+                .is_err()
+        );
+        assert_eq!(cfg.flow_control, FlowControl::Software);
+        assert!(
+            cfg.apply_picker_value(ActivePickerKind::FlowControl, "RTS/CTS")
+                .is_ok()
+        );
+        assert_eq!(cfg.flow_control, FlowControl::Hardware);
     }
 }

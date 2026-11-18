@@ -5,7 +5,9 @@ pub mod settings;
 pub mod stream_output;
 
 #[allow(unused_imports)]
-pub use config::{ActivePickerKind, DataBits, Parity, SerialConfig, StopBits};
+pub use config::{
+    ActivePickerKind, DataBits, FlowControl, ModemSignals, Parity, SerialConfig, StopBits,
+};
 #[allow(unused_imports)]
 pub use log::{
     LogDirection, LogEntry, LogSearchState, LogSelectionModel, SearchMatch, SelectableLogLine,

@@ -5,8 +5,8 @@ use crate::i18n::{Locale, tr};
 use super::log::format_hex_bytes;
 use super::settings::DEFAULT_LOG_BUFFER_LIMIT;
 use super::{
-    ActivePickerKind, LogDirection, LogEntry, SendPayloadError, SerialConfig, format_visible_logs,
-    parse_hex_bytes,
+    ActivePickerKind, LogDirection, LogEntry, ModemSignals, SendPayloadError, SerialConfig,
+    format_visible_logs, parse_hex_bytes,
 };
 
 /// Simulated connection state. Never claims real hardware connectivity.
@@ -161,6 +161,8 @@ pub struct SessionState {
     pub is_simulated_session: bool,
     pub simulated_notice: &'static str,
     pub config: SerialConfig,
+    /// Latest sampled modem input lines (real sessions only).
+    pub modem_signals: ModemSignals,
     pub connection: SimulatedConnectionState,
     pub receive: ReceiveViewState,
     pub send: SendDraftState,
@@ -214,6 +216,7 @@ impl SessionState {
             stream_output: None,
             simulated_notice: "模拟会话（无真实串口硬件）",
             config: SerialConfig::default(),
+            modem_signals: ModemSignals::default(),
             connection: SimulatedConnectionState::Disconnected,
             receive: ReceiveViewState::default(),
             send: SendDraftState {
@@ -245,6 +248,7 @@ impl SessionState {
             stream_output: None,
             simulated_notice: "",
             config,
+            modem_signals: ModemSignals::default(),
             connection: if connected {
                 SimulatedConnectionState::Connected
             } else {
@@ -311,6 +315,7 @@ impl SessionState {
             SimulatedConnectionState::Connected
         } else {
             self.rx_line_open = false;
+            self.modem_signals = ModemSignals::default();
             SimulatedConnectionState::Disconnected
         };
     }

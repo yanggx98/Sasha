@@ -15,11 +15,15 @@ no_ports = "未检测到可用串口，请插入设备后点击刷新"
 manual_port = "手动输入端口..."
 manual_port_placeholder = "输入端口名（如 COM3）"
 baud_label = "波特率"
+frame_title = "帧格式"
+flow_title = "流控与信号"
 baud_placeholder = "输入正整数波特率（如 230400），回车确认"
 frame_header = "%{chevron} 帧格式（高级）"
 data_bits = "数据位"
 parity = "校验位"
 stop_bits = "停止位"
+flow = "流控"
+dtr_rts_init = "初始电平"
 connect_btn = "连接并进入终端 →"
 sim_btn = "先不连接，进入模拟会话"
 
@@ -41,6 +45,8 @@ title_baud = "选择或输入波特率"
 title_data_bits = "选择或输入数据位"
 title_parity = "选择或输入校验位"
 title_stop_bits = "选择或输入停止位"
+title_flow = "选择流控"
+placeholder_flow = "从下方选择流控方式"
 title_buffer = "设置接收缓冲上限（字节）"
 placeholder_port = "输入端口名（如 COM3）或选择预设"
 placeholder_baud = "输入正整数波特率（如 230400）或选择预设"
@@ -97,6 +103,7 @@ btn_sim_disconnected = "模拟未连接，无法发送"
 data_bits = "数据位仅支持 5、6、7、8"
 parity = "校验位仅支持 无校验、奇校验、偶校验"
 stop_bits = "停止位仅支持 1、1.5、2"
+flow_control = "流控仅支持 无、RTS/CTS、XON/XOFF"
 port_empty = "端口名称不能为空（如 COM3）"
 baud_empty = "请输入正整数波特率（如 115200）"
 baud_invalid = "波特率必须为正整数（如 115200 或 230400）"
@@ -192,3 +199,14 @@ start = '流输出：选择文件并追加记录（固定当前文本/HEX格式�
 stop = '停止流输出'
 busy = '正在准备或停止流输出…'
 error = '流输出失败'
+
+[flow]
+none = "无"
+
+[signal]
+rts_locked = "RTS/CTS 流控已接管 RTS"
+sim_disabled = "模拟会话不支持信号线"
+write_failed = "设置 %{line} 失败：%{detail}"
+unknown = "未知"
+high = "高"
+low = "低"

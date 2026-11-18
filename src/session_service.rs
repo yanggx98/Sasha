@@ -22,6 +22,23 @@ pub const RX_SUBSCRIBER_MAX_BYTES: usize = 1024 * 1024;
 pub trait PortWriter: Send + 'static {
     /// Writes all `data` bytes to the port and flushes the transmit buffer.
     fn write_all_and_flush(&mut self, data: &[u8]) -> Result<(), String>;
+
+    /// Sets the DTR output level. Writers without modem control accept and ignore it.
+    fn set_dtr(&mut self, _level: bool) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// Sets the RTS output level. Writers without modem control accept and ignore it.
+    fn set_rts(&mut self, _level: bool) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Modem output line addressable through the writer thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlLine {
+    Dtr,
+    Rts,
 }
 
 /// Errors returned when enqueuing or executing a TX request through [`SessionService`].
@@ -124,6 +141,17 @@ struct TxCommand {
     bytes: Vec<u8>,
     cancel_token: Option<Arc<AtomicBool>>,
     reply_tx: Sender<Result<(), SessionTxError>>,
+}
+
+/// Items processed serially by the writer thread, preserving queue order.
+enum WriterCommand {
+    Tx(TxCommand),
+    Control {
+        generation: u64,
+        line: ControlLine,
+        level: bool,
+        reply_tx: Sender<Result<(), SessionTxError>>,
+    },
 }
 
 struct RxQueueInner {
@@ -279,7 +307,7 @@ impl Drop for RxSubscriber {
 struct ServiceState {
     generation: u64,
     connected: bool,
-    tx_sender: Option<SyncSender<TxCommand>>,
+    tx_sender: Option<SyncSender<WriterCommand>>,
     writer_thread: Option<JoinHandle<()>>,
     rx_subscribers: Vec<Arc<RxSubscriberQueue>>,
     disconnect_listeners: Vec<Sender<DisconnectEvent>>,
@@ -436,10 +464,47 @@ impl SessionService {
         };
 
         let (reply_tx, reply_rx) = mpsc::channel();
-        let cmd = TxCommand {
+        let cmd = WriterCommand::Tx(TxCommand {
             generation,
             bytes,
             cancel_token,
+            reply_tx,
+        });
+        match sender.try_send(cmd) {
+            Ok(()) => Ok(reply_rx),
+            Err(TrySendError::Full(_)) => Err(SessionTxError::QueueFull),
+            Err(TrySendError::Disconnected(_)) => Err(SessionTxError::Disconnected),
+        }
+    }
+
+    /// Enqueues a DTR/RTS level change on `generation`, serialized with TX data.
+    pub fn enqueue_control(
+        &self,
+        generation: u64,
+        line: ControlLine,
+        level: bool,
+    ) -> Result<Receiver<Result<(), SessionTxError>>, SessionTxError> {
+        let sender = {
+            let state = self.inner.state.lock().unwrap();
+            if !state.connected {
+                return Err(SessionTxError::Disconnected);
+            }
+            if state.generation != generation {
+                return Err(SessionTxError::StaleGeneration {
+                    expected: state.generation,
+                    actual: generation,
+                });
+            }
+            match state.tx_sender.as_ref() {
+                Some(sender) => sender.clone(),
+                None => return Err(SessionTxError::Disconnected),
+            }
+        };
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let cmd = WriterCommand::Control {
+            generation,
+            line,
+            level,
             reply_tx,
         };
         match sender.try_send(cmd) {
@@ -447,6 +512,17 @@ impl SessionService {
             Err(TrySendError::Full(_)) => Err(SessionTxError::QueueFull),
             Err(TrySendError::Disconnected(_)) => Err(SessionTxError::Disconnected),
         }
+    }
+
+    /// Sets a modem output line and blocks until the writer thread applied it.
+    pub fn set_control_blocking(
+        &self,
+        generation: u64,
+        line: ControlLine,
+        level: bool,
+    ) -> Result<(), SessionTxError> {
+        let reply_rx = self.enqueue_control(generation, line, level)?;
+        reply_rx.recv().unwrap_or(Err(SessionTxError::Disconnected))
     }
 
     /// Enqueues `bytes` and blocks the calling thread until the write finishes.
@@ -527,10 +603,36 @@ impl SessionService {
 fn run_writer_loop<W: PortWriter>(
     mut writer: W,
     writer_generation: u64,
-    rx: Receiver<TxCommand>,
+    rx: Receiver<WriterCommand>,
     inner: Arc<SessionServiceInner>,
 ) {
-    while let Ok(cmd) = rx.recv() {
+    while let Ok(item) = rx.recv() {
+        let cmd = match item {
+            WriterCommand::Control {
+                generation,
+                line,
+                level,
+                reply_tx,
+            } => {
+                let is_current = {
+                    let state = inner.state.lock().unwrap();
+                    state.connected
+                        && state.generation == writer_generation
+                        && generation == writer_generation
+                };
+                if !is_current {
+                    let _ = reply_tx.send(Err(SessionTxError::Disconnected));
+                    continue;
+                }
+                let result = match line {
+                    ControlLine::Dtr => writer.set_dtr(level),
+                    ControlLine::Rts => writer.set_rts(level),
+                };
+                let _ = reply_tx.send(result.map_err(SessionTxError::WriteFailed));
+                continue;
+            }
+            WriterCommand::Tx(cmd) => cmd,
+        };
         let is_current = {
             let state = inner.state.lock().unwrap();
             state.connected
@@ -631,6 +733,86 @@ mod tests {
         }
     }
 
+    struct OrderedPortWriter {
+        log: Arc<Mutex<Vec<String>>>,
+        fail_control: bool,
+    }
+
+    impl PortWriter for OrderedPortWriter {
+        fn write_all_and_flush(&mut self, data: &[u8]) -> Result<(), String> {
+            self.log
+                .lock()
+                .unwrap()
+                .push(format!("tx:{}", String::from_utf8_lossy(data)));
+            Ok(())
+        }
+
+        fn set_dtr(&mut self, level: bool) -> Result<(), String> {
+            if self.fail_control {
+                return Err("dtr unsupported".to_string());
+            }
+            self.log.lock().unwrap().push(format!("dtr:{level}"));
+            Ok(())
+        }
+
+        fn set_rts(&mut self, level: bool) -> Result<(), String> {
+            self.log.lock().unwrap().push(format!("rts:{level}"));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn control_commands_are_serialized_with_tx_in_queue_order() {
+        let service = SessionService::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let gen1 = service.attach_writer(OrderedPortWriter {
+            log: Arc::clone(&log),
+            fail_control: false,
+        });
+
+        let r1 = service.enqueue_tx(gen1, b"A".to_vec(), None).unwrap();
+        let r2 = service
+            .enqueue_control(gen1, ControlLine::Dtr, false)
+            .unwrap();
+        let r3 = service.enqueue_tx(gen1, b"B".to_vec(), None).unwrap();
+        let r4 = service
+            .enqueue_control(gen1, ControlLine::Rts, true)
+            .unwrap();
+        for r in [r1, r2, r3, r4] {
+            assert_eq!(r.recv().unwrap(), Ok(()));
+        }
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["tx:A", "dtr:false", "tx:B", "rts:true"]
+        );
+        assert!(service.is_connected());
+    }
+
+    #[test]
+    fn control_failure_reports_error_and_keeps_connection() {
+        let service = SessionService::new();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let gen1 = service.attach_writer(OrderedPortWriter {
+            log: Arc::clone(&log),
+            fail_control: true,
+        });
+
+        let err = service
+            .set_control_blocking(gen1, ControlLine::Dtr, true)
+            .unwrap_err();
+        assert_eq!(err, SessionTxError::WriteFailed("dtr unsupported".into()));
+        assert!(service.is_connected());
+        assert_eq!(service.send_tx_blocking(gen1, b"X".to_vec(), None), Ok(()));
+
+        service.disconnect(None);
+        assert_eq!(
+            service
+                .enqueue_control(gen1, ControlLine::Dtr, true)
+                .unwrap_err(),
+            SessionTxError::Disconnected
+        );
+    }
+
     #[test]
     fn fifo_non_interleaved_tx_ordering_and_single_completion_event() {
         let service = SessionService::new();
@@ -687,9 +869,7 @@ mod tests {
     fn stale_generation_and_disconnected_requests_are_rejected() {
         let service = SessionService::new();
         assert_eq!(
-            service
-                .enqueue_tx(0, b"AT".to_vec(), None)
-                .unwrap_err(),
+            service.enqueue_tx(0, b"AT".to_vec(), None).unwrap_err(),
             SessionTxError::Disconnected
         );
         assert_eq!(
@@ -702,9 +882,7 @@ mod tests {
         assert_eq!(gen1, 1);
 
         assert_eq!(
-            service
-                .enqueue_tx(0, b"AT".to_vec(), None)
-                .unwrap_err(),
+            service.enqueue_tx(0, b"AT".to_vec(), None).unwrap_err(),
             SessionTxError::StaleGeneration {
                 expected: 1,
                 actual: 0
@@ -723,9 +901,7 @@ mod tests {
         assert_eq!(service.generation(), 2);
 
         assert_eq!(
-            service
-                .enqueue_tx(gen1, b"AT".to_vec(), None)
-                .unwrap_err(),
+            service.enqueue_tx(gen1, b"AT".to_vec(), None).unwrap_err(),
             SessionTxError::Disconnected
         );
 
@@ -733,9 +909,7 @@ mod tests {
         let gen2 = service.attach_writer(writer2);
         assert_eq!(gen2, 3);
         assert_eq!(
-            service
-                .enqueue_tx(gen1, b"OLD".to_vec(), None)
-                .unwrap_err(),
+            service.enqueue_tx(gen1, b"OLD".to_vec(), None).unwrap_err(),
             SessionTxError::StaleGeneration {
                 expected: 3,
                 actual: gen1

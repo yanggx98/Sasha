@@ -47,10 +47,7 @@ fn wait_until_finished(
 ) -> ScriptInstanceSnapshot {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(snap) = manager
-            .snapshots()
-            .into_iter()
-            .find(|s| s.run_id == run_id)
+        if let Some(snap) = manager.snapshots().into_iter().find(|s| s.run_id == run_id)
             && !snap.status.is_active()
         {
             return snap;
@@ -63,18 +60,10 @@ fn wait_until_finished(
     }
 }
 
-fn wait_until_log_contains(
-    manager: &ScriptManager,
-    run_id: u64,
-    needle: &str,
-    timeout: Duration,
-) {
+fn wait_until_log_contains(manager: &ScriptManager, run_id: u64, needle: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
-        if let Some(snap) = manager
-            .snapshots()
-            .into_iter()
-            .find(|s| s.run_id == run_id)
+        if let Some(snap) = manager.snapshots().into_iter().find(|s| s.run_id == run_id)
             && snap.logs.iter().any(|entry| entry.message.contains(needle))
         {
             return;
@@ -156,7 +145,12 @@ fn read_preserves_binary_bytes_and_returns_timeout_pair() {
     .to_string();
 
     let run_id = manager
-        .start_script(PathBuf::from("binary_read.lua"), source, &service, generation)
+        .start_script(
+            PathBuf::from("binary_read.lua"),
+            source,
+            &service,
+            generation,
+        )
         .unwrap();
     wait_until_log_contains(&manager, run_id, "ready", Duration::from_secs(2));
 

@@ -8,7 +8,7 @@ use gpui_kit::*;
 
 use crate::i18n::{self, Locale, tr, tr_shared};
 use crate::model::config::{BAUD_RATE_PRESETS, parse_baud_rate_for};
-use crate::model::{DataBits, Parity, SerialConfig, StopBits};
+use crate::model::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use crate::serial::{DetectedPort, enumerate_serial_ports_for};
 use crate::ui::theme::NanoTheme;
 
@@ -18,21 +18,7 @@ pub type SelectBaudCallback = Rc<dyn Fn(u32, &mut Window, &mut App)>;
 pub type SelectDataBitsCallback = Rc<dyn Fn(DataBits, &mut Window, &mut App)>;
 pub type SelectParityCallback = Rc<dyn Fn(Parity, &mut Window, &mut App)>;
 pub type SelectStopBitsCallback = Rc<dyn Fn(StopBits, &mut Window, &mut App)>;
-
-/// Formats data bits, parity, and stop bits into a compact summary like `8-N-1`.
-pub fn format_frame_summary(data_bits: DataBits, parity: Parity, stop_bits: StopBits) -> String {
-    let parity_code = match parity {
-        Parity::None => "N",
-        Parity::Odd => "O",
-        Parity::Even => "E",
-    };
-    format!(
-        "{}-{}-{}",
-        data_bits.label(),
-        parity_code,
-        stop_bits.label()
-    )
-}
+pub type SelectFlowControlCallback = Rc<dyn Fn(FlowControl, &mut Window, &mut App)>;
 
 /// Pure UI state for the startup serial connection page.
 #[derive(Debug, Clone)]
@@ -41,7 +27,6 @@ pub struct StartPageState {
     pub config: SerialConfig,
     pub manual_port_mode: bool,
     pub baud_dropdown_open: bool,
-    pub frame_expanded: bool,
     pub baud_error: Option<String>,
     pub connect_error: Option<String>,
 }
@@ -68,7 +53,6 @@ impl StartPageState {
             config,
             manual_port_mode: false,
             baud_dropdown_open: false,
-            frame_expanded: false,
             baud_error: None,
             connect_error: None,
         }
@@ -136,14 +120,6 @@ impl StartPageState {
             }
         }
     }
-
-    pub fn frame_summary(&self) -> String {
-        format_frame_summary(
-            self.config.data_bits,
-            self.config.parity,
-            self.config.stop_bits,
-        )
-    }
 }
 
 impl Default for StartPageState {
@@ -165,12 +141,14 @@ pub struct StartPage {
     on_enable_manual_port: StartActionCallback,
     on_toggle_baud_dropdown: StartActionCallback,
     on_select_baud: SelectBaudCallback,
-    on_toggle_frame_expanded: StartActionCallback,
     on_select_data_bits: SelectDataBitsCallback,
     on_select_parity: SelectParityCallback,
     on_select_stop_bits: SelectStopBitsCallback,
     on_connect: StartActionCallback,
     on_enter_simulated: StartActionCallback,
+    on_select_flow: Option<SelectFlowControlCallback>,
+    on_toggle_dtr: Option<StartActionCallback>,
+    on_toggle_rts: Option<StartActionCallback>,
 }
 
 impl StartPage {
@@ -186,7 +164,6 @@ impl StartPage {
         on_enable_manual_port: StartActionCallback,
         on_toggle_baud_dropdown: StartActionCallback,
         on_select_baud: SelectBaudCallback,
-        on_toggle_frame_expanded: StartActionCallback,
         on_select_data_bits: SelectDataBitsCallback,
         on_select_parity: SelectParityCallback,
         on_select_stop_bits: SelectStopBitsCallback,
@@ -204,13 +181,65 @@ impl StartPage {
             on_enable_manual_port,
             on_toggle_baud_dropdown,
             on_select_baud,
-            on_toggle_frame_expanded,
             on_select_data_bits,
             on_select_parity,
             on_select_stop_bits,
             on_connect,
             on_enter_simulated,
+            on_select_flow: None,
+            on_toggle_dtr: None,
+            on_toggle_rts: None,
         }
+    }
+
+    /// Wires the flow-control row and the initial DTR/RTS level toggles.
+    pub fn flow_control_callbacks(
+        mut self,
+        on_select_flow: SelectFlowControlCallback,
+        on_toggle_dtr: StartActionCallback,
+        on_toggle_rts: StartActionCallback,
+    ) -> Self {
+        self.on_select_flow = Some(on_select_flow);
+        self.on_toggle_dtr = Some(on_toggle_dtr);
+        self.on_toggle_rts = Some(on_toggle_rts);
+        self
+    }
+
+    /// Pill-style toggle used for fixed-choice rows on the start page.
+    fn pill(
+        theme: NanoTheme,
+        id: impl Into<ElementId>,
+        selected: bool,
+        enabled: bool,
+        label: impl Into<SharedString>,
+        on_click: impl Fn(&mut Window, &mut App) + 'static,
+    ) -> AnyElement {
+        div()
+            .id(id)
+            .px_2p5()
+            .py_1()
+            .rounded(px(6.))
+            .text_xs()
+            .when(selected && enabled, |this| {
+                this.bg(theme.bg_toggle_active)
+                    .text_color(theme.accent_blue_hover)
+            })
+            .when(!selected && enabled, |this| {
+                this.text_color(theme.text_secondary)
+            })
+            .when(!enabled, |this| {
+                this.text_color(theme.text_muted).opacity(0.5)
+            })
+            .when(enabled, |this| {
+                this.hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                    .cursor_pointer()
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        cx.stop_propagation();
+                        on_click(window, cx);
+                    })
+            })
+            .child(label.into())
+            .into_any_element()
     }
 
     fn current_badge(theme: NanoTheme, label: SharedString) -> AnyElement {
@@ -241,7 +270,6 @@ impl RenderOnce for StartPage {
         let on_refresh = self.on_refresh_ports.clone();
         let on_enable_manual = self.on_enable_manual_port.clone();
         let on_toggle_baud = self.on_toggle_baud_dropdown.clone();
-        let on_toggle_frame = self.on_toggle_frame_expanded.clone();
         let on_connect = self.on_connect.clone();
         let on_enter_sim = self.on_enter_simulated.clone();
 
@@ -523,194 +551,247 @@ impl RenderOnce for StartPage {
                                             .child(preset.to_string()),
                                     )
                                     .when(is_current, |this| {
-                                        this.child(Self::current_badge(theme, badge_current.clone()))
+                                        this.child(Self::current_badge(
+                                            theme,
+                                            badge_current.clone(),
+                                        ))
                                     })
                             }),
                         )),
                 )
             });
 
-        let frame_chevron = if state.frame_expanded { "▾" } else { "▸" };
-        let frame_section = v_flex()
-            .w_full()
-            .gap_1p5()
+        let frame_col = v_flex()
+            .id("start-frame-options")
+            .flex_1()
+            .min_w_0()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(tr(locale, "start.frame_title")),
+            )
             .child(
                 h_flex()
-                    .id("start-frame-toggle")
                     .w_full()
-                    .h(px(32.))
-                    .px_2p5()
                     .items_center()
                     .justify_between()
-                    .rounded(px(8.))
-                    .bg(theme.bg_card)
-                    .border_1()
-                    .border_color(theme.border_card)
-                    .hover(|s| s.bg(theme.bg_hover))
-                    .cursor_pointer()
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        cx.stop_propagation();
-                        on_toggle_frame(window, cx);
-                    })
+                    .gap_2()
                     .child(
                         div()
                             .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_secondary)
-                            .child(i18n::start_frame_header(locale, frame_chevron)),
+                            .child(tr(locale, "start.data_bits")),
+                    )
+                    .child(h_flex().items_center().gap_1().children(
+                        DataBits::ALL.iter().enumerate().map(|(idx, &bits)| {
+                            let selected = state.config.data_bits == bits;
+                            let on_select = self.on_select_data_bits.clone();
+                            div()
+                                .id(("start-data-bits", idx))
+                                .px_2p5()
+                                .py_1()
+                                .rounded(px(6.))
+                                .text_xs()
+                                .when(selected, |this| {
+                                    this.bg(theme.bg_toggle_active)
+                                        .text_color(theme.accent_blue_hover)
+                                })
+                                .when(!selected, |this| this.text_color(theme.text_secondary))
+                                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    on_select(bits, window, cx);
+                                })
+                                .child(bits.label())
+                        }),
+                    )),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr(locale, "start.parity")),
+                    )
+                    .child(h_flex().items_center().gap_1().children(
+                        Parity::ALL.iter().enumerate().map(|(idx, &parity)| {
+                            let selected = state.config.parity == parity;
+                            let on_select = self.on_select_parity.clone();
+                            div()
+                                .id(("start-parity", idx))
+                                .px_2p5()
+                                .py_1()
+                                .rounded(px(6.))
+                                .text_xs()
+                                .when(selected, |this| {
+                                    this.bg(theme.bg_toggle_active)
+                                        .text_color(theme.accent_blue_hover)
+                                })
+                                .when(!selected, |this| this.text_color(theme.text_secondary))
+                                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    on_select(parity, window, cx);
+                                })
+                                .child(parity.label_for(locale))
+                        }),
+                    )),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr(locale, "start.stop_bits")),
+                    )
+                    .child(h_flex().items_center().gap_1().children(
+                        StopBits::ALL.iter().enumerate().map(|(idx, &stop_bits)| {
+                            let selected = state.config.stop_bits == stop_bits;
+                            let on_select = self.on_select_stop_bits.clone();
+                            div()
+                                .id(("start-stop-bits", idx))
+                                .px_2p5()
+                                .py_1()
+                                .rounded(px(6.))
+                                .text_xs()
+                                .when(selected, |this| {
+                                    this.bg(theme.bg_toggle_active)
+                                        .text_color(theme.accent_blue_hover)
+                                })
+                                .when(!selected, |this| this.text_color(theme.text_secondary))
+                                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                                .cursor_pointer()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    cx.stop_propagation();
+                                    on_select(stop_bits, window, cx);
+                                })
+                                .child(stop_bits.label())
+                        }),
+                    )),
+            );
+
+        let flow_col = v_flex()
+            .id("start-flow-options")
+            .flex_1()
+            .min_w_0()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(tr(locale, "start.flow_title")),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr(locale, "start.flow")),
+                    )
+                    .child(h_flex().items_center().gap_1().children(
+                        FlowControl::ALL.iter().enumerate().map(|(idx, &flow)| {
+                            let on_select = self.on_select_flow.clone();
+                            Self::pill(
+                                theme,
+                                ("start-flow", idx),
+                                state.config.flow_control == flow,
+                                on_select.is_some(),
+                                flow.label_for(locale).into_owned(),
+                                move |window, cx| {
+                                    if let Some(on_select) = &on_select {
+                                        on_select(flow, window, cx);
+                                    }
+                                },
+                            )
+                        }),
+                    )),
+            )
+            .child({
+                let rts_locked = state.config.flow_control == FlowControl::Hardware;
+                let on_dtr = self.on_toggle_dtr.clone();
+                let on_rts = self.on_toggle_rts.clone();
+                let (dtr_on, rts_on) = (state.config.dtr, state.config.rts);
+                let (dtr_enabled, rts_enabled) =
+                    (on_dtr.is_some(), on_rts.is_some() && !rts_locked);
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr(locale, "start.dtr_rts_init")),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(state.frame_summary()),
-                    ),
-            )
-            .when(state.frame_expanded, |this| {
+                        h_flex()
+                            .items_center()
+                            .gap_1()
+                            .child(Self::pill(
+                                theme,
+                                "start-dtr",
+                                dtr_on,
+                                dtr_enabled,
+                                "DTR",
+                                move |window, cx| {
+                                    if let Some(on_dtr) = &on_dtr {
+                                        on_dtr(window, cx);
+                                    }
+                                },
+                            ))
+                            .child(Self::pill(
+                                theme,
+                                "start-rts",
+                                rts_on,
+                                rts_enabled,
+                                "RTS",
+                                move |window, cx| {
+                                    if let Some(on_rts) = &on_rts {
+                                        on_rts(window, cx);
+                                    }
+                                },
+                            )),
+                    )
+            })
+            .when(state.config.flow_control == FlowControl::Hardware, |this| {
                 this.child(
-                    v_flex()
-                        .id("start-frame-options")
-                        .w_full()
-                        .p_2p5()
-                        .gap_2()
-                        .rounded(px(8.))
-                        .bg(theme.bg_card)
-                        .border_1()
-                        .border_color(theme.border_card)
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_secondary)
-                                        .child(tr(locale, "start.data_bits")),
-                                )
-                                .child(h_flex().items_center().gap_1().children(
-                                    DataBits::ALL.iter().enumerate().map(|(idx, &bits)| {
-                                        let selected = state.config.data_bits == bits;
-                                        let on_select = self.on_select_data_bits.clone();
-                                        div()
-                                            .id(("start-data-bits", idx))
-                                            .px_2p5()
-                                            .py_1()
-                                            .rounded(px(6.))
-                                            .text_xs()
-                                            .when(selected, |this| {
-                                                this.bg(theme.bg_toggle_active)
-                                                    .text_color(theme.accent_blue_hover)
-                                            })
-                                            .when(!selected, |this| {
-                                                this.text_color(theme.text_secondary)
-                                            })
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                move |_, window, cx| {
-                                                    cx.stop_propagation();
-                                                    on_select(bits, window, cx);
-                                                },
-                                            )
-                                            .child(bits.label())
-                                    }),
-                                )),
-                        )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_secondary)
-                                        .child(tr(locale, "start.parity")),
-                                )
-                                .child(h_flex().items_center().gap_1().children(
-                                    Parity::ALL.iter().enumerate().map(|(idx, &parity)| {
-                                        let selected = state.config.parity == parity;
-                                        let on_select = self.on_select_parity.clone();
-                                        div()
-                                            .id(("start-parity", idx))
-                                            .px_2p5()
-                                            .py_1()
-                                            .rounded(px(6.))
-                                            .text_xs()
-                                            .when(selected, |this| {
-                                                this.bg(theme.bg_toggle_active)
-                                                    .text_color(theme.accent_blue_hover)
-                                            })
-                                            .when(!selected, |this| {
-                                                this.text_color(theme.text_secondary)
-                                            })
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                move |_, window, cx| {
-                                                    cx.stop_propagation();
-                                                    on_select(parity, window, cx);
-                                                },
-                                            )
-                                            .child(parity.label_for(locale))
-                                    }),
-                                )),
-                        )
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .items_center()
-                                .justify_between()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(theme.text_secondary)
-                                        .child(tr(locale, "start.stop_bits")),
-                                )
-                                .child(h_flex().items_center().gap_1().children(
-                                    StopBits::ALL.iter().enumerate().map(|(idx, &stop_bits)| {
-                                        let selected = state.config.stop_bits == stop_bits;
-                                        let on_select = self.on_select_stop_bits.clone();
-                                        div()
-                                            .id(("start-stop-bits", idx))
-                                            .px_2p5()
-                                            .py_1()
-                                            .rounded(px(6.))
-                                            .text_xs()
-                                            .when(selected, |this| {
-                                                this.bg(theme.bg_toggle_active)
-                                                    .text_color(theme.accent_blue_hover)
-                                            })
-                                            .when(!selected, |this| {
-                                                this.text_color(theme.text_secondary)
-                                            })
-                                            .hover(|s| {
-                                                s.bg(theme.bg_hover).text_color(theme.text_primary)
-                                            })
-                                            .cursor_pointer()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                move |_, window, cx| {
-                                                    cx.stop_propagation();
-                                                    on_select(stop_bits, window, cx);
-                                                },
-                                            )
-                                            .child(stop_bits.label())
-                                    }),
-                                )),
-                        ),
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(tr(locale, "signal.rts_locked")),
                 )
             });
+
+        let params_section = h_flex()
+            .id("start-params-columns")
+            .w_full()
+            .items_stretch()
+            .gap_4()
+            .child(frame_col)
+            .child(div().w(px(1.)).bg(theme.border_card))
+            .child(flow_col);
 
         let actions_section = v_flex()
             .w_full()
@@ -785,7 +866,7 @@ impl RenderOnce for StartPage {
                     .id("start-page-content")
                     .flex_shrink_0()
                     .my_auto()
-                    .w(px(440.))
+                    .w(px(540.))
                     .max_w_full()
                     .gap(px(14.))
                     .child(
@@ -808,7 +889,7 @@ impl RenderOnce for StartPage {
                     )
                     .child(port_section)
                     .child(baud_section)
-                    .child(frame_section)
+                    .child(params_section)
                     .child(actions_section),
             )
     }
@@ -816,36 +897,14 @@ impl RenderOnce for StartPage {
 
 #[cfg(test)]
 mod tests {
-    use super::{StartPageState, format_frame_summary};
-    use crate::model::{DataBits, Parity, StopBits};
+    use super::StartPageState;
     use crate::serial::DetectedPort;
-
-    #[test]
-    fn frame_summary_reflects_data_bits_parity_and_stop_bits() {
-        assert_eq!(
-            format_frame_summary(DataBits::Eight, Parity::None, StopBits::One),
-            "8-N-1"
-        );
-        assert_eq!(
-            format_frame_summary(DataBits::Seven, Parity::Even, StopBits::OnePointFive),
-            "7-E-1.5"
-        );
-        assert_eq!(
-            format_frame_summary(DataBits::Six, Parity::Odd, StopBits::Two),
-            "6-O-2"
-        );
-        assert_eq!(
-            format_frame_summary(DataBits::Five, Parity::None, StopBits::One),
-            "5-N-1"
-        );
-    }
 
     #[test]
     fn start_page_state_initializes_from_detected_ports_and_handles_refresh() {
         let empty = StartPageState::new_with_ports(Vec::new());
         assert_eq!(empty.config.port, "");
         assert!(!empty.manual_port_mode);
-        assert_eq!(empty.frame_summary(), "8-N-1");
 
         let ports = vec![
             DetectedPort {

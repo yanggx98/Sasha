@@ -15,11 +15,15 @@ no_ports = "No serial ports detected. Plug in a device and click Refresh."
 manual_port = "Enter port manually..."
 manual_port_placeholder = "Enter port name (e.g. COM3)"
 baud_label = "Baud Rate"
+frame_title = "Frame Format"
+flow_title = "Flow & Signals"
 baud_placeholder = "Enter positive integer baud rate (e.g. 230400), press Enter"
 frame_header = "%{chevron} Frame Format (Advanced)"
 data_bits = "Data Bits"
 parity = "Parity"
 stop_bits = "Stop Bits"
+flow = "Flow"
+dtr_rts_init = "Initial levels"
 connect_btn = "Connect & Open Terminal →"
 sim_btn = "Skip connection, open simulated session"
 
@@ -41,6 +45,8 @@ title_baud = "Select or Enter Baud Rate"
 title_data_bits = "Select or Enter Data Bits"
 title_parity = "Select or Enter Parity"
 title_stop_bits = "Select or Enter Stop Bits"
+title_flow = "Select Flow Control"
+placeholder_flow = "Choose a flow control mode below"
 title_buffer = "Set Receive Buffer Limit (Bytes)"
 placeholder_port = "Enter port name (e.g. COM3) or choose a preset"
 placeholder_baud = "Enter positive integer baud rate (e.g. 230400) or choose a preset"
@@ -97,6 +103,7 @@ btn_sim_disconnected = "Sim disconnected, cannot send"
 data_bits = "Data bits must be 5, 6, 7, or 8"
 parity = "Parity must be None, Odd, or Even"
 stop_bits = "Stop bits must be 1, 1.5, or 2"
+flow_control = "Flow control must be None, RTS/CTS, or XON/XOFF"
 port_empty = "Port name cannot be empty (e.g. COM3)"
 baud_empty = "Please enter a positive integer baud rate (e.g. 115200)"
 baud_invalid = "Baud rate must be a positive integer (e.g. 115200 or 230400)"
@@ -192,3 +199,14 @@ start = 'Stream output: choose a file and append logs (current text/HEX format)'
 stop = 'Stop stream output'
 busy = 'Preparing or stopping stream output…'
 error = 'Stream output failed'
+
+[flow]
+none = "None"
+
+[signal]
+rts_locked = "RTS is controlled by RTS/CTS flow control"
+sim_disabled = "Signal lines are unavailable in simulated sessions"
+write_failed = "Failed to set %{line}: %{detail}"
+unknown = "Unknown"
+high = "High"
+low = "Low"

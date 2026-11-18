@@ -12,18 +12,18 @@ use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::i18n::{Locale, bottom_buffer_label, tr, tr_shared};
+use crate::i18n::{Locale, bottom_buffer_label, signal_write_failed, tr, tr_shared};
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::{
-    ActivePickerKind, ConfigStore, DataBits, LogSearchState, LogSelectionModel, Parity,
-    SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms, format_buffer_usage,
-    format_log_buffer_limit, parse_log_buffer_limit_for,
+    ActivePickerKind, ConfigStore, DataBits, FlowControl, LogSearchState, LogSelectionModel,
+    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
+    format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
 };
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
-use crate::session_service::{SessionService, SessionTxError};
-use crate::ui::bottom_bar::BottomBar;
-use crate::ui::log_view::LogView;
+use crate::session_service::{ControlLine, SessionService, SessionTxError};
+use crate::ui::bottom_bar::{BottomBar, SignalControls};
+use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::motion::UiMotionState;
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::receive_toolbar::ReceiveToolbar;
@@ -68,6 +68,8 @@ struct SessionTab {
     send_error: Option<SharedString>,
     log_focus: FocusHandle,
     log_list_state: ListState,
+    /// `(item count, font size)` last given a uniform row-height hint.
+    row_hint_key: Option<(usize, u16)>,
     last_log_count: usize,
     last_tail_id: u64,
     last_tail_len: usize,
@@ -130,6 +132,7 @@ impl SessionTab {
             send_error: None,
             log_focus: cx.focus_handle(),
             log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
+            row_hint_key: None,
             last_log_count: 0,
             last_tail_id: 0,
             last_tail_len: 0,
@@ -190,7 +193,7 @@ impl SessionTab {
         );
     }
 
-    fn sync_log_list_state(&mut self) {
+    fn sync_log_list_state(&mut self, log_font_size: u16) {
         let log_count = self.state.logs.len();
         let notice_count = usize::from(!self.state.simulated_notice.is_empty());
         let total_items = log_count + notice_count;
@@ -221,6 +224,8 @@ impl SessionTab {
             self.log_list_state.reset(total_items);
         }
 
+        self.ensure_log_row_height_hints(log_font_size);
+
         if self.state.receive.auto_scroll && content_changed {
             self.log_list_state.scroll_to_end();
         }
@@ -237,6 +242,46 @@ impl SessionTab {
         self.last_tail_id = tail_id;
         self.last_tail_len = tail_len;
         self.last_display_flags = display_flags;
+    }
+
+    /// Give every row that has not been measured a real height.
+    ///
+    /// `ListState` otherwise records those rows as 0px. Dragging the scrollbar
+    /// to the top then stops at the first measured row, and further upward
+    /// scrolling still reveals older logs.
+    fn ensure_log_row_height_hints(&mut self, font_size: u16) {
+        let count = self.log_list_state.item_count();
+        if count == 0 {
+            self.row_hint_key = None;
+            return;
+        }
+        let hint = log_row_height_hint(font_size);
+        if let Some((hinted_count, hinted_font)) = self.row_hint_key
+            && hinted_count == count
+            && hinted_font == font_size
+            && self.log_row_hints_cover_content(count, hint)
+        {
+            return;
+        }
+        if self.row_hint_key.is_some_and(|(_, size)| size != font_size) {
+            self.log_list_state.remeasure();
+        }
+        let _ = self.log_list_state.clone().with_uniform_item_height(hint);
+        self.row_hint_key = Some((count, font_size));
+    }
+
+    fn log_row_hints_cover_content(&self, count: usize, hint: Pixels) -> bool {
+        if self.log_list_state.is_scrolled_to_end().is_some() {
+            return true;
+        }
+        let viewport = self.log_list_state.viewport_bounds().size.height;
+        if viewport <= px(0.) {
+            return true;
+        }
+        if self.log_list_state.max_offset_for_scrollbar().y > px(0.) {
+            return false;
+        }
+        hint * (count as f32) <= viewport + px(1.)
     }
 
     fn drain_tx_completed_logs(&mut self) -> bool {
@@ -736,12 +781,6 @@ impl SashaApp {
         cx.notify();
     }
 
-    fn toggle_start_frame_expanded(&mut self, cx: &mut Context<Self>) {
-        let tab = self.active_tab_mut();
-        tab.start_page.frame_expanded = !tab.start_page.frame_expanded;
-        cx.notify();
-    }
-
     fn select_start_data_bits(&mut self, bits: DataBits, cx: &mut Context<Self>) {
         self.active_tab_mut().start_page.config.data_bits = bits;
         cx.notify();
@@ -754,6 +793,24 @@ impl SashaApp {
 
     fn select_start_stop_bits(&mut self, stop_bits: StopBits, cx: &mut Context<Self>) {
         self.active_tab_mut().start_page.config.stop_bits = stop_bits;
+        cx.notify();
+    }
+
+    fn select_start_flow_control(&mut self, flow: FlowControl, cx: &mut Context<Self>) {
+        self.active_tab_mut().start_page.config.flow_control = flow;
+        cx.notify();
+    }
+
+    /// Flips the initial DTR/RTS level applied on the next connect.
+    fn toggle_start_line(&mut self, line: ControlLine, cx: &mut Context<Self>) {
+        let config = &mut self.active_tab_mut().start_page.config;
+        match line {
+            ControlLine::Dtr => config.dtr = !config.dtr,
+            ControlLine::Rts if config.flow_control != FlowControl::Hardware => {
+                config.rts = !config.rts;
+            }
+            ControlLine::Rts => {}
+        }
         cx.notify();
     }
 
@@ -835,6 +892,7 @@ impl SashaApp {
                     .await;
 
                 let mut rx_chunks: Vec<Vec<u8>> = Vec::new();
+                let mut latest_signals: Option<ModemSignals> = None;
                 let mut disconnected_err: Option<String> = None;
                 let mut channel_closed = false;
 
@@ -843,6 +901,9 @@ impl SashaApp {
                         Ok(SerialEvent::Rx(bytes)) => {
                             session_service.publish_rx(generation, &bytes);
                             rx_chunks.push(bytes);
+                        }
+                        Ok(SerialEvent::Signals(signals)) => {
+                            latest_signals = Some(signals);
                         }
                         Ok(SerialEvent::Disconnected(err)) => {
                             disconnected_err = Some(err);
@@ -858,7 +919,11 @@ impl SashaApp {
 
                 let tx_completed = session_service.drain_tx_completed();
                 let should_break = disconnected_err.is_some() || channel_closed;
-                if !rx_chunks.is_empty() || !tx_completed.is_empty() || should_break {
+                if !rx_chunks.is_empty()
+                    || !tx_completed.is_empty()
+                    || latest_signals.is_some()
+                    || should_break
+                {
                     let updated = this.update(cx, |app, cx| {
                         let is_active = app.active_tab_id == tab_id;
                         let closed_msg =
@@ -866,6 +931,9 @@ impl SashaApp {
                         let Some(tab) = app.tab_mut(tab_id) else {
                             return false;
                         };
+                        if let Some(signals) = latest_signals {
+                            tab.state.modem_signals = signals;
+                        }
                         if !rx_chunks.is_empty() || !tx_completed.is_empty() {
                             let ts = current_timestamp_hms_ms();
                             for chunk in rx_chunks {
@@ -938,6 +1006,76 @@ impl SashaApp {
     fn disconnect_real_serial(&mut self, error: Option<String>, cx: &mut Context<Self>) {
         self.active_tab_mut().disconnect_real_serial(error);
         cx.notify();
+    }
+
+    /// Flips DTR or RTS on the live port without disconnecting.
+    ///
+    /// The level is applied optimistically and reverted if the writer thread
+    /// reports a failure; failures only surface an error and keep the connection.
+    fn toggle_modem_line(&mut self, line: ControlLine, cx: &mut Context<Self>) {
+        let tab_id = self.active_tab_id;
+        let locale = self.current_locale(cx);
+        let tab = self.active_tab_mut();
+        if tab.state.is_simulated_session || !tab.state.connection.is_connected() {
+            return;
+        }
+        if line == ControlLine::Rts && tab.state.config.flow_control == FlowControl::Hardware {
+            return;
+        }
+        let generation = tab.session_service.generation();
+        let new_level = match line {
+            ControlLine::Dtr => !tab.state.config.dtr,
+            ControlLine::Rts => !tab.state.config.rts,
+        };
+        let reply_rx = match tab
+            .session_service
+            .enqueue_control(generation, line, new_level)
+        {
+            Ok(rx) => rx,
+            Err(err) => {
+                tab.send_error = Some(err.to_string().into());
+                cx.notify();
+                return;
+            }
+        };
+        match line {
+            ControlLine::Dtr => tab.state.config.dtr = new_level,
+            ControlLine::Rts => tab.state.config.rts = new_level,
+        }
+        cx.notify();
+
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { reply_rx.recv().unwrap_or(Err(SessionTxError::Disconnected)) })
+                .await;
+            let Err(err) = result else { return };
+            let _ = this.update(cx, |app, cx| {
+                let Some(tab) = app.tab_mut(tab_id) else {
+                    return;
+                };
+                if tab.session_service.generation() != generation {
+                    return;
+                }
+                let name = match line {
+                    ControlLine::Dtr => {
+                        tab.state.config.dtr = !new_level;
+                        "DTR"
+                    }
+                    ControlLine::Rts => {
+                        tab.state.config.rts = !new_level;
+                        "RTS"
+                    }
+                };
+                let detail = match &err {
+                    SessionTxError::WriteFailed(detail) => detail.clone(),
+                    other => other.to_string(),
+                };
+                tab.send_error = Some(signal_write_failed(locale, name, &detail).into());
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn handle_serial_disconnected(&mut self, error: Option<String>, cx: &mut Context<Self>) {
@@ -1996,10 +2134,6 @@ impl Render for SashaApp {
                 let _ = weak.update(cx, |this, cx| this.select_start_baud(baud, cx));
             });
             let weak = cx.entity().downgrade();
-            let on_toggle_frame_expanded = Rc::new(move |_: &mut Window, cx: &mut App| {
-                let _ = weak.update(cx, |this, cx| this.toggle_start_frame_expanded(cx));
-            });
-            let weak = cx.entity().downgrade();
             let on_select_data_bits =
                 Rc::new(move |bits: DataBits, _: &mut Window, cx: &mut App| {
                     let _ = weak.update(cx, |this, cx| this.select_start_data_bits(bits, cx));
@@ -2013,6 +2147,18 @@ impl Render for SashaApp {
                 Rc::new(move |stop_bits: StopBits, _: &mut Window, cx: &mut App| {
                     let _ = weak.update(cx, |this, cx| this.select_start_stop_bits(stop_bits, cx));
                 });
+            let weak = cx.entity().downgrade();
+            let on_select_flow = Rc::new(move |flow: FlowControl, _: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.select_start_flow_control(flow, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_toggle_start_dtr = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.toggle_start_line(ControlLine::Dtr, cx));
+            });
+            let weak = cx.entity().downgrade();
+            let on_toggle_start_rts = Rc::new(move |_: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| this.toggle_start_line(ControlLine::Rts, cx));
+            });
             let weak = cx.entity().downgrade();
             let on_connect = Rc::new(move |_: &mut Window, cx: &mut App| {
                 let _ = weak.update(cx, |this, cx| this.connect_from_start_page(cx));
@@ -2036,40 +2182,48 @@ impl Render for SashaApp {
                 .child(
                     h_flex()
                         .size_full()
-                        .child(div().flex_1().min_w_0().h_full().child(StartPage::new(
-                            self.theme,
-                            locale,
-                            start_page_state,
-                            manual_port_input,
-                            baud_input,
-                            on_refresh_ports,
-                            on_select_port,
-                            on_enable_manual_port,
-                            on_toggle_baud_dropdown,
-                            on_select_baud,
-                            on_toggle_frame_expanded,
-                            on_select_data_bits,
-                            on_select_parity,
-                            on_select_stop_bits,
-                            on_connect,
-                            on_enter_simulated,
-                        )))
+                        .child(
+                            div().flex_1().min_w_0().h_full().child(
+                                StartPage::new(
+                                    self.theme,
+                                    locale,
+                                    start_page_state,
+                                    manual_port_input,
+                                    baud_input,
+                                    on_refresh_ports,
+                                    on_select_port,
+                                    on_enable_manual_port,
+                                    on_toggle_baud_dropdown,
+                                    on_select_baud,
+                                    on_select_data_bits,
+                                    on_select_parity,
+                                    on_select_stop_bits,
+                                    on_connect,
+                                    on_enter_simulated,
+                                )
+                                .flow_control_callbacks(
+                                    on_select_flow,
+                                    on_toggle_start_dtr,
+                                    on_toggle_start_rts,
+                                ),
+                            ),
+                        )
                         .child(tab_rail),
                 )
                 .child(self.build_top_bar(px(0.)))
                 .into_any_element();
         }
 
-        {
-            let tab = self.active_tab_mut();
-            let log_len = tab.state.logs.len();
-            tab.log_selection.observe_log_len(log_len);
-            tab.sync_log_list_state();
-        }
         let (log_font_size, log_buffer_limit) = {
             let cfg = self.config_store.read(cx).config();
             (cfg.log_font_size, cfg.log_buffer_limit)
         };
+        {
+            let tab = self.active_tab_mut();
+            let log_len = tab.state.logs.len();
+            tab.log_selection.observe_log_len(log_len);
+            tab.sync_log_list_state(log_font_size);
+        }
         let send_input = self.ensure_send_input(active_id, window, cx);
         let search_open = self.active_tab().log_search.open;
         let search_input = if search_open {
@@ -2102,7 +2256,6 @@ impl Render for SashaApp {
         let send_error = tab.send_error.clone();
         let config = tab.state.config.clone();
         let connection = tab.state.connection;
-        let conn_status_label = tab.state.connection_status_label_for(locale);
         let conn_action_label = tab.state.connection_action_label_for(locale);
         let counters = tab.state.counters;
         let buffer_used = tab.state.log_buffer_used_bytes();
@@ -2174,6 +2327,20 @@ impl Render for SashaApp {
                 this.toggle_connection(cx);
             });
         });
+
+        let weak_for_line = cx.entity().downgrade();
+        let on_toggle_line = Rc::new(move |line: ControlLine, _: &mut Window, cx: &mut App| {
+            let _ = weak_for_line.update(cx, |this, cx| {
+                this.toggle_modem_line(line, cx);
+            });
+        });
+        let signal_controls = SignalControls {
+            signals: self.active_tab().state.modem_signals,
+            interactive: !is_simulated && is_connected,
+            simulated: is_simulated,
+            compact: (main_width - script_panel_width) < px(820.),
+            on_toggle: on_toggle_line,
+        };
 
         let weak_for_preset = cx.entity().downgrade();
         let on_select_preset = Rc::new(move |value: String, _: &mut Window, cx: &mut App| {
@@ -2486,7 +2653,6 @@ impl Render for SashaApp {
                                 locale,
                                 config,
                                 connection,
-                                conn_status_label,
                                 conn_action_label,
                                 motion.connection,
                                 counters,
@@ -2498,6 +2664,7 @@ impl Render for SashaApp {
                                 active_picker,
                                 on_pick,
                                 on_toggle_connection,
+                                signal_controls,
                             )),
                     )
                     .child(
