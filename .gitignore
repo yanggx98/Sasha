@@ -1,4 +1,13 @@
 /target
 
+# Internal workflow / AI tooling (not part of the open-source tree)
+/workflow/
 /.workflow-work/
-/workflow/runs/scheduler.lock
+/.agent/
+/.agents/
+/.agent-workflow-backups/
+/openspec/
+/AGENTS.md
+/docs/superpowers/
+__pycache__/
+*.pyc
