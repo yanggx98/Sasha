@@ -40,7 +40,7 @@ welcome.
 
 - **Multiple sessions** — independent connections, switched from the right sidebar.
 - **Full serial configuration** — port discovery, baud rate, frame format, flow control, DTR/RTS.
-- **Receive inspection** — text or HEX, timestamps, search, pause, copy, export.
+- **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.

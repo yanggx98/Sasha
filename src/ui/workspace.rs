@@ -18,6 +18,8 @@ use crate::i18n::{
     timer_interval_error, tr, tr_shared,
 };
 use crate::model::log::format_hex_input_with_cursor;
+use crate::model::log::{LogEntry, format_visible_logs};
+use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
 use crate::model::quick_command::{
     QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
     visible_rows,
@@ -38,6 +40,7 @@ use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
+use crate::ui::filter_bar::{FilterControl, LogFilterBar};
 use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::motion::{TransitionFlag, UiMotionState};
 use crate::ui::parameter_picker::ParameterPickerPopover;
@@ -70,6 +73,9 @@ struct ScriptEntryState {
     run_id: Option<u64>,
     status: Option<ScriptStatus>,
 }
+
+/// Typing in the log filter applies after this long without further input.
+const FILTER_INPUT_DEBOUNCE: Duration = Duration::from_millis(150);
 
 struct SessionTab {
     id: u64,
@@ -108,9 +114,15 @@ struct SessionTab {
     log_list_state: ListState,
     /// `(item count, font size)` last given a uniform row-height hint.
     row_hint_key: Option<(usize, u16)>,
-    last_log_count: usize,
-    last_tail_id: u64,
-    last_tail_len: usize,
+    log_filter: LogFilterState,
+    log_projection: LogProjection,
+    filter_input: Option<Entity<InputState>>,
+    filter_input_display: Option<(Locale, bool)>,
+    _filter_subscription: Option<Subscription>,
+    /// Pending debounced `apply()` for typing in the filter input; replacing or
+    /// dropping it cancels the previous timer.
+    filter_apply_task: Option<Task<()>>,
+    last_notice: bool,
     last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
     log_search: LogSearchState,
@@ -187,9 +199,13 @@ impl SessionTab {
             log_focus: cx.focus_handle(),
             log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             row_hint_key: None,
-            last_log_count: 0,
-            last_tail_id: 0,
-            last_tail_len: 0,
+            log_filter: LogFilterState::default(),
+            log_projection: LogProjection::default(),
+            filter_input: None,
+            filter_input_display: None,
+            _filter_subscription: None,
+            filter_apply_task: None,
+            last_notice: false,
             last_display_flags: (true, false),
             log_selection,
             log_search: LogSearchState::default(),
@@ -236,9 +252,8 @@ impl SessionTab {
             self.state.send.line_ending.is_active(),
             self.state.connection.is_connected(),
         );
-        self.last_log_count = 0;
-        self.last_tail_id = 0;
-        self.last_tail_len = 0;
+        self.log_projection = LogProjection::default();
+        self.last_notice = false;
         self.log_list_state.reset(0);
         self.log_selection = LogSelectionModel::new(
             self.state.receive.show_timestamp,
@@ -247,33 +262,69 @@ impl SessionTab {
         );
     }
 
+    fn recompute_log_search(&mut self, preserve_active: bool) {
+        let logs = self.visible_logs();
+        self.log_search.recompute(
+            &logs,
+            self.state.receive.show_timestamp,
+            self.state.receive.hex_mode,
+            preserve_active,
+        );
+    }
+
+    /// Log entries that pass the applied filter, in order. Input events can
+    /// arrive after serial data changed but before the next render has
+    /// synchronized the projection; take a fresh snapshot in that case.
+    fn visible_logs(&self) -> Vec<LogEntry> {
+        let hex_mode = self.state.receive.hex_mode;
+        if self
+            .log_projection
+            .is_current(&self.state.logs, &self.log_filter, hex_mode)
+        {
+            return self.log_projection.entries(&self.state.logs);
+        }
+        let mut projection = LogProjection::default();
+        projection.sync(&self.state.logs, &self.log_filter, hex_mode);
+        projection.entries(&self.state.logs)
+    }
+
     fn sync_log_list_state(&mut self, log_font_size: u16) {
-        let log_count = self.state.logs.len();
-        let notice_count = usize::from(!self.state.simulated_notice.is_empty());
-        let total_items = log_count + notice_count;
-        let tail_id = self.state.logs.last().map_or(0, |e| e.id);
-        let tail_len = self.state.logs.last().map_or(0, |e| e.bytes.len());
+        let old_len = self.log_projection.rows.len();
+        let old_offset = self.log_list_state.logical_scroll_top();
+        let anchor_id = self
+            .log_projection
+            .rows
+            .get(old_offset.item_ix)
+            .map(|row| row.id);
+        let active_match = self.log_search.current().and_then(|m| {
+            self.log_projection
+                .rows
+                .get(m.log_index)
+                .map(|row| (row.id, m.byte_range.clone()))
+        });
+        let change = self.log_projection.sync(
+            &self.state.logs,
+            &self.log_filter,
+            self.state.receive.hex_mode,
+        );
+        let rows = &self.log_projection.rows;
+        let notice = !self.state.simulated_notice.is_empty();
+        let total_items = rows.len() + usize::from(notice);
         let display_flags = (
             self.state.receive.show_timestamp,
             self.state.receive.hex_mode,
         );
-        let content_changed = log_count != self.last_log_count
-            || tail_id != self.last_tail_id
-            || tail_len != self.last_tail_len;
-
-        if display_flags != self.last_display_flags
-            || log_count < self.last_log_count
-            || (log_count == self.last_log_count && tail_id != self.last_tail_id)
-        {
+        let flags_changed = display_flags != self.last_display_flags;
+        // Source indices may shift after trimming without changing a visible row.
+        let prefix = change.prefix;
+        let removed = change.removed;
+        let content_changed = prefix != old_len || prefix != rows.len();
+        if flags_changed {
             self.log_list_state.reset(total_items);
-        } else if log_count > self.last_log_count {
-            let start = self.last_log_count.saturating_sub(1);
-            let old_end = self.last_log_count + notice_count;
-            let new_count = total_items - start;
-            self.log_list_state.splice(start..old_end, new_count);
-        } else if tail_len != self.last_tail_len && log_count > 0 {
-            let last_ix = log_count - 1;
-            self.log_list_state.splice(last_ix..last_ix + 1, 1);
+        } else if content_changed || notice != self.last_notice {
+            let start = prefix.min(self.log_list_state.item_count());
+            self.log_list_state
+                .splice(start..self.log_list_state.item_count(), total_items - start);
         } else if self.log_list_state.item_count() != total_items {
             self.log_list_state.reset(total_items);
         }
@@ -282,19 +333,36 @@ impl SessionTab {
 
         if self.state.receive.auto_scroll && content_changed {
             self.log_list_state.scroll_to_end();
+        } else if flags_changed || removed {
+            if let Some(id) = anchor_id {
+                let index = self
+                    .log_projection
+                    .rows
+                    .partition_point(|row| row.id < id)
+                    .min(self.log_projection.rows.len().saturating_sub(1));
+                self.log_list_state.scroll_to(ListOffset {
+                    item_ix: index,
+                    ..old_offset
+                });
+            }
         }
 
-        if self.log_search.open
-            && !self.log_search.query.is_empty()
-            && (content_changed || display_flags != self.last_display_flags)
-        {
-            self.log_search
-                .recompute(&self.state.logs, display_flags.0, display_flags.1, true);
+        if self.log_search.open && (content_changed || flags_changed) {
+            self.recompute_log_search(true);
+            if let Some((id, range)) = active_match {
+                if let Some(index) = self.log_search.matches.iter().position(|m| {
+                    self.log_projection
+                        .rows
+                        .get(m.log_index)
+                        .is_some_and(|row| row.id == id)
+                        && m.byte_range == range
+                }) {
+                    self.log_search.active_match = Some(index);
+                }
+            }
         }
 
-        self.last_log_count = log_count;
-        self.last_tail_id = tail_id;
-        self.last_tail_len = tail_len;
+        self.last_notice = notice;
         self.last_display_flags = display_flags;
     }
 
@@ -1584,6 +1652,117 @@ impl SashaApp {
         }
     }
 
+    fn ensure_filter_input(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<InputState> {
+        let locale = self.current_locale(cx);
+        let tab = self.tab_mut(tab_id).expect("filter session exists");
+        let display = (locale, tab.state.receive.hex_mode);
+        let placeholder = tr_shared(
+            locale,
+            if display.1 {
+                "filter.hex_placeholder"
+            } else {
+                "filter.placeholder"
+            },
+        );
+        if let Some(input) = tab.filter_input.clone() {
+            if tab.filter_input_display != Some(display) {
+                tab.filter_input_display = Some(display);
+                input.update(cx, |state, cx| {
+                    state.set_placeholder(placeholder, window, cx)
+                });
+            }
+            return input;
+        }
+        let query = tab.log_filter.draft.query.clone();
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx).placeholder(placeholder);
+            state.set_value(query, window, cx);
+            state
+        });
+        let sub = cx.subscribe_in(
+            &input,
+            window,
+            move |this, input, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    let query = input.read(cx).value().to_string();
+                    if let Some(tab) = this.tab_mut(tab_id) {
+                        if tab.log_filter.draft.query == query {
+                            return;
+                        }
+                        tab.log_filter.draft.query = query;
+                        tab.log_selection.set_selected_text("");
+                        // Rebuilding the visible rows scans every cached entry, so
+                        // wait until typing pauses. Buttons apply immediately.
+                        tab.filter_apply_task = Some(cx.spawn(async move |this, cx| {
+                            cx.background_executor().timer(FILTER_INPUT_DEBOUNCE).await;
+                            let _ = this.update(cx, |this, cx| {
+                                if let Some(tab) = this.tab_mut(tab_id) {
+                                    tab.filter_apply_task = None;
+                                    tab.log_filter.apply();
+                                    cx.notify();
+                                }
+                            });
+                        }));
+                        if this.active_tab_id == tab_id {
+                            TextSelection::clear(window, cx);
+                        }
+                    }
+                    cx.notify();
+                }
+            },
+        );
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.filter_input = Some(input.clone());
+            tab.filter_input_display = Some(display);
+            tab._filter_subscription = Some(sub);
+        }
+        input
+    }
+
+    fn toggle_log_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.log_filter.open = !tab.log_filter.open;
+        if tab.log_filter.open {
+            let input = self.ensure_filter_input(self.active_tab_id, window, cx);
+            input.update(cx, |state, cx| state.focus(window, cx));
+        } else {
+            tab.log_focus.focus(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn change_log_filter(
+        &mut self,
+        control: FilterControl,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.active_tab_mut();
+        let draft = &mut tab.log_filter.draft;
+        match control {
+            FilterControl::CycleDirection => draft.direction = draft.direction.next(),
+            FilterControl::CaseSensitive => draft.case_sensitive = !draft.case_sensitive,
+            FilterControl::Regex => draft.regex = !draft.regex,
+            FilterControl::Exclude => draft.exclude = !draft.exclude,
+            FilterControl::Reset => *draft = LogFilter::default(),
+        }
+        tab.log_filter.apply();
+        tab.log_selection.set_selected_text("");
+        let input = tab.filter_input.clone();
+        TextSelection::clear(window, cx);
+        if matches!(control, FilterControl::Reset) {
+            if let Some(input) = input {
+                input.update(cx, |state, cx| state.set_value("", window, cx));
+            }
+        }
+        cx.notify();
+    }
+
     fn ensure_search_input(
         &mut self,
         tab_id: u64,
@@ -1612,12 +1791,7 @@ impl SashaApp {
                     let query = input.read(cx).value().to_string();
                     let target_line = if let Some(tab) = this.tab_mut(tab_id) {
                         tab.log_search.query = query;
-                        tab.log_search.recompute(
-                            &tab.state.logs,
-                            tab.state.receive.show_timestamp,
-                            tab.state.receive.hex_mode,
-                            false,
-                        );
+                        tab.recompute_log_search(false);
                         let line = tab.log_search.current().map(|m| m.log_index);
                         if let Some(idx) = line {
                             tab.log_list_state.scroll_to_reveal_item(idx);
@@ -1692,12 +1866,7 @@ impl SashaApp {
             let tab = self.active_tab_mut();
             tab.log_search.open = true;
             if !tab.log_search.query.is_empty() {
-                tab.log_search.recompute(
-                    &tab.state.logs,
-                    tab.state.receive.show_timestamp,
-                    tab.state.receive.hex_mode,
-                    true,
-                );
+                tab.recompute_log_search(true);
             }
             (tab.log_search.query.clone(), tab.state.logs.len())
         };
@@ -1764,7 +1933,12 @@ impl SashaApp {
             .picker_input
             .as_ref()
             .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
-        send_focused || search_focused || picker_focused
+        let filter_focused = self
+            .active_tab()
+            .filter_input
+            .as_ref()
+            .is_some_and(|input| input.read(cx).focus_handle(cx).is_focused(window));
+        send_focused || search_focused || filter_focused || picker_focused
     }
 
     fn copy_log_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1779,7 +1953,16 @@ impl SashaApp {
     }
 
     pub fn save_receive_logs(&mut self, cx: &mut Context<Self>) {
-        let content_to_save = self.active_tab().state.visible_log_export_text();
+        let tab = self.active_tab();
+        let content_to_save = if tab.log_filter.is_active() {
+            format_visible_logs(
+                &tab.visible_logs(),
+                tab.state.receive.show_timestamp,
+                tab.state.receive.hex_mode,
+            )
+        } else {
+            tab.state.visible_log_export_text()
+        };
         let suggested_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("sasha-log.txt"));
@@ -2958,7 +3141,18 @@ impl Render for SashaApp {
         } else {
             None
         };
+        let filter_open = self.active_tab().log_filter.open;
+        let filter_input = if filter_open {
+            Some(self.ensure_filter_input(active_id, window, cx))
+        } else {
+            None
+        };
         let tab = self.active_tab();
+        let filter_active = tab.log_filter.is_active();
+        let filter_draft = tab.log_filter.draft.clone();
+        let filter_invalid = tab.log_filter.invalid;
+        let filter_total = tab.state.logs.len();
+        let filter_visible = tab.log_projection.rows.len();
         let search_matches = if search_open {
             Rc::new(tab.log_search.matches.clone())
         } else {
@@ -2973,7 +3167,7 @@ impl Render for SashaApp {
         let search_has_matches = !tab.log_search.matches.is_empty();
         let log_focus = tab.log_focus.clone();
         let log_list_state = tab.log_list_state.clone();
-        let logs = tab.state.logs.clone();
+        let logs = tab.log_projection.entries(&tab.state.logs);
         let receive_state = tab.state.receive.clone();
         let simulated_notice = tab.state.simulated_notice_for(locale);
         let send_state = tab.state.send.clone();
@@ -3263,6 +3457,14 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.toggle_search(window, cx));
         });
         let weak = cx.entity().downgrade();
+        let on_rx_filter = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_log_filter(window, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_filter_control = Rc::new(move |control, window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.change_log_filter(control, window, cx));
+        });
+        let weak = cx.entity().downgrade();
         let on_search_prev = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.jump_search_match(false, cx));
         });
@@ -3497,6 +3699,17 @@ impl Render for SashaApp {
                                     on_tx_send_hex,
                                     on_tx_line_ending,
                                 )
+                                .log_filter(filter_open, filter_active, on_rx_filter)
+                                .filter_panel(filter_input.map(|input| LogFilterBar {
+                                    theme: surface_theme,
+                                    locale,
+                                    input,
+                                    filter: filter_draft,
+                                    invalid: filter_invalid,
+                                    visible: filter_visible,
+                                    total: filter_total,
+                                    on_control: on_filter_control,
+                                }))
                                 .stream_output(
                                     stream_active,
                                     stream_tooltip,

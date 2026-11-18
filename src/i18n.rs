@@ -45,6 +45,17 @@ pub fn tr_shared(locale: Locale, key: &'static str) -> SharedString {
     tr(locale, key).into()
 }
 
+pub fn filter_count_label(locale: Locale, visible: usize, total: usize) -> SharedString {
+    rust_i18n::t!(
+        "filter.count",
+        locale = locale.code(),
+        visible = visible,
+        total = total
+    )
+    .into_owned()
+    .into()
+}
+
 pub fn start_frame_header(locale: Locale, chevron: &str) -> String {
     rust_i18n::t!(
         "start.frame_header",
@@ -325,6 +336,14 @@ mod tests {
 
     #[test]
     fn dynamic_helpers_format_for_each_locale() {
+        assert_eq!(
+            filter_count_label(Locale::ZhCn, 12, 50).as_str(),
+            "显示 12 条，共缓存 50 条"
+        );
+        assert_eq!(
+            filter_count_label(Locale::EnUs, 12, 50).as_str(),
+            "Showing 12 of 50 cached entries"
+        );
         assert_eq!(picker_apply_value(Locale::ZhCn, "9600"), "应用输入值: 9600");
         assert_eq!(
             picker_apply_value(Locale::EnUs, "9600"),

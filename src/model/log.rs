@@ -389,7 +389,7 @@ pub fn current_timestamp_hms_ms() -> String {
 /// A single search match within a rendered log line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchMatch {
-    /// Index of the matching entry in `SessionState::logs`.
+    /// Index of the matching entry in the supplied (possibly filtered) log slice.
     pub log_index: usize,
     /// UTF-8 byte range within `selectable_log_line(entry, show_timestamp, hex_mode).text`.
     pub byte_range: std::ops::Range<usize>,
