@@ -126,7 +126,7 @@ impl RenderOnce for LogView {
                             .pr_4()
                             .when(index == 0, |this| this.pt_2())
                             .pb_1()
-                            .font_family("Consolas")
+                            .font_family(crate::ui::fonts::MONO_FONT)
                             .text_size(px(log_font_size as f32))
                             .text_color(theme.text_primary)
                             .child(div().flex_1().min_w_0().child(LogLineText::new(

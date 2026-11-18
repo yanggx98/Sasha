@@ -1,4 +1,5 @@
 pub mod bottom_bar;
+pub mod fonts;
 pub mod log_view;
 pub mod motion;
 pub mod parameter_picker;

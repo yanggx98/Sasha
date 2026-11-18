@@ -482,7 +482,7 @@ impl SettingsWindow {
             )
             .child(
                 div()
-                    .font_family("Consolas")
+                    .font_family(crate::ui::fonts::MONO_FONT)
                     .text_xs()
                     .text_color(self.theme.text_muted)
                     .child(tab.subtitle(locale)),
@@ -965,7 +965,7 @@ impl SettingsWindow {
                 div()
                     .w(px(40.))
                     .text_right()
-                    .font_family("Consolas")
+                    .font_family(crate::ui::fonts::MONO_FONT)
                     .text_xs()
                     .text_color(if has_bg_image {
                         theme.text_primary
@@ -1050,7 +1050,7 @@ impl SettingsWindow {
                     )
                     .child(
                         div()
-                            .font_family("Consolas")
+                            .font_family(crate::ui::fonts::MONO_FONT)
                             .text_xs()
                             .text_color(self.theme.text_muted)
                             .child(version),

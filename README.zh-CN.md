@@ -79,10 +79,11 @@ cargo run --locked            # 或：cargo build --release --locked  ->  target
 - 可见日志最多保留最近 **2,000 条记录**。导出保存当前可见历史及其显示格式，并非完整的原始数据抓取。
 - 暂停只冻结日志显示，不会停止串口连接。
 - 真实串口连接支持 1 或 2 个停止位，后端会拒绝 1.5 个停止位。
+- 仅内置拉丁字符等宽字体，中文等其他文字使用系统回退字体。Linux 上若中文显示为方块，请安装 CJK 字体（如 `fonts-noto-cjk`）。
 
 ## 致谢
 
-基于 [GPUI-KIT](https://github.com/longbridge/gpui-kit) 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建。开发过程中使用的 AI 工具有：DeepSeek、Grok、ChatGPT、Gemini、Claude。
+基于 [GPUI-KIT](https://github.com/longbridge/gpui-kit) 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建。内置等宽字体为 [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono)（SIL OFL 1.1，见 `assets/fonts/OFL-JetBrainsMono.txt`）。开发过程中使用的 AI 工具有：DeepSeek、Grok、ChatGPT、Gemini、Claude。
 
 ## 参与贡献与反馈
 

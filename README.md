@@ -86,11 +86,14 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
   visible history in its current display format, not a full raw capture.
 - Pausing freezes log display, not the serial connection.
 - Real serial connections support one or two stop bits; 1.5 is rejected by the backend.
+- Only a Latin monospace font is bundled; other scripts such as Chinese use system fallback fonts. On Linux, install a CJK font (e.g. `fonts-noto-cjk`) if they show as boxes.
 
 ## Acknowledgements
 
 Built on [GPUI-KIT](https://github.com/longbridge/gpui-kit) and
-[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). AI tools used
+[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). The bundled monospace
+font is [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (SIL OFL 1.1, see
+`assets/fonts/OFL-JetBrainsMono.txt`). AI tools used
 during development include DeepSeek, Grok, ChatGPT, Gemini, and Claude.
 
 ## Contributing and feedback

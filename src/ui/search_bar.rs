@@ -131,7 +131,7 @@ impl RenderOnce for LogSearchBar {
                         .flex_shrink_0()
                         .px_1()
                         .text_xs()
-                        .font_family("Consolas")
+                        .font_family(crate::ui::fonts::MONO_FONT)
                         .text_color(count_color)
                         .child(label),
                 )
