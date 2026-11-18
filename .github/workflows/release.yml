@@ -1,0 +1,58 @@
+name: Release
+
+# Push a tag such as v0.1.0 (or v0.1.0-b for a pre-release) to build the Windows
+# executable and publish it as a GitHub Release. The tag must match the version in
+# Cargo.toml.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check tag matches Cargo.toml version
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          $line = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1
+          $cargoVersion = $line.Matches[0].Groups[1].Value
+          if ($tagVersion -ne $cargoVersion) {
+            throw "Tag version '$tagVersion' does not match Cargo.toml version '$cargoVersion'"
+          }
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $asset = "sasha-windows-x86_64.exe"
+          Copy-Item target/release/sasha.exe $asset
+          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ghArgs = @("release", "create", "${{ github.ref_name }}",
+            "sasha-windows-x86_64.exe", "sasha-windows-x86_64.exe.sha256",
+            "--title", "${{ github.ref_name }}", "--generate-notes")
+          if ("${{ github.ref_name }}".Contains("-")) { $ghArgs += "--prerelease" }
+          gh @ghArgs
