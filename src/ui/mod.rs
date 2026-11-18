@@ -10,6 +10,8 @@ pub mod settings_window;
 pub mod start_page;
 pub mod tab_rail;
 pub mod theme;
+pub mod theme_manager;
+pub mod theme_store;
 pub mod workspace;
 
 pub use workspace::SashaApp;

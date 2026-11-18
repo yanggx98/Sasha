@@ -11,6 +11,7 @@ use crate::model::config::{BAUD_RATE_PRESETS, parse_baud_rate_for};
 use crate::model::{DataBits, FlowControl, Parity, SerialConfig, StopBits};
 use crate::serial::{DetectedPort, enumerate_serial_ports_for};
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_store::contrast_foreground;
 
 pub type StartActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type SelectStringCallback = Rc<dyn Fn(String, &mut Window, &mut App)>;
@@ -462,7 +463,7 @@ impl RenderOnce for StartPage {
                     } else {
                         theme.border_card
                     })
-                    .hover(|s| s.bg(theme.bg_hover))
+                    .hover(|s| s.bg(theme.hover_over(theme.bg_card)))
                     .cursor_pointer()
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();
@@ -830,7 +831,7 @@ impl RenderOnce for StartPage {
                     .cursor_pointer()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(gpui_kit::white())
+                    .text_color(contrast_foreground(theme.accent_blue))
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();
                         on_connect(window, cx);

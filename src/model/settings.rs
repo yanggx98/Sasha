@@ -36,6 +36,12 @@ pub const LOG_BUFFER_LIMIT_PRESETS: [u32; 5] = [
 /// Preset font sizes exposed in the Settings View tab.
 pub const LOG_FONT_SIZE_PRESETS: [u16; 4] = [12, 13, 14, 15];
 
+/// Default background image opacity percentage (`0..=100`).
+pub const DEFAULT_BACKGROUND_OPACITY: u8 = 25;
+
+/// Default (built-in dark) theme id.
+pub const DEFAULT_THEME_ID: &str = "dark";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamOutputScope {
@@ -65,6 +71,14 @@ pub struct AppConfig {
     pub stream_output_scope: StreamOutputScope,
     /// Persisted Lua script paths shown in the script panel.
     pub scripts: Vec<PathBuf>,
+    /// Optional custom background image path for the main workspace.
+    pub background_image: Option<PathBuf>,
+    /// Background image opacity percentage (`0..=100`).
+    #[serde(default = "default_background_opacity")]
+    pub background_opacity: u8,
+    /// Selected theme id (`dark`, `light`, or a file stem in the `themes` directory).
+    #[serde(default = "default_theme_id")]
+    pub theme: String,
 }
 
 impl Default for AppConfig {
@@ -76,12 +90,23 @@ impl Default for AppConfig {
             log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT,
             stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
+            background_image: None,
+            background_opacity: DEFAULT_BACKGROUND_OPACITY,
+            theme: DEFAULT_THEME_ID.to_string(),
         }
     }
 }
 
 fn default_log_buffer_limit() -> u32 {
     DEFAULT_LOG_BUFFER_LIMIT
+}
+
+fn default_background_opacity() -> u8 {
+    DEFAULT_BACKGROUND_OPACITY
+}
+
+fn default_theme_id() -> String {
+    DEFAULT_THEME_ID.to_string()
 }
 
 /// Formats a live usage figure as `512 B`, `1.5 KB`, or `1 MB`.
@@ -247,10 +272,15 @@ impl ConfigStore {
         self.last_load_warning.as_deref()
     }
 
-    /// Mutates the configuration in memory and atomically persists it to disk.
-    pub fn update(&mut self, mutate: impl FnOnce(&mut AppConfig)) -> Result<(), String> {
+    /// Mutates the configuration in memory without writing to disk.
+    pub fn update_in_memory(&mut self, mutate: impl FnOnce(&mut AppConfig)) {
         mutate(&mut self.config);
         migrate_config(&mut self.config);
+    }
+
+    /// Mutates the configuration in memory and atomically persists it to disk.
+    pub fn update(&mut self, mutate: impl FnOnce(&mut AppConfig)) -> Result<(), String> {
+        self.update_in_memory(mutate);
         self.save()
     }
 
@@ -291,6 +321,20 @@ fn migrate_config(config: &mut AppConfig) {
         }
     }
     config.scripts = unique_scripts;
+    if config
+        .background_image
+        .as_ref()
+        .is_some_and(|path| path.as_os_str().is_empty())
+    {
+        config.background_image = None;
+    }
+    config.background_opacity = config.background_opacity.min(100);
+    let trimmed = config.theme.trim();
+    config.theme = if trimmed.is_empty() {
+        DEFAULT_THEME_ID.to_string()
+    } else {
+        trimmed.to_string()
+    };
 }
 
 fn backup_corrupted_file(path: &Path) -> std::io::Result<PathBuf> {
@@ -553,5 +597,48 @@ mod tests {
 
         let reloaded = ConfigStore::load_from_path(cfg_path);
         assert_eq!(reloaded.config().scripts, vec![script_a, script_b]);
+    }
+
+    #[test]
+    fn background_settings_roundtrip_and_clamp() {
+        let dir = TempDir::new("background");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        let bg_path = dir.file("wallpaper.png");
+
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        assert_eq!(store.config().background_image, None);
+        assert_eq!(store.config().background_opacity, DEFAULT_BACKGROUND_OPACITY);
+
+        store
+            .update(|cfg| {
+                cfg.background_image = Some(bg_path.clone());
+                cfg.background_opacity = 180;
+            })
+            .expect("save background");
+
+        assert_eq!(store.config().background_image, Some(bg_path.clone()));
+        assert_eq!(store.config().background_opacity, 100);
+
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().background_image, Some(bg_path));
+        assert_eq!(reloaded.config().background_opacity, 100);
+    }
+
+    #[test]
+    fn theme_defaults_roundtrips_and_normalizes() {
+        let dir = TempDir::new("theme");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&cfg_path, "log_font_size = 14
+").unwrap();
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        assert_eq!(store.config().theme, "dark");
+
+        store.update(|cfg| cfg.theme = "  ocean ".to_string()).unwrap();
+        assert_eq!(store.config().theme, "ocean");
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().theme, "ocean");
+
+        store.update_in_memory(|cfg| cfg.theme = "   ".to_string());
+        assert_eq!(store.config().theme, "dark");
     }
 }

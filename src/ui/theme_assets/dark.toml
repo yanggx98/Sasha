@@ -1,0 +1,26 @@
+# Built-in dark theme. Must stay identical to `NanoTheme::default()`.
+name = "Dark"
+base = "dark"
+
+canvas = "#0D1117"
+card = "#161B22"
+text = "#E6EDF3"
+accent = "#2563EB"
+rx = "#3FB950"
+tx = "#58A6FF"
+error = "#F85149"
+border = "#FFFFFF18"
+
+[overrides]
+bg_strip = "#0A0E13"
+bg_popover = "#1C2128"
+bg_hover = "#FFFFFF12"
+bg_toggle_active = "#2F81F724"
+border_popover = "#FFFFFF2A"
+accent_blue_hover = "#3B82F6"
+text_secondary = "#9CA3AF"
+text_muted = "#6E7681"
+error_bg = "#F851491E"
+sim_badge_bg = "#388BFD1F"
+sim_badge_text = "#79C0FF"
+status_disconnected = "#8B949E"

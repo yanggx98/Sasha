@@ -1,7 +1,7 @@
 use gpui_kit::{Hsla, rgb, rgba};
 
 /// Color tokens for Sasha's dark, immersive single-session UI.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NanoTheme {
     /// Canvas shared by the immersive title bar and the log area (`#0D1117`).
     pub bg_canvas: Hsla,
@@ -64,5 +64,30 @@ impl Default for NanoTheme {
             status_disconnected: rgb(0x8B949E).into(),
             status_connected: rgb(0x3FB950).into(),
         }
+    }
+}
+
+impl NanoTheme {
+    /// Hover color for an element that paints its own `base` background.
+    /// `bg_hover` is a translucent overlay; using it as the hover background
+    /// would replace `base` and let the workspace background image show
+    /// through, so composite it over `base` instead.
+    pub fn hover_over(&self, base: Hsla) -> Hsla {
+        base.blend(self.bg_hover)
+    }
+
+    /// Returns a copy with surface backgrounds made slightly translucent so a
+    /// workspace background image shows through without hurting readability.
+    #[allow(dead_code)]
+    pub fn with_translucent_surfaces(self) -> Self {
+        self.with_surface_opacity(0.84)
+    }
+
+    /// Same as [`Self::with_translucent_surfaces`] with an explicit surface alpha.
+    pub fn with_surface_opacity(mut self, alpha: f32) -> Self {
+        self.bg_canvas = self.bg_canvas.opacity(alpha);
+        self.bg_card = self.bg_card.opacity(alpha);
+        self.bg_strip = self.bg_strip.opacity(alpha);
+        self
     }
 }

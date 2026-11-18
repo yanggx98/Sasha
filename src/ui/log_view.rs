@@ -10,6 +10,7 @@ use gpui_kit::*;
 use crate::i18n::{Locale, tr_shared};
 use crate::model::{LogDirection, LogEntry, ReceiveViewState, SearchMatch, selectable_log_line};
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_store::search_highlight_colors;
 
 /// Scrollable receive/transmit log area.
 /// Occupies `flex_1` above the floating send card so the card never occludes logs.
@@ -135,7 +136,8 @@ impl RenderOnce for LogView {
                                 normal_search_ranges,
                                 active_search_ranges,
                                 index as u64,
-                                rgba(0x2563EB99).into(),
+                                theme.accent_blue.alpha(0.6),
+                                search_highlight_colors(theme.bg_canvas),
                             )))
                             .when(simulated, |this| {
                                 let badge = sim_badge_text.clone();
@@ -193,6 +195,8 @@ struct LogLineText {
     active_search_ranges: Vec<Range<usize>>,
     document_order: u64,
     selection_color: Hsla,
+    /// Search match backgrounds `(normal, active)`.
+    match_colors: (Hsla, Hsla),
     styled: StyledText,
 }
 
@@ -206,6 +210,7 @@ impl LogLineText {
         active_search_ranges: Vec<Range<usize>>,
         document_order: u64,
         selection_color: Hsla,
+        match_colors: (Hsla, Hsla),
     ) -> Self {
         let text = text.into();
         let styled = StyledText::new(text.clone()).with_highlights(highlights.clone());
@@ -217,6 +222,7 @@ impl LogLineText {
             active_search_ranges,
             document_order,
             selection_color,
+            match_colors,
             styled,
         }
     }
@@ -352,8 +358,7 @@ impl Element for LogLineText {
         cx: &mut App,
     ) {
         let layout = self.styled.layout().clone();
-        let normal_match_bg: Hsla = rgba(0xEAB30840).into();
-        let active_match_bg: Hsla = rgba(0xF59E0B99).into();
+        let (normal_match_bg, active_match_bg) = self.match_colors;
         for range in &self.normal_search_ranges {
             Self::paint_selection(&layout, range.clone(), normal_match_bg, window);
         }

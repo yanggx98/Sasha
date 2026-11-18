@@ -3,6 +3,8 @@ use std::borrow::Cow;
 use gpui_kit::SharedString;
 use serde::{Deserialize, Serialize};
 
+use crate::ui::theme_store::{ThemeErrorKind, ThemeMessage};
+
 /// Supported UI locales backed by `locales/<code >.toml` via `rust-i18n`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum Locale {
@@ -162,6 +164,91 @@ pub fn scripts_running_tooltip(locale: Locale, count: usize) -> String {
         count = count
     )
     .into_owned()
+}
+
+pub fn theme_status_fallback(locale: Locale, active: &str, configured: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_status_fallback",
+        locale = locale.code(),
+        active = active,
+        configured = configured
+    )
+    .into_owned()
+}
+
+pub fn theme_dir_desc(locale: Locale, path: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_dir_desc",
+        locale = locale.code(),
+        path = path
+    )
+    .into_owned()
+}
+
+pub fn theme_unknown(locale: Locale, id: &str) -> String {
+    rust_i18n::t!("settings.theme_unknown", locale = locale.code(), id = id).into_owned()
+}
+
+pub fn theme_open_failed(locale: Locale, err: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_open_failed",
+        locale = locale.code(),
+        err = err
+    )
+    .into_owned()
+}
+
+/// Renders a structured theme message in `locale`; file names, field names and
+/// parser details are passed through verbatim.
+pub fn theme_message(locale: Locale, message: &ThemeMessage) -> String {
+    let code = locale.code();
+    match message {
+        ThemeMessage::FallbackMissing { id } => rust_i18n::t!(
+            "settings.theme_msg_fallback_missing",
+            locale = code,
+            id = id
+        )
+        .into_owned(),
+        ThemeMessage::FallbackBroken { id, detail } => rust_i18n::t!(
+            "settings.theme_msg_fallback_broken",
+            locale = code,
+            id = id,
+            detail = detail
+        )
+        .into_owned(),
+        ThemeMessage::File(err) if err.kind == ThemeErrorKind::Conflict => rust_i18n::t!(
+            "settings.theme_msg_file_conflict",
+            locale = code,
+            file = &err.file
+        )
+        .into_owned(),
+        ThemeMessage::File(err) => {
+            let detail = match &err.field {
+                Some(field) => format!("{field}: {}", err.message),
+                None => err.message.clone(),
+            };
+            rust_i18n::t!(
+                "settings.theme_msg_file_error",
+                locale = code,
+                file = &err.file,
+                detail = detail
+            )
+            .into_owned()
+        }
+        ThemeMessage::SaveFailed(err) => {
+            rust_i18n::t!("settings.theme_msg_save_failed", locale = code, err = err).into_owned()
+        }
+        ThemeMessage::DirCreateFailed { path, error } => rust_i18n::t!(
+            "settings.theme_msg_dir_failed",
+            locale = code,
+            path = path,
+            err = error
+        )
+        .into_owned(),
+        ThemeMessage::WatchUnavailable(err) => {
+            rust_i18n::t!("settings.theme_msg_watch_failed", locale = code, err = err).into_owned()
+        }
+    }
 }
 
 #[cfg(test)]
