@@ -28,7 +28,7 @@ Sasha 是一款使用 Rust 和 GPUI 编写的开源桌面串口调试工具，�
 
 点击截图可查看原图。
 
-项目正在持续开发。目前以 Windows 为开发和验证平台，尚未验证 macOS 与 Linux 构建。
+项目正在持续开发。目前以 Windows 为开发和验证平台，macOS 与 Linux 尚未在真机上验证。CI 会在 macOS 和 Ubuntu 上编译并运行测试，欢迎有 Mac / Linux 的用户反馈使用情况。
 
 ## 功能
 

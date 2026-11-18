@@ -32,7 +32,9 @@ compact, native interface.
 Click either screenshot to view it at full size.
 
 The project is under active development. Windows is the current development and
-validation platform; macOS and Linux builds have not been verified.
+validation platform; macOS and Linux builds have not been verified on real hardware.
+CI compiles and tests on macOS and Ubuntu, and feedback from macOS and Linux users is
+welcome.
 
 ## Features
 
