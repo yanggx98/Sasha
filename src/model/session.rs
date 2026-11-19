@@ -1241,6 +1241,7 @@ mod tests {
             content: "AT".to_string(),
             hex: false,
             line_ending: SendLineEnding::CrLf,
+            checksum: Default::default(),
         };
         let bytes = state
             .submit_command_with_timestamp(&cmd, "12:00:00.000")
@@ -1269,6 +1270,7 @@ mod tests {
             content: "AT".to_string(),
             hex: false,
             line_ending: SendLineEnding::None,
+            checksum: Default::default(),
         };
         assert_eq!(
             state.submit_command_with_timestamp(&cmd, "12:00:00.000"),
@@ -1294,6 +1296,7 @@ mod tests {
             content: "ZZ".to_string(),
             hex: true,
             line_ending: SendLineEnding::None,
+            checksum: Default::default(),
         };
         assert!(matches!(
             state.submit_command_with_timestamp(&cmd, "12:00:00.000"),

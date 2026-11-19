@@ -520,3 +520,32 @@ fn errors_and_rx_buffer_overflow_are_isolated_per_instance() {
     let drainer_snap = wait_until_finished(&manager, drainer_id, Duration::from_secs(3));
     assert_eq!(drainer_snap.status, ScriptStatus::Completed);
 }
+
+#[test]
+fn checksum_module_computes_values_and_appends_in_wire_order() {
+    let (service, generation, writes) = setup_connected_service();
+    let mut manager = ScriptManager::new();
+
+    let source = r#"
+        assert(checksum.crc16_modbus("123456789") == 0x4B37)
+        assert(checksum.crc32("123456789") == 0xCBF43926)
+        assert(checksum.crc8("123456789") == 0xF4)
+        assert(checksum.sum8("\xFF\x02") == 1)
+        assert(checksum.xor8("\x0F\xF0\x01") == 0xFE)
+        assert(checksum.crc16_ccitt("123456789") == 0x29B1)
+        serial.send(checksum.append("\x01\x03\x00\x00\x00\x0A", "crc16_modbus"))
+        assert(not pcall(checksum.append, "x", "nope"))
+        assert(not pcall(checksum.crc8, 5))
+    "#
+    .to_string();
+
+    let run_id = manager
+        .start_script(PathBuf::from("checksum.lua"), source, &service, generation)
+        .unwrap();
+    let snap = wait_until_finished(&manager, run_id, Duration::from_secs(3));
+    assert_eq!(snap.status, ScriptStatus::Completed);
+    assert_eq!(
+        writes.lock().unwrap().clone(),
+        vec![vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC5, 0xCD]]
+    );
+}

@@ -741,6 +741,7 @@ mod tests {
             content: " a\r\nb 你好 ".to_string(),
             hex: false,
             line_ending: SendLineEnding::CrLf,
+            checksum: Default::default(),
         };
         store
             .update(|cfg| cfg.quick_commands = vec![cmd.clone()])
