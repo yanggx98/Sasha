@@ -482,6 +482,7 @@ impl Render for QuickCommandWindow {
                     )
                     .child(
                         v_flex()
+                            .items_start()
                             .gap_1p5()
                             .child(Self::field_label(
                                 theme,
