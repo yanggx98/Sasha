@@ -58,9 +58,11 @@ that color, and `Esc` or a click outside closes the form. A marker belongs to on
 received line or one send, and highlights that whole row. Right-click a marked entry to
 rename it, change its color or remove the marker.
 
-- **Mini map**: a narrow strip to the right of the log scrollbar shows where the marked
-  entries are in the whole visible log, plus a frame for the part on screen. Click a block to
-  scroll to that entry; auto-scroll is switched off so new data does not pull the view away.
+- **Mini map**: a narrow strip along the right edge of the log replaces the traditional
+  scrollbar. It shows a draggable viewport thumb together with the positions of marked
+  entries in the whole visible log. Drag the thumb or click the track to scroll (scrolling
+  away from the bottom switches off auto-scroll so new data does not pull the view back),
+  or click a colored marker block to jump straight to that entry.
 - **Markers section**: the right dock lists every marker of the session below **Quick send**,
   with its name, color, timestamp and direction. Click a row to scroll to it, use the pencil to
   edit it or `×` to remove it, and the `×` in the title to remove all markers (with a

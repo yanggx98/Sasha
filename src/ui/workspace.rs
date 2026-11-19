@@ -1856,6 +1856,15 @@ impl SashaApp {
         cx.notify();
     }
 
+    pub fn disable_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        if tab.state.receive.auto_scroll {
+            tab.state.toggle_auto_scroll();
+            tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
+            cx.notify();
+        }
+    }
+
     pub fn clear_receive_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.active_tab_mut().state.clear_receive_logs();
         self.sync_log_selection(window, cx);
@@ -3456,6 +3465,11 @@ impl Render for SashaApp {
         let on_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
             let _ = weak_jump.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
         });
+        let weak_disable_auto_scroll = cx.entity().downgrade();
+        let on_disable_auto_scroll = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak_disable_auto_scroll
+                .update(cx, |this, cx| this.disable_receive_auto_scroll(cx));
+        });
         let marker_items: Vec<MarkerPanelItem> = {
             let tab = self.active_tab();
             let visible_ids: Vec<u64> = tab.log_projection.rows.iter().map(|row| row.id).collect();
@@ -4085,10 +4099,11 @@ impl Render for SashaApp {
                                         markers,
                                         on_mark,
                                         on_jump,
+                                        on_disable_auto_scroll,
                                     ))
                                     .when_some(search_input, |this, input| {
                                         this.child(
-                                            div().absolute().bottom(px(8.)).right(px(16.)).child(
+                                            div().absolute().bottom(px(8.)).right(px(20.)).child(
                                                 LogSearchBar::new(
                                                     self.theme,
                                                     locale,

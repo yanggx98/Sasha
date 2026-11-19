@@ -3,27 +3,21 @@ use std::rc::Rc;
 
 use gpui_kit::base::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
 use gpui_kit::component::h_flex;
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{Locale, tr_shared};
 use crate::model::{
-    LogDirection, LogEntry, LogMarkers, ReceiveViewState, SearchMatch, minimap_fraction,
-    selectable_log_line, visible_marker_positions,
+    LogDirection, LogEntry, LogMarkers, MarkerColor, ReceiveViewState, SearchMatch,
+    minimap_fraction, selectable_log_line, visible_marker_positions,
 };
+use crate::ui::log_minimap::{DisableAutoScrollCallback, JumpCallback, LogMinimap, MinimapMarker};
 use crate::ui::marker_editor::marker_color_hsla;
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_store::search_highlight_colors;
 
 /// Called with a log entry id and the window position when a row is right-clicked.
 pub type MarkCallback = Rc<dyn Fn(u64, Point<Pixels>, &mut Window, &mut App)>;
-
-/// Called with a log entry id when a mini-map marker is clicked.
-pub type JumpCallback = Rc<dyn Fn(u64, &mut Window, &mut App)>;
-
-/// Width of the marker mini map to the right of the scrollbar.
-const MINIMAP_WIDTH: Pixels = px(10.);
 
 /// Scrollable receive/transmit log area.
 /// Occupies `flex_1` above the floating send card so the card never occludes logs.
@@ -42,6 +36,7 @@ pub struct LogView {
     markers: Rc<LogMarkers>,
     on_mark: MarkCallback,
     on_jump: JumpCallback,
+    on_disable_auto_scroll: DisableAutoScrollCallback,
 }
 
 impl LogView {
@@ -60,6 +55,7 @@ impl LogView {
         markers: Rc<LogMarkers>,
         on_mark: MarkCallback,
         on_jump: JumpCallback,
+        on_disable_auto_scroll: DisableAutoScrollCallback,
     ) -> Self {
         Self {
             theme,
@@ -75,6 +71,7 @@ impl LogView {
             markers,
             on_mark,
             on_jump,
+            on_disable_auto_scroll,
         }
     }
 }
@@ -95,15 +92,29 @@ impl RenderOnce for LogView {
         let active_match = self.active_match;
         let markers = self.markers;
         let on_mark = self.on_mark;
-        let minimap = Self::minimap(
+        let total = row_ids.len();
+        let minimap_markers: Vec<MinimapMarker> = visible_marker_positions(&row_ids, &markers)
+            .into_iter()
+            .map(|(index, entry_id)| {
+                let color = markers
+                    .get(entry_id)
+                    .map(|marker| marker.color)
+                    .unwrap_or(MarkerColor::Red);
+                MinimapMarker {
+                    entry_id,
+                    fraction: minimap_fraction(index, total),
+                    color,
+                }
+            })
+            .collect();
+        let minimap = LogMinimap::new(
             theme,
-            &row_ids,
-            &markers,
-            &list_state,
-            log_font_size,
+            list_state.clone(),
+            minimap_markers,
+            log_row_height_hint(log_font_size),
             self.on_jump,
-        )
-        .into_any_element();
+            self.on_disable_auto_scroll,
+        );
 
         h_flex()
             .id("log-area")
@@ -171,7 +182,7 @@ impl RenderOnce for LogView {
                                     .items_baseline()
                                     .gap_2()
                                     .pl(px(10.))
-                                    .pr_4()
+                                    .pr_2()
                                     .when(index == 0, |this| this.pt_2())
                                     .pb_1()
                                     // The marker bar sits in the left padding so text never shifts.
@@ -217,7 +228,7 @@ impl RenderOnce for LogView {
                             } else {
                                 div()
                                     .pl_3()
-                                    .pr_4()
+                                    .pr_2()
                                     .pt_3()
                                     .pb_2()
                                     .text_xs()
@@ -227,93 +238,9 @@ impl RenderOnce for LogView {
                             }
                         })
                         .size_full(),
-                    )
-                    .child(Scrollbar::vertical(&list_state)),
+                    ),
             )
             .child(minimap)
-    }
-}
-
-impl LogView {
-    /// A narrow column right of the scrollbar: one block per visible marked row at its relative
-    /// position in the whole log, plus a frame for the part currently on screen.
-    fn minimap(
-        theme: NanoTheme,
-        row_ids: &[u64],
-        markers: &LogMarkers,
-        list_state: &ListState,
-        font_size: u16,
-        on_jump: JumpCallback,
-    ) -> impl IntoElement {
-        let total = row_ids.len();
-        let top_index = list_state.logical_scroll_top().item_ix.min(total);
-        let viewport = list_state.viewport_bounds().size.height;
-        let row_height = log_row_height_hint(font_size).max(px(1.));
-        let visible_rows = if viewport > px(0.) {
-            ((viewport / row_height).ceil() as usize).max(1)
-        } else {
-            0
-        };
-        let blocks =
-            visible_marker_positions(row_ids, markers)
-                .into_iter()
-                .map(|(index, entry_id)| {
-                    let color = markers
-                        .get(entry_id)
-                        .map(|marker| marker.color)
-                        .unwrap_or(crate::model::MarkerColor::Red);
-                    let on_jump = on_jump.clone();
-                    div()
-                        .id(ElementId::named_usize(
-                            "log-minimap-marker",
-                            entry_id as usize,
-                        ))
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .h(px(6.))
-                        .top(relative(minimap_fraction(index, total)))
-                        // Centre the 6px block on its position instead of hanging below it.
-                        .mt(px(-3.))
-                        .cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                            cx.stop_propagation();
-                            on_jump(entry_id, window, cx);
-                        })
-                        .child(
-                            div()
-                                .absolute()
-                                .left(px(1.))
-                                .right(px(1.))
-                                .top(px(1.))
-                                .h(px(3.))
-                                .rounded(px(1.))
-                                .bg(marker_color_hsla(color, 1.0)),
-                        )
-                });
-        div()
-            .id("log-minimap")
-            .relative()
-            .overflow_hidden()
-            .flex_shrink_0()
-            .h_full()
-            .w(MINIMAP_WIDTH)
-            // No background or border of its own: it reads as an extension of the scrollbar
-            // gutter, leaving the dock's divider as the only line on this side.
-            .when(total > 0 && visible_rows > 0, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .right_0()
-                        .top(relative(top_index as f32 / total as f32))
-                        .h(relative(
-                            (visible_rows as f32 / total as f32).clamp(0.01, 1.0),
-                        ))
-                        .bg(theme.text_muted.alpha(0.18)),
-                )
-            })
-            .children(blocks)
     }
 }
 
