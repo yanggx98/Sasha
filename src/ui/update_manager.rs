@@ -104,6 +104,7 @@ impl UpdateManager {
         let Some(asset) = release.asset.clone() else {
             return;
         };
+        let cli_asset = release.cli_asset.clone();
         self.set(UpdateState::Downloading(release.clone()), cx);
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -112,7 +113,12 @@ impl UpdateManager {
                     let path = update::download(&asset)?;
                     update::install(&path).inspect_err(|_| {
                         let _ = std::fs::remove_file(&path);
-                    })
+                    })?;
+                    // The command-line companion is best effort; the app update already succeeded.
+                    if let Some(cli) = &cli_asset {
+                        let _ = update::update_cli(cli);
+                    }
+                    Ok::<(), update::UpdateError>(())
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
