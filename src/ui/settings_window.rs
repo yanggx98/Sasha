@@ -1,6 +1,7 @@
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::assets::IconName as LucideIcon;
+use gpui_kit::component::input::Input;
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -12,13 +13,28 @@ use crate::model::settings::{
     DEFAULT_BACKGROUND_OPACITY, LOG_FONT_SIZE_PRESETS, StreamOutputScope,
 };
 use crate::ui::theme::NanoTheme;
-use crate::ui::theme_manager::{ThemeHandle, ThemeManager, ThemeSelectError};
+use crate::ui::theme_editor::{FIELDS, ThemeEditor};
+use crate::ui::theme_manager::{ThemeHandle, ThemeManager, ThemeSaveError, ThemeSelectError};
+use crate::ui::theme_store::ThemeIdError;
 use crate::ui::update_manager::{UpdateHandle, UpdateManager, UpdateState};
 use crate::ui::workspace::image_format_for_path;
 
 const HEADER_HEIGHT: Pixels = px(38.);
 const APP_AUTHOR: &str = "yanggx98";
 const GITHUB_URL: &str = "https://github.com/yanggx98/Sasha";
+
+fn theme_save_error_text(locale: Locale, err: &ThemeSaveError) -> String {
+    match err {
+        ThemeSaveError::InvalidName(ThemeIdError::Empty) => {
+            tr(locale, "settings.theme_edit_err_name_empty").into_owned()
+        }
+        ThemeSaveError::InvalidName(ThemeIdError::Reserved) => {
+            tr(locale, "settings.theme_edit_err_name_reserved").into_owned()
+        }
+        ThemeSaveError::Exists => tr(locale, "settings.theme_edit_err_exists").into_owned(),
+        ThemeSaveError::Io(msg) => i18n::theme_edit_failed(locale, msg),
+    }
+}
 
 fn app_icon() -> Arc<Image> {
     static ICON: OnceLock<Arc<Image>> = OnceLock::new();
@@ -83,6 +99,8 @@ pub struct SettingsWindow {
     theme_menu_open: bool,
     /// Last theme-folder / theme-selection problem shown in the warnings area.
     theme_notice: Option<String>,
+    theme_editor: Option<ThemeEditor>,
+    _release_subscription: Subscription,
     _theme_subscription: Subscription,
     update_manager: Entity<UpdateManager>,
     _update_subscription: Subscription,
@@ -103,6 +121,10 @@ impl SettingsWindow {
         let subscription = cx.observe(&config_store, |_, _, cx| cx.notify());
         let theme_manager = ThemeHandle::get(cx);
         let theme_subscription = cx.observe(&theme_manager, |_, _, cx| cx.notify());
+        let release_manager = theme_manager.clone();
+        let release_subscription = cx.on_release(move |_, cx| {
+            release_manager.update(cx, |manager, cx| manager.clear_preview(cx));
+        });
         let update_manager = UpdateHandle::get(cx);
         let update_subscription = cx.observe(&update_manager, |_, _, cx| cx.notify());
         let initial_theme = theme_manager.read(cx).nano();
@@ -132,6 +154,8 @@ impl SettingsWindow {
             theme_manager,
             theme_menu_open: false,
             theme_notice: None,
+            theme_editor: None,
+            _release_subscription: release_subscription,
             _theme_subscription: theme_subscription,
             update_manager,
             _update_subscription: update_subscription,
@@ -175,7 +199,101 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    /// A color row changed: preview the draft when every row is valid.
+    pub(crate) fn theme_editor_changed(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = &mut self.theme_editor else {
+            return;
+        };
+        editor.delete_armed = false;
+        let base = editor.base;
+        if let Some(colors) = editor.draft(cx) {
+            self.theme_manager
+                .update(cx, |manager, cx| manager.preview(base, colors, cx));
+        }
+        cx.notify();
+    }
+
+    fn start_theme_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let id = self.theme_manager.read(cx).current_id().to_string();
+        let Some(entry) = self.theme_manager.read(cx).theme_entry(&id) else {
+            return;
+        };
+        let placeholder = tr_shared(locale, "settings.theme_edit_name_placeholder");
+        self.theme_editor = Some(ThemeEditor::new(&entry, placeholder, window, cx));
+        self.theme_menu_open = false;
+        self.theme_notice = None;
+        cx.notify();
+    }
+
+    fn close_theme_editor(&mut self, cx: &mut Context<Self>) {
+        if self.theme_editor.take().is_some() {
+            self.theme_manager
+                .update(cx, |manager, cx| manager.clear_preview(cx));
+        }
+        cx.notify();
+    }
+
+    fn save_theme_editor(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let Some(editor) = &self.theme_editor else {
+            return;
+        };
+        let name = editor.name(cx);
+        let Some(colors) = editor.draft(cx) else {
+            self.theme_notice =
+                Some(tr(locale, "settings.theme_edit_err_invalid_color").into_owned());
+            cx.notify();
+            return;
+        };
+        let (base, source) = (
+            editor.base,
+            (!editor.builtin).then(|| editor.source_id.clone()),
+        );
+        if name.is_empty() {
+            self.theme_notice = Some(tr(locale, "settings.theme_edit_err_name_empty").into_owned());
+            cx.notify();
+            return;
+        }
+        let result = self.theme_manager.update(cx, |manager, cx| {
+            manager.save_theme(source.as_deref(), &name, base, &colors, cx)
+        });
+        match result {
+            Ok(_) => {
+                self.theme_editor = None;
+                self.theme_notice = None;
+            }
+            Err(err) => self.theme_notice = Some(theme_save_error_text(locale, &err)),
+        }
+        cx.notify();
+    }
+
+    fn delete_theme_editor(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let Some(editor) = &mut self.theme_editor else {
+            return;
+        };
+        if !editor.delete_armed {
+            editor.delete_armed = true;
+            cx.notify();
+            return;
+        }
+        let id = editor.source_id.clone();
+        let result = self
+            .theme_manager
+            .update(cx, |manager, cx| manager.delete_theme(&id, cx));
+        match result {
+            Ok(()) => {
+                self.theme_editor = None;
+                self.theme_notice = None;
+            }
+            Err(err) => self.theme_notice = Some(theme_save_error_text(locale, &err)),
+        }
+        cx.notify();
+    }
+
     fn select_theme(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.close_theme_editor(cx);
         let locale = self.current_locale(cx);
         let result = self
             .theme_manager
@@ -553,6 +671,121 @@ impl SettingsWindow {
             )
             .child(label.into())
             .into_any_element()
+    }
+
+    /// Inline color editor under the theme row (`None` when not editing).
+    fn render_theme_editor(&self, locale: Locale, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let editor = self.theme_editor.as_ref()?;
+        let theme = self.theme;
+        let parsed = editor.parsed(cx);
+        let rows = FIELDS.iter().zip(&editor.inputs).zip(&parsed).map(
+            |(((label_key, _), input), value)| {
+                let valid = value.is_ok();
+                h_flex()
+                    .w_full()
+                    .items_center()
+                    .gap_3()
+                    .child(
+                        div()
+                            .w(px(110.))
+                            .flex_shrink_0()
+                            .text_xs()
+                            .text_color(theme.text_secondary)
+                            .child(tr_shared(locale, label_key)),
+                    )
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .w(px(18.))
+                            .h(px(18.))
+                            .rounded(px(4.))
+                            .border_1()
+                            .border_color(theme.border_card)
+                            .when_some(value.as_ref().ok().copied(), |this, color| this.bg(color)),
+                    )
+                    .child(
+                        div()
+                            .w(px(140.))
+                            .h(px(22.))
+                            .flex()
+                            .items_center()
+                            .px_1p5()
+                            .rounded(px(6.))
+                            .bg(theme.bg_card)
+                            .border_1()
+                            .border_color(if valid {
+                                theme.border_card
+                            } else {
+                                theme.error_text
+                            })
+                            .font_family(crate::ui::fonts::MONO_FONT)
+                            .text_xs()
+                            .text_color(theme.text_primary)
+                            .child(Input::new(input).appearance(false)),
+                    )
+                    .into_any_element()
+            },
+        );
+
+        let name_row = div()
+            .w(px(260.))
+            .h(px(22.))
+            .flex()
+            .items_center()
+            .px_1p5()
+            .rounded(px(6.))
+            .bg(theme.bg_card)
+            .border_1()
+            .border_color(theme.border_card)
+            .text_xs()
+            .text_color(theme.text_primary)
+            .child(Input::new(&editor.name_input).appearance(false));
+
+        let save_label = if editor.builtin {
+            "settings.theme_edit_save_as"
+        } else {
+            "settings.theme_edit_save"
+        };
+        let mut actions = h_flex().gap_2().child(self.flat_action_button(
+            "settings-theme-edit-save",
+            tr_shared(locale, save_label),
+            |this, _, cx| this.save_theme_editor(cx),
+            cx,
+        ));
+        if !editor.builtin {
+            actions = actions.child(self.flat_action_button(
+                "settings-theme-edit-delete",
+                tr_shared(
+                    locale,
+                    if editor.delete_armed {
+                        "settings.theme_edit_delete_confirm"
+                    } else {
+                        "settings.theme_edit_delete"
+                    },
+                ),
+                |this, _, cx| this.delete_theme_editor(cx),
+                cx,
+            ));
+        }
+
+        Some(
+            v_flex()
+                .w_full()
+                .py_3()
+                .gap_2()
+                .border_b_1()
+                .border_color(theme.border_card)
+                .children(editor.builtin.then(|| {
+                    div()
+                        .text_xs()
+                        .text_color(theme.text_muted)
+                        .child(tr_shared(locale, "settings.theme_edit_builtin_hint"))
+                }))
+                .children(rows)
+                .child(name_row)
+                .child(actions)
+                .into_any_element(),
+        )
     }
 
     fn render_general_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -976,6 +1209,34 @@ impl SettingsWindow {
             )
             .into_any_element();
 
+        let editing = self.theme_editor.is_some();
+        let edit_button = self.flat_action_button(
+            "settings-theme-edit",
+            tr_shared(
+                locale,
+                if editing {
+                    "settings.theme_edit_done"
+                } else {
+                    "settings.theme_edit"
+                },
+            ),
+            move |this, window, cx| {
+                if this.theme_editor.is_some() {
+                    this.close_theme_editor(cx);
+                } else {
+                    this.start_theme_editor(window, cx);
+                }
+            },
+            cx,
+        );
+        let theme_controls = h_flex()
+            .items_center()
+            .gap_2()
+            .child(edit_button)
+            .child(theme_button)
+            .into_any_element();
+        let theme_editor_panel = self.render_theme_editor(locale, cx);
+
         v_flex()
             .w_full()
             .child(self.render_section_header(SettingsTab::View, locale))
@@ -987,9 +1248,10 @@ impl SettingsWindow {
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.theme_title"),
                 theme_desc,
-                theme_button,
+                theme_controls,
             ))
             .children(theme_menu)
+            .children(theme_editor_panel)
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.theme_dir_title"),
                 i18n::theme_dir_desc(locale, &theme_dir),
