@@ -2,13 +2,13 @@
 
 English · [简体中文](themes.zh-CN.md)
 
-Sasha ships built-in **Dark** (default), **Light**, **Claude Dark**, **Claude Light**, **Gemini Dark**, **Gemini Light**, **DeepSeek Dark**, **DeepSeek Light**, **Grok Dark** and **Grok Light** themes (the Claude pair uses a warm charcoal/ivory palette with a clay accent; the Gemini pair uses an obsidian/cool-ice palette with a Google blue accent; the DeepSeek pair uses a cool near-black/white palette with the DeepSeek blue accent; the Grok pair uses a neutral gray palette with a magenta accent). Pick one in
+Sasha ships built-in **Dark** (default) and **Light** themes with neutral surfaces and a rose accent. The **Claude**, **Gemini**, **DeepSeek**, **Grok**, and **ChatGPT** palettes each come in dark and light variants. ChatGPT pairs cool gray surfaces with a violet accent. Pick a theme in
 **Settings > View > Theme**; it applies immediately and is saved as `theme = "<id>"`
 in `config.toml`.
 
 Custom themes are `*.toml` files in the `themes` folder next to `config.toml`
 (created on first start; **Settings > View > Theme Folder > Open Folder** opens it).
-The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`; `dark`, `light`, `claude-dark`, `claude-light`, `gemini-dark`, `gemini-light`, `deepseek-dark`, `deepseek-light`, `grok-dark`, `grok-light` are reserved). Adding, editing or deleting a file updates the list
+The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`). Built-in ids are reserved: `dark`, `light`, `claude-dark`, `claude-light`, `gemini-dark`, `gemini-light`, `deepseek-dark`, `deepseek-light`, `grok-dark`, `grok-light`, `codex-dark`, and `codex-light`. Adding, editing or deleting a file updates the list
 automatically, and the active theme is re-applied as soon as its file changes.
 
 A complete example is also in [`themes/example.toml`](themes/example.toml):

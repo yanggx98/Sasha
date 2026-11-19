@@ -1,0 +1,11 @@
+name = "ChatGPT Dark"
+base = "dark"
+
+canvas = "#18181C"
+card = "#232329"
+text = "#EBEBF1"
+accent = "#7762D8"
+rx = "#66D9A8"
+tx = "#9BBFFF"
+error = "#FF818A"
+border = "#EBEBF126"

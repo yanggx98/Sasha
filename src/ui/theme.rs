@@ -1,9 +1,9 @@
-use gpui_kit::{Hsla, rgb, rgba};
+use gpui_kit::Hsla;
 
 /// Color tokens for Sasha's dark, immersive single-session UI.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NanoTheme {
-    /// Canvas shared by the immersive title bar and the log area (`#0D1117`).
+    /// Canvas shared by the immersive title bar and the log area.
     pub bg_canvas: Hsla,
     /// Elevated surface for the floating send card.
     pub bg_card: Hsla,
@@ -41,29 +41,7 @@ pub struct NanoTheme {
 
 impl Default for NanoTheme {
     fn default() -> Self {
-        Self {
-            bg_canvas: rgb(0x0D1117).into(),
-            bg_card: rgb(0x161B22).into(),
-            bg_strip: rgb(0x0A0E13).into(),
-            bg_popover: rgb(0x1C2128).into(),
-            bg_hover: rgba(0xFFFFFF12).into(),
-            bg_toggle_active: rgba(0x2F81F724).into(),
-            border_card: rgba(0xFFFFFF18).into(),
-            border_popover: rgba(0xFFFFFF2A).into(),
-            accent_blue: rgb(0x2563EB).into(),
-            accent_blue_hover: rgb(0x3B82F6).into(),
-            rx_green: rgb(0x3FB950).into(),
-            tx_blue: rgb(0x58A6FF).into(),
-            text_primary: rgb(0xE6EDF3).into(),
-            text_secondary: rgb(0x9CA3AF).into(),
-            text_muted: rgb(0x6E7681).into(),
-            error_text: rgb(0xF85149).into(),
-            error_bg: rgba(0xF851491E).into(),
-            sim_badge_bg: rgba(0x388BFD1F).into(),
-            sim_badge_text: rgb(0x79C0FF).into(),
-            status_disconnected: rgb(0x8B949E).into(),
-            status_connected: rgb(0x3FB950).into(),
-        }
+        super::theme_store::builtin_dark().theme
     }
 }
 

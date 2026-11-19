@@ -1023,12 +1023,20 @@ impl SettingsWindow {
             )
         };
         let builtin_label = tr_shared(locale, "settings.theme_builtin");
+        let theme_name = |info: &crate::ui::theme_manager::ThemeInfo| -> SharedString {
+            use crate::ui::theme_store::{BUILTIN_CODEX_DARK_ID, BUILTIN_CODEX_LIGHT_ID};
+
+            match info.id.as_str() {
+                BUILTIN_CODEX_DARK_ID => tr_shared(locale, "settings.theme_codex_dark"),
+                BUILTIN_CODEX_LIGHT_ID => tr_shared(locale, "settings.theme_codex_light"),
+                _ => info.name.clone().into(),
+            }
+        };
         let current_name: SharedString = theme_infos
             .iter()
             .find(|info| info.id == theme_current)
-            .map(|info| info.name.clone())
-            .unwrap_or_else(|| theme_current.clone())
-            .into();
+            .map(theme_name)
+            .unwrap_or_else(|| theme_current.clone().into());
         let theme_fell_back = theme_selected != theme_current;
         let theme_desc: SharedString = if theme_fell_back {
             i18n::theme_status_fallback(locale, &current_name, &theme_selected).into()
@@ -1102,7 +1110,7 @@ impl SettingsWindow {
                                 this.select_theme(&id, cx);
                             }),
                         )
-                        .child(div().flex_1().truncate().child(info.name.clone()))
+                        .child(div().flex_1().truncate().child(theme_name(info)))
                         .when(info.builtin, |this| {
                             this.child(
                                 div()

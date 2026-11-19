@@ -2,12 +2,12 @@
 
 [English](themes.md) · 简体中文
 
-Sasha 内置**深色**（默认）、**浅色**、**Claude 深色**、**Claude 浅色**、**Gemini 深色**、**Gemini 浅色**、**DeepSeek 深色**、**DeepSeek 浅色**、**Grok 深色**和 **Grok 浅色**主题（Claude 系列为暖炭灰/象牙白配陶土色强调色；Gemini 系列为曜石黑/冷冰蓝白配 Google 蓝强调色；DeepSeek 系列为冷调近黑/冷白配 DeepSeek 蓝强调色；Grok 系列为中性灰配品红强调色）。在 **设置 > 视图 > 界面主题** 中选择，立即生效，
+Sasha 内置**深色**（默认）和**浅色**主题，采用中性底色和玫红强调色。**Claude**、**Gemini**、**DeepSeek**、**Grok** 和 **ChatGPT** 也各有深浅两版，其中 ChatGPT 采用冷灰底色和紫色强调色。在 **设置 > 视图 > 界面主题** 中选择，立即生效，
 并以 `theme = "<id>"` 保存到 `config.toml`。
 
 自定义主题是 `config.toml` 同级 `themes` 目录中的 `*.toml` 文件（首次启动时创建；
 **设置 > 视图 > 主题目录 > 打开目录** 可直接打开）。文件名（去掉 `.toml`）即主题 id
-（`ocean.toml` 的 id 为 `ocean`；`dark`、`light`、`claude-dark`、`claude-light`、`gemini-dark`、`gemini-light`、`deepseek-dark`、`deepseek-light`、`grok-dark`、`grok-light` 为内置保留 id）。增加、修改或删除文件后，
+（例如 `ocean.toml` 的 id 为 `ocean`）。内置保留 id 包括 `dark`、`light`、`claude-dark`、`claude-light`、`gemini-dark`、`gemini-light`、`deepseek-dark`、`deepseek-light`、`grok-dark`、`grok-light`、`codex-dark` 和 `codex-light`。增加、修改或删除文件后，
 列表会自动更新；当前主题的文件被修改时会立即重新应用。
 
 完整示例同样见 [`themes/example.toml`](themes/example.toml)：

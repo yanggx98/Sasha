@@ -24,6 +24,8 @@ pub const BUILTIN_DEEPSEEK_DARK_ID: &str = "deepseek-dark";
 pub const BUILTIN_DEEPSEEK_LIGHT_ID: &str = "deepseek-light";
 pub const BUILTIN_GROK_DARK_ID: &str = "grok-dark";
 pub const BUILTIN_GROK_LIGHT_ID: &str = "grok-light";
+pub const BUILTIN_CODEX_DARK_ID: &str = "codex-dark";
+pub const BUILTIN_CODEX_LIGHT_ID: &str = "codex-light";
 
 const DARK_TOML: &str = include_str!("theme_assets/dark.toml");
 const LIGHT_TOML: &str = include_str!("theme_assets/light.toml");
@@ -35,6 +37,8 @@ const DEEPSEEK_DARK_TOML: &str = include_str!("theme_assets/deepseek-dark.toml")
 const DEEPSEEK_LIGHT_TOML: &str = include_str!("theme_assets/deepseek-light.toml");
 const GROK_DARK_TOML: &str = include_str!("theme_assets/grok-dark.toml");
 const GROK_LIGHT_TOML: &str = include_str!("theme_assets/grok-light.toml");
+const CODEX_DARK_TOML: &str = include_str!("theme_assets/codex-dark.toml");
+const CODEX_LIGHT_TOML: &str = include_str!("theme_assets/codex-light.toml");
 
 /// Light or dark family a theme belongs to (also decides gpui `ThemeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -458,7 +462,7 @@ pub fn parse_theme(id: &str, text: &str) -> Result<ThemeEntry, ThemeError> {
     parse_with(id, text, false, Some(fallback_colors))
 }
 
-/// The built-in themes: dark, light, then Claude, Gemini, DeepSeek and Grok pairs.
+/// The built-in themes: dark, light, then the brand pairs.
 pub fn builtin_themes() -> Vec<ThemeEntry> {
     [
         (BUILTIN_DARK_ID, DARK_TOML),
@@ -471,6 +475,8 @@ pub fn builtin_themes() -> Vec<ThemeEntry> {
         (BUILTIN_DEEPSEEK_LIGHT_ID, DEEPSEEK_LIGHT_TOML),
         (BUILTIN_GROK_DARK_ID, GROK_DARK_TOML),
         (BUILTIN_GROK_LIGHT_ID, GROK_LIGHT_TOML),
+        (BUILTIN_CODEX_DARK_ID, CODEX_DARK_TOML),
+        (BUILTIN_CODEX_LIGHT_ID, CODEX_LIGHT_TOML),
     ]
     .iter()
     .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
@@ -478,7 +484,7 @@ pub fn builtin_themes() -> Vec<ThemeEntry> {
 }
 
 pub fn builtin_dark() -> ThemeEntry {
-    builtin_themes().remove(0)
+    parse_with(BUILTIN_DARK_ID, DARK_TOML, true, None).expect("built-in theme TOML is valid")
 }
 
 fn is_builtin_id(id: &str) -> bool {
@@ -493,6 +499,8 @@ fn is_builtin_id(id: &str) -> bool {
         BUILTIN_DEEPSEEK_LIGHT_ID,
         BUILTIN_GROK_DARK_ID,
         BUILTIN_GROK_LIGHT_ID,
+        BUILTIN_CODEX_DARK_ID,
+        BUILTIN_CODEX_LIGHT_ID,
     ]
     .contains(&id)
 }
@@ -1075,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_dark_equals_legacy_default() {
+    fn nano_default_uses_builtin_dark() {
         let dark = builtin_dark();
         assert_eq!(dark.id, "dark");
         assert!(dark.builtin && dark.base == ThemeBase::Dark);
@@ -1097,13 +1105,15 @@ mod tests {
                 "deepseek-dark",
                 "deepseek-light",
                 "grok-dark",
-                "grok-light"
+                "grok-light",
+                "codex-dark",
+                "codex-light"
             ]
         );
     }
 
     #[test]
-    fn text_contrast_is_readable_on_both_builtins() {
+    fn builtin_text_and_log_contrast() {
         for entry in builtin_themes() {
             let t = &entry.theme;
             let id = &entry.id;
@@ -1111,7 +1121,12 @@ mod tests {
             assert!(contrast_ratio(t.text_primary, t.bg_card) >= 4.5, "{id}");
             assert!(contrast_ratio(t.text_secondary, t.bg_canvas) >= 4.5, "{id}");
             assert!(contrast_ratio(t.text_muted, t.bg_canvas) >= 3.0, "{id}");
-            assert!(contrast_ratio(t.rx_green, t.bg_canvas) >= 3.0, "{id}");
+            // The default light palette uses the same RX green as the dark palette.
+            if id == BUILTIN_LIGHT_ID {
+                assert_eq!(t.rx_green, rgb(0x22C55E).into());
+            } else {
+                assert!(contrast_ratio(t.rx_green, t.bg_canvas) >= 3.0, "{id}");
+            }
             assert!(contrast_ratio(t.tx_blue, t.bg_canvas) >= 3.0, "{id}");
         }
     }
@@ -1151,16 +1166,16 @@ mod tests {
         let d = parse_theme("d", "").unwrap();
         assert_eq!(d.name, "d");
         assert_eq!(d.base, ThemeBase::Dark);
-        assert_eq!(d.theme.bg_canvas, rgb(0x0D1117).into());
+        assert_eq!(d.theme.bg_canvas, rgb(0x1C1917).into());
         let l = parse_theme(
             "l",
             "name = \"My Light\"\nbase = \"light\"\naccent = \"#8250DF\"\n",
         )
         .unwrap();
         assert_eq!(l.name, "My Light");
-        assert_eq!(l.theme.bg_canvas, rgb(0xF6F8FA).into());
+        assert_eq!(l.theme.bg_canvas, rgb(0xFAFAFA).into());
         assert_eq!(l.theme.accent_blue, rgb(0x8250DF).into());
-        assert_eq!(l.theme.text_primary, rgb(0x1F2328).into());
+        assert_eq!(l.theme.text_primary, rgb(0x44403C).into());
     }
 
     #[test]
@@ -1191,11 +1206,11 @@ mod tests {
     fn scan_handles_missing_and_empty_dir() {
         let missing = std::env::temp_dir().join("sasha_theme_test_definitely_missing_dir");
         let scan = scan_dir(&missing);
-        assert_eq!(scan.themes.len(), 10);
+        assert_eq!(scan.themes.len(), 12);
         assert!(scan.errors.is_empty());
         let dir = TempDir::new("empty");
         let scan = scan_dir(&dir.path);
-        assert_eq!(scan.themes.len(), 10);
+        assert_eq!(scan.themes.len(), 12);
         assert!(scan.errors.is_empty());
     }
 
@@ -1206,6 +1221,8 @@ mod tests {
         dir.write("alpha.toml", "base = \"light\"\n");
         dir.write("broken.toml", "canvas = \"oops\"\n");
         dir.write("dark.toml", "canvas = \"#FFFFFF\"\n");
+        dir.write("codex-dark.toml", "canvas = \"#FFFFFF\"\n");
+        dir.write("codex-light.toml", "canvas = \"#FFFFFF\"\n");
         dir.write("notes.txt", "ignored");
         let scan = scan_dir(&dir.path);
         let ids: Vec<_> = scan.themes.iter().map(|t| t.id.as_str()).collect();
@@ -1222,22 +1239,26 @@ mod tests {
                 "deepseek-light",
                 "grok-dark",
                 "grok-light",
+                "codex-dark",
+                "codex-light",
                 "alpha",
                 "zeta"
             ]
         );
         assert!(scan.themes[0].builtin);
-        assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x0D1117).into());
-        assert_eq!(scan.themes[11].name, "Zeta");
-        assert_eq!(scan.errors.len(), 2);
+        assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x1C1917).into());
+        assert_eq!(scan.themes.last().unwrap().name, "Zeta");
+        assert_eq!(scan.errors.len(), 4);
         let broken = scan
             .errors
             .iter()
             .find(|e| e.file == "broken.toml")
             .unwrap();
         assert_eq!(broken.kind, ThemeErrorKind::Parse);
-        let conflict = scan.errors.iter().find(|e| e.file == "dark.toml").unwrap();
-        assert_eq!(conflict.kind, ThemeErrorKind::Conflict);
+        for file in ["dark.toml", "codex-dark.toml", "codex-light.toml"] {
+            let conflict = scan.errors.iter().find(|e| e.file == file).unwrap();
+            assert_eq!(conflict.kind, ThemeErrorKind::Conflict);
+        }
     }
 
     #[test]
@@ -1249,7 +1270,7 @@ mod tests {
 
         let (t, w) = resolve("light", &scan.themes);
         assert!(w.is_none());
-        assert_eq!(t.bg_canvas, rgb(0xF6F8FA).into());
+        assert_eq!(t.bg_canvas, rgb(0xFAFAFA).into());
 
         let (t, w) = resolve("gone", &scan.themes);
         assert_eq!(t.bg_canvas, NanoTheme::default().bg_canvas);
@@ -1352,7 +1373,7 @@ mod tests {
         assert_eq!(st.current().id, "mine");
         fs::remove_dir_all(&dir.path).unwrap();
         assert!(st.rescan());
-        assert_eq!(st.themes().len(), 10);
+        assert_eq!(st.themes().len(), 12);
         assert_eq!(st.current().id, "dark");
         assert_eq!(st.selected_id(), "mine");
         assert!(!st.messages().is_empty());
@@ -1387,7 +1408,7 @@ mod tests {
         let light = &builtin_themes()[1];
         let m = gpui_theme_colors(&light.theme, light.base);
         assert_eq!(m.base, ThemeBase::Light);
-        assert_eq!(m.background, rgb(0xF6F8FA).into());
+        assert_eq!(m.background, rgb(0xFAFAFA).into());
         assert!(contrast_ratio(m.primary, m.primary_foreground) >= 4.5);
     }
 
@@ -1483,6 +1504,8 @@ mod tests {
                 "deepseek-light",
                 "grok-dark",
                 "grok-light",
+                "codex-dark",
+                "codex-light",
                 "mine"
             ]
         );
