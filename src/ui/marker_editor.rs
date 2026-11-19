@@ -167,6 +167,7 @@ impl RenderOnce for MarkerEditor {
                     .bg(theme.bg_popover)
                     .border_1()
                     .border_color(theme.border_popover)
+                    .shadow_lg()
                     .text_color(theme.text_primary)
                     .occlude()
                     .on_mouse_down(MouseButton::Left, swallow)
