@@ -24,3 +24,8 @@ gpui = { package = "gpui-pre", version = "=0.3.12", features = ["test-support"] 
 
 [build-dependencies]
 winresource = "0.1"
+
+[patch.crates-io]
+# Local fix: upstream accesskit_windows 0.34.0 panics (aborting the process) in
+# client_top_left when a window is destroyed during a UIA query.
+accesskit_windows = { path = "vendor/accesskit_windows" }
