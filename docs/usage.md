@@ -54,8 +54,8 @@ the filtered view; automatic scrolling follows only changes to visible entries.
 
 Right-click an entry in the receive log to mark it. A small form asks for a **name** (up to
 32 characters) and one of eight **colors**; **OK** (or `Enter`) marks the whole entry with
-that color, and `Esc` or a click outside closes the form. An entry is one received or sent
-event, so a marker highlights everything that event produced. Right-click a marked entry to
+that color, and `Esc` or a click outside closes the form. A marker belongs to one log row, one
+received line or one send, and highlights that whole row. Right-click a marked entry to
 rename it, change its color or remove the marker.
 
 - **Mini map**: a narrow strip to the right of the log scrollbar shows where the marked

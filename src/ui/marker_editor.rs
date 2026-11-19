@@ -150,6 +150,8 @@ impl RenderOnce for MarkerEditor {
             .top_0()
             .left_0()
             .size_full()
+            // Also swallows wheel events so the log cannot scroll away under the form.
+            .occlude()
             .on_mouse_down(MouseButton::Left, dismiss.clone())
             .on_mouse_down(MouseButton::Right, dismiss)
             .child(

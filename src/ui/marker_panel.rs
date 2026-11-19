@@ -120,8 +120,7 @@ impl RenderOnce for MarkerPanel {
         let rows = self
             .items
             .iter()
-            .enumerate()
-            .map(|(index, item)| {
+            .map(|item| {
                 let entry_id = item.entry_id;
                 let filtered = item.filtered;
                 let on_jump = self.on_jump.clone();
@@ -132,7 +131,7 @@ impl RenderOnce for MarkerPanel {
                 let row_tooltip: Option<SharedString> =
                     filtered.then(|| tr_shared(locale, "marker.filtered_hint"));
                 h_flex()
-                    .id(("marker-row", index))
+                    .id(("marker-row", entry_id as usize))
                     .w_full()
                     .h(px(28.))
                     .px_2()
@@ -176,14 +175,14 @@ impl RenderOnce for MarkerPanel {
                     )
                     .child(Self::icon_button(
                         theme,
-                        ("marker-edit", index),
+                        ("marker-edit", entry_id as usize),
                         LucideIcon::Pencil,
                         tr_shared(locale, "marker.edit"),
                         move |event, window, cx| on_edit(entry_id, event.position, window, cx),
                     ))
                     .child(Self::icon_button(
                         theme,
-                        ("marker-remove", index),
+                        ("marker-remove", entry_id as usize),
                         LucideIcon::X,
                         tr_shared(locale, "marker.delete"),
                         move |_, window, cx| on_delete(entry_id, window, cx),
@@ -227,7 +226,7 @@ impl RenderOnce for MarkerPanel {
                         "{} ({count})",
                         tr_shared(locale, "marker.panel_title")
                     )))
-                    .when(count > 0, |this| {
+                    .when(count > 0 && !self.collapsed, |this| {
                         this.child(Self::icon_button(
                             theme,
                             "marker-clear-all",
@@ -237,7 +236,7 @@ impl RenderOnce for MarkerPanel {
                         ))
                     }),
             )
-            .when(!self.collapsed && self.pending_clear, |this| {
+            .when(!self.collapsed && self.pending_clear && count > 0, |this| {
                 this.child(
                     h_flex()
                         .flex_shrink_0()

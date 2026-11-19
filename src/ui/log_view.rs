@@ -266,6 +266,8 @@ impl LogView {
                         .right_0()
                         .h(px(6.))
                         .top(relative(minimap_fraction(index, total)))
+                        // Centre the 6px block on its position instead of hanging below it.
+                        .mt(px(-3.))
                         .cursor_pointer()
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
@@ -285,6 +287,7 @@ impl LogView {
         div()
             .id("log-minimap")
             .relative()
+            .overflow_hidden()
             .flex_shrink_0()
             .h_full()
             .w(MINIMAP_WIDTH)

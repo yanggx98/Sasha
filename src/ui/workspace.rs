@@ -774,6 +774,10 @@ impl SashaApp {
 
     fn dismiss_picker_state(&mut self) {
         self.picker_error = None;
+        // Tab switches, new tabs and closed tabs all pass through here; the marker form
+        // belongs to one tab's entry, so it goes too.
+        self.marker_editor = None;
+        self._marker_editor_subscription = None;
         for tab in &mut self.tabs {
             tab.state.active_picker = None;
             tab.quick_pending_delete = None;
@@ -1015,7 +1019,11 @@ impl SashaApp {
             return;
         };
         match tab.state.markers.set(entry_id, &name, color) {
-            Ok(()) => self.close_marker_editor(cx),
+            Ok(()) => {
+                // A confirmation armed before the list emptied must not reappear for new markers.
+                tab.marker_pending_clear = false;
+                self.close_marker_editor(cx);
+            }
             Err(err) => {
                 if let Some(editor) = &mut self.marker_editor {
                     editor.error = Some(tr_shared(locale, err.locale_key()));
@@ -3472,7 +3480,9 @@ impl Render for SashaApp {
                 .collect()
         };
         let marker_collapsed = self.active_tab().marker_collapsed;
-        let marker_pending_clear = self.active_tab().marker_pending_clear;
+        // A pending "remove all" confirmation is only shown while there is something to remove.
+        let marker_pending_clear =
+            self.active_tab().marker_pending_clear && !marker_items.is_empty();
         let weak = cx.entity().downgrade();
         let on_marker_toggle = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| {
@@ -3938,7 +3948,10 @@ impl Render for SashaApp {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.marker_editor.is_some()
+                if this
+                    .marker_editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.tab_id == this.active_tab_id)
                     && event.keystroke.key.eq_ignore_ascii_case("escape")
                 {
                     this.close_marker_editor(cx);
