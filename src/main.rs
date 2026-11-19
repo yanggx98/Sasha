@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 mod i18n;
