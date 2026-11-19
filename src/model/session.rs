@@ -137,6 +137,8 @@ pub struct SendDraftState {
     pub display_hex: bool,
     pub send_hex: bool,
     pub line_ending: SendLineEnding,
+    /// Send card folded into a read-only strip (observe mode). Per session, not persisted.
+    pub collapsed: bool,
 }
 
 impl Default for SendDraftState {
@@ -146,6 +148,7 @@ impl Default for SendDraftState {
             display_hex: false,
             send_hex: false,
             line_ending: SendLineEnding::None,
+            collapsed: false,
         }
     }
 }
@@ -228,6 +231,7 @@ impl SessionState {
                 display_hex: false,
                 send_hex: false,
                 line_ending: SendLineEnding::None,
+                collapsed: false,
             },
             counters: SessionCounters { rx_bytes, tx_bytes },
             logs: vec![
@@ -635,6 +639,16 @@ mod tests {
                 .action_label()
                 .contains("模拟")
         );
+    }
+
+    #[test]
+    fn send_card_starts_expanded_and_collapse_keeps_draft() {
+        let mut state = SessionState::new_simulated_demo();
+        assert!(!state.send.collapsed);
+        let text = state.send.text.clone();
+        state.send.collapsed = true;
+        assert_eq!(state.send.text, text);
+        assert!(!SendDraftState::default().collapsed);
     }
 
     #[test]

@@ -2277,6 +2277,22 @@ impl SashaApp {
         cx.notify();
     }
 
+    /// Folds the send card into a read-only strip (observe mode) or restores it.
+    /// Collapsing moves focus to the log; expanding focuses the input.
+    pub fn toggle_send_collapsed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let collapsed = {
+            let tab = self.active_tab_mut();
+            tab.state.send.collapsed = !tab.state.send.collapsed;
+            tab.state.send.collapsed
+        };
+        if collapsed {
+            self.active_tab().log_focus.clone().focus(window, cx);
+        } else if let Some(input) = self.active_tab().send_input.clone() {
+            input.update(cx, |state, cx| state.focus(window, cx));
+        }
+        cx.notify();
+    }
+
     pub fn toggle_send_format_hex(&mut self, cx: &mut Context<Self>) {
         let tab = self.active_tab_mut();
         tab.state.toggle_send_format_hex();
@@ -3173,6 +3189,7 @@ impl Render for SashaApp {
         let receive_state = tab.state.receive.clone();
         let simulated_notice = tab.state.simulated_notice_for(locale);
         let send_state = tab.state.send.clone();
+        let send_collapsed = send_state.collapsed;
         let motion = tab.motion;
         let is_connected = tab.state.connection.is_connected();
         let is_simulated = tab.state.is_simulated_session;
@@ -3484,6 +3501,10 @@ impl Render for SashaApp {
             let _ = weak.update(cx, |this, cx| this.toggle_send_display_hex(window, cx));
         });
         let weak = cx.entity().downgrade();
+        let on_tx_collapse = Rc::new(move |window: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.toggle_send_collapsed(window, cx));
+        });
+        let weak = cx.entity().downgrade();
         let on_tx_send_hex = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.toggle_send_format_hex(cx));
         });
@@ -3701,6 +3722,7 @@ impl Render for SashaApp {
                                     on_tx_send_hex,
                                     on_tx_line_ending,
                                 )
+                                .send_collapse(send_collapsed, on_tx_collapse.clone())
                                 .log_filter(filter_open, filter_active, on_rx_filter)
                                 .filter_panel(filter_input.map(|input| LogFilterBar {
                                     theme: surface_theme,
@@ -3721,23 +3743,31 @@ impl Render for SashaApp {
                             )
                             // The send card overlaps the strip's lower edge so the strip reads as
                             // a drawer tucked underneath it.
+                            // When collapsed, the toolbar sits on top and the strip hangs below it.
                             .child(
-                                div().w_full().flex_shrink_0().mt(px(-12.)).child(
-                                    SendCard::new(
-                                        surface_theme,
-                                        locale,
-                                        send_state,
-                                        is_connected,
-                                        is_simulated,
-                                        motion.tx_display_hex,
-                                        motion.connection,
-                                        send_input,
-                                        send_error,
-                                        on_tx_display_hex,
-                                        on_tx_submit,
-                                    )
-                                    .timer(timer_controls),
-                                ),
+                                div()
+                                    .w_full()
+                                    .flex_shrink_0()
+                                    .mt(px(if send_collapsed { 0. } else { -12. }))
+                                    .child(
+                                        SendCard::new(
+                                            surface_theme,
+                                            locale,
+                                            send_state,
+                                            is_connected,
+                                            is_simulated,
+                                            motion.tx_display_hex,
+                                            motion.connection,
+                                            send_input,
+                                            send_error,
+                                            on_tx_display_hex,
+                                            on_tx_submit,
+                                        )
+                                        .timer(timer_controls)
+                                        .when(send_collapsed, |card| {
+                                            card.collapsed(on_tx_collapse)
+                                        }),
+                                    ),
                             )
                             .child(BottomBar::new(
                                 self.theme,

@@ -10,6 +10,7 @@ use crate::model::{ReceiveViewState, SendLineEnding};
 use crate::ui::filter_bar::LogFilterBar;
 use crate::ui::motion::{TOGGLE_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
 use crate::ui::theme::NanoTheme;
+use crate::ui::theme_store::send_card_shadow;
 
 pub type ToolbarActionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -41,6 +42,8 @@ pub struct ReceiveToolbar {
     stream: Option<(bool, SharedString, ToolbarActionCallback)>,
     filter: Option<(bool, bool, ToolbarActionCallback)>,
     filter_panel: Option<LogFilterBar>,
+    /// `(collapsed, callback)`: fold/unfold toggle for the send card, shown at the right end.
+    send_collapse: Option<(bool, ToolbarActionCallback)>,
 }
 
 impl ReceiveToolbar {
@@ -93,7 +96,13 @@ impl ReceiveToolbar {
             stream: None,
             filter: None,
             filter_panel: None,
+            send_collapse: None,
         }
+    }
+
+    pub fn send_collapse(mut self, collapsed: bool, callback: ToolbarActionCallback) -> Self {
+        self.send_collapse = Some((collapsed, callback));
+        self
     }
 
     pub fn stream_output(
@@ -195,6 +204,9 @@ impl RenderOnce for ReceiveToolbar {
         // Recessed "drawer" strip tucked underneath the send card: inset from the
         // card edges, darker surface, rounded top. The lower part is covered by
         // the send card (which overlaps it via a negative top margin).
+        // Collapsed send card: the toolbar sits on top of the (short) strip instead,
+        // so it only needs a normal bottom padding and a fully rounded drawer.
+        let collapsed = self.send_collapse.as_ref().is_some_and(|(c, _)| *c);
         let strip = h_flex()
             .id("receive-toolbar")
             .w_full()
@@ -202,7 +214,7 @@ impl RenderOnce for ReceiveToolbar {
             .items_center()
             .px_2()
             .pt(px(4.))
-            .pb(px(16.))
+            .pb(px(if collapsed { 4. } else { 16. }))
             .gap_1();
         let locale = self.locale;
         let filter_active = self.filter.as_ref().is_some_and(|(_, active, _)| *active);
@@ -349,16 +361,53 @@ impl RenderOnce for ReceiveToolbar {
                     epoch: self.tx_line_ending_flag.epoch,
                 }),
                 self.on_cycle_line_ending.clone(),
-            ));
-        div().w_full().flex_shrink_0().px_4().child(
-            v_flex()
-                .id("receive-toolbar-drawer")
-                .w_full()
-                .rounded_t(px(10.))
-                .bg(background)
-                .border_1()
-                .border_b_0()
-                .border_color(self.theme.border_card)
+            ))
+            .children(self.send_collapse.as_ref().map(|(collapsed, callback)| {
+                h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .justify_end()
+                    .child(self.icon_tool_button(
+                        "tx-tool-collapse",
+                        if *collapsed {
+                            LucideIcon::ChevronUp
+                        } else {
+                            LucideIcon::ChevronDown
+                        },
+                        tr_shared(
+                            locale,
+                            if *collapsed {
+                                "tooltip.send_expand"
+                            } else {
+                                "tooltip.send_collapse"
+                            },
+                        ),
+                        None,
+                        callback.clone(),
+                    ))
+            }));
+        let drawer = v_flex()
+            .id("receive-toolbar-drawer")
+            .w_full()
+            .bg(background)
+            .border_1()
+            .border_color(self.theme.border_card);
+        let drawer = if collapsed {
+            // The toolbar floats above the strip, so it carries the shadow
+            // (the expanded card's shadow, mirrored downward).
+            let (alpha, y, blur) = send_card_shadow();
+            drawer.rounded(px(10.)).shadow(vec![BoxShadow {
+                color: gpui_kit::black().opacity(alpha),
+                offset: point(px(0.), px(-y)),
+                blur_radius: px(blur),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+        } else {
+            drawer.rounded_t(px(10.)).border_b_0()
+        };
+        let toolbar = div().w_full().flex_shrink_0().px_4().child(
+            drawer
                 .children(self.filter_panel.map(|panel| {
                     div()
                         .w_full()
@@ -368,6 +417,13 @@ impl RenderOnce for ReceiveToolbar {
                         .child(div().h(px(1.)).mt_1().bg(self.theme.border_card))
                 }))
                 .child(tools),
-        )
+        );
+        // Collapsed: the strip below is a later sibling and would paint over the
+        // toolbar's shadow, so paint the toolbar after it (layout is unchanged).
+        if collapsed {
+            deferred(toolbar).into_any_element()
+        } else {
+            toolbar.into_any_element()
+        }
     }
 }

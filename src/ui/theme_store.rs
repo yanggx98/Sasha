@@ -163,8 +163,9 @@ pub fn contrast_foreground(bg: Hsla) -> Hsla {
     }
 }
 
-/// Send-card shadow `(alpha, y_offset_px, blur_px)`. One soft shadow shared by
-/// every theme so dark and light look the same.
+/// Send-area shadow `(alpha, y_offset_px, blur_px)`. One soft shadow shared by
+/// every theme so dark and light look the same. The offset is negative (cast
+/// upward) for the expanded card; the collapsed toolbar mirrors it downward.
 pub fn send_card_shadow() -> (f32, f32, f32) {
     (0.12, -2.0, 8.0)
 }

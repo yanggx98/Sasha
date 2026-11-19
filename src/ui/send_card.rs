@@ -51,6 +51,8 @@ pub struct SendCard {
     on_toggle_display_hex: SendActionCallback,
     on_submit: SendActionCallback,
     timer: Option<TimerControls>,
+    /// Observe mode: render a read-only strip; the callback expands the card again.
+    collapsed: Option<SendActionCallback>,
 }
 
 impl SendCard {
@@ -81,7 +83,13 @@ impl SendCard {
             on_toggle_display_hex,
             on_submit,
             timer: None,
+            collapsed: None,
         }
+    }
+
+    pub fn collapsed(mut self, on_expand: SendActionCallback) -> Self {
+        self.collapsed = Some(on_expand);
+        self
     }
 
     pub fn timer(mut self, timer: TimerControls) -> Self {
@@ -93,6 +101,9 @@ impl SendCard {
 impl RenderOnce for SendCard {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
         let locale = self.locale;
+        if let Some(on_expand) = self.collapsed.clone() {
+            return build_collapsed_strip(&self, locale, on_expand).into_any_element();
+        }
         let (shadow_alpha, shadow_y, shadow_blur) = send_card_shadow();
         let on_toggle_display_hex = self.on_toggle_display_hex.clone();
         let on_submit = self.on_submit.clone();
@@ -208,80 +219,148 @@ impl RenderOnce for SendCard {
             .timer
             .map(|timer| build_timer_row(timer, self.theme, locale, self.connected));
 
-        div().flex_shrink_0().w_full().px_3().pb_1().child(
-            v_flex()
-                .id("floating-send-card")
-                .w_full()
-                .min_h(px(96.))
-                .justify_between()
-                .px_3()
-                .py_2()
-                .gap_1p5()
-                .rounded(px(12.))
-                .bg(self.theme.bg_card)
-                .shadow(vec![BoxShadow {
-                    color: gpui_kit::black().opacity(shadow_alpha),
-                    offset: point(px(0.), px(shadow_y)),
-                    blur_radius: px(shadow_blur),
-                    spread_radius: px(0.),
-                    inset: false,
-                }])
-                .border_1()
-                .border_color(if self.error.is_some() {
-                    self.theme.error_text
-                } else {
-                    self.theme.border_card
-                })
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_start()
-                        .justify_between()
-                        .gap_2()
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                // The card already supplies the content inset;
-                                // cancel the textarea's extra leading padding.
-                                .ml(-Size::default().input_px())
-                                .mt(-Size::default().input_py())
-                                .text_sm()
-                                .text_color(self.theme.text_primary)
-                                .child(
-                                    Textarea::new(&self.input)
-                                        .appearance(false)
-                                        .bordered(false)
-                                        .h(px(52.)),
-                                ),
-                        )
-                        .child(hex_toggle_btn),
-                )
-                .when_some(self.error, |this, err| {
-                    this.child(
-                        div()
-                            .id("send-card-error")
+        div()
+            .flex_shrink_0()
+            .w_full()
+            .px_3()
+            .pb_1()
+            .child(
+                v_flex()
+                    .id("floating-send-card")
+                    .w_full()
+                    .min_h(px(96.))
+                    .justify_between()
+                    .px_3()
+                    .py_2()
+                    .gap_1p5()
+                    .rounded(px(12.))
+                    .bg(self.theme.bg_card)
+                    .shadow(vec![BoxShadow {
+                        color: gpui_kit::black().opacity(shadow_alpha),
+                        offset: point(px(0.), px(shadow_y)),
+                        blur_radius: px(shadow_blur),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                    .border_1()
+                    .border_color(if self.error.is_some() {
+                        self.theme.error_text
+                    } else {
+                        self.theme.border_card
+                    })
+                    .child(
+                        h_flex()
                             .w_full()
-                            .px_2()
-                            .py_1()
-                            .rounded(px(6.))
-                            .bg(self.theme.error_bg)
-                            .text_xs()
-                            .text_color(self.theme.error_text)
-                            .child(err),
+                            .items_start()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    // The card already supplies the content inset;
+                                    // cancel the textarea's extra leading padding.
+                                    .ml(-Size::default().input_px())
+                                    .mt(-Size::default().input_py())
+                                    .text_sm()
+                                    .text_color(self.theme.text_primary)
+                                    .child(
+                                        Textarea::new(&self.input)
+                                            .appearance(false)
+                                            .bordered(false)
+                                            .h(px(52.)),
+                                    ),
+                            )
+                            .child(hex_toggle_btn),
                     )
-                })
-                .child(
-                    h_flex()
-                        .w_full()
-                        .items_center()
-                        .gap_2()
-                        .child(div().flex_1().min_w_0())
-                        .children(timer_row)
-                        .child(submit_btn),
-                ),
-        )
+                    .when_some(self.error, |this, err| {
+                        this.child(
+                            div()
+                                .id("send-card-error")
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .rounded(px(6.))
+                                .bg(self.theme.error_bg)
+                                .text_xs()
+                                .text_color(self.theme.error_text)
+                                .child(err),
+                        )
+                    })
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .child(div().flex_1().min_w_0())
+                            .children(timer_row)
+                            .child(submit_btn),
+                    ),
+            )
+            .into_any_element()
     }
+}
+
+/// One-line read-only strip tucked under the toolbar while the card is collapsed.
+/// Shows a draft summary and a dot while timed send is running; no input or send.
+fn build_collapsed_strip(card: &SendCard, locale: Locale, on_expand: SendActionCallback) -> Div {
+    let theme = card.theme;
+    let text = card.draft.text.as_str();
+    let summary: SharedString = if text.is_empty() {
+        tr_shared(locale, "send.collapsed_empty")
+    } else {
+        let first_line = text.lines().next().unwrap_or_default();
+        format!(
+            "{}{} ({} B)",
+            tr_shared(locale, "send.collapsed_draft"),
+            first_line,
+            text.len()
+        )
+        .into()
+    };
+    let running = card
+        .timer
+        .as_ref()
+        .is_some_and(|t| t.state.mode() == TimerMode::Running);
+    div().flex_shrink_0().w_full().px_6().child(
+        h_flex()
+            .id("floating-send-strip")
+            .w_full()
+            .h(px(24.))
+            .px_3()
+            .gap_2()
+            .items_center()
+            .rounded_b(px(10.))
+            .bg(theme.bg_card)
+            .border_1()
+            .border_t_0()
+            .border_color(if card.error.is_some() {
+                theme.error_text
+            } else {
+                theme.border_card
+            })
+            .cursor_pointer()
+            .text_xs()
+            .text_color(theme.text_muted)
+            .tooltip({
+                let tip = tr_shared(locale, "tooltip.send_expand");
+                move |window, cx| Tooltip::new(tip.clone()).build(window, cx)
+            })
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                cx.stop_propagation();
+                on_expand(window, cx);
+            })
+            .child(div().flex_1().min_w_0().truncate().child(summary))
+            .when(running, |this| {
+                this.child(
+                    div()
+                        .size(px(6.))
+                        .flex_shrink_0()
+                        .rounded_full()
+                        .bg(theme.accent_blue),
+                )
+            }),
+    )
 }
 
 /// Fixed segment widths (px) of the timed-send capsule `[icon | interval | ms]`.
