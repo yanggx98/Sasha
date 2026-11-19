@@ -326,6 +326,8 @@ pub fn theme_message(locale: Locale, message: &ThemeMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn quick_shortcut_hint_uses_the_given_keys() {
         assert_eq!(
@@ -334,8 +336,6 @@ mod tests {
         );
         assert!(quick_shortcut_hint(Locale::ZhCn, "Alt+1").contains("Alt+1"));
     }
-
-    use super::*;
 
     #[test]
     fn locales_resolve_distinct_non_empty_strings_from_toml() {

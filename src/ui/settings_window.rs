@@ -245,6 +245,7 @@ impl SettingsWindow {
     ) -> SharedString {
         match err {
             ShortcutError::NeedsModifier => tr_shared(locale, "shortcuts.err_needs_modifier"),
+            ShortcutError::Reserved => tr_shared(locale, "shortcuts.err_reserved"),
             ShortcutError::InvalidKey if action.is_digit_family() => {
                 tr_shared(locale, "shortcuts.err_digit_family")
             }

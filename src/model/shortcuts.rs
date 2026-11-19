@@ -226,6 +226,8 @@ pub enum ShortcutError {
     NeedsModifier,
     InvalidKey,
     WrongBindingKind,
+    /// Taken by text editing, the system or fixed app behavior (copy, Enter, Esc, F3, Alt+F4).
+    Reserved,
     Conflict(ShortcutAction),
 }
 
@@ -237,6 +239,18 @@ fn clash(a: &Binding, b: &Binding) -> bool {
         (Binding::Chord(c), Binding::Mods(m)) | (Binding::Mods(m), Binding::Chord(c)) => {
             c.mods == *m && digit_of(&c.key).is_some()
         }
+    }
+}
+
+/// Chords that GPUI inputs or the system handle before app shortcuts see them, or that the
+/// app keeps for itself. Binding one would silently misbehave.
+fn is_reserved(chord: &KeyChord) -> bool {
+    let editing_mod = chord.mods.ctrl || chord.mods.platform;
+    match chord.key.as_str() {
+        "enter" | "escape" | "f3" => true,
+        "a" | "c" | "v" | "x" | "z" | "y" => editing_mod,
+        "f4" => chord.mods.alt,
+        _ => false,
     }
 }
 
@@ -258,10 +272,14 @@ fn validate(action: ShortcutAction, binding: Binding) -> Result<Binding, Shortcu
             if !chord.mods.has_primary() {
                 return Err(ShortcutError::NeedsModifier);
             }
-            Ok(Binding::Chord(KeyChord {
+            let chord = KeyChord {
                 mods: chord.mods,
                 key,
-            }))
+            };
+            if is_reserved(&chord) {
+                return Err(ShortcutError::Reserved);
+            }
+            Ok(Binding::Chord(chord))
         }
         _ => Err(ShortcutError::WrongBindingKind),
     }
@@ -372,16 +390,18 @@ impl Shortcuts {
             })
     }
 
-    fn has_clash(&self) -> bool {
-        self.entries
-            .iter()
-            .enumerate()
-            .any(|(i, a)| self.entries[i + 1..].iter().any(|b| clash(a, b)))
+    /// The first pair of entries (by action order) that would both fire for some key press.
+    fn first_clash(&self) -> Option<(usize, usize)> {
+        (0..self.entries.len()).find_map(|i| {
+            (i + 1..self.entries.len())
+                .find(|&j| clash(&self.entries[i], &self.entries[j]))
+                .map(|j| (i, j))
+        })
     }
 
-    /// Builds the table from `[shortcuts]` text. Invalid entries keep their default. An
-    /// entry that clashes with the rest is ignored; if the table still clashes at the end
-    /// (a default now collides with a custom key), everything falls back to the defaults.
+    /// Builds the table from `[shortcuts]` text. Invalid or reserved entries keep their
+    /// default, and so does an entry that clashes with the rest. If a default then collides
+    /// with a custom key, the custom entries involved go back to their defaults too.
     pub fn from_raw(raw: &BTreeMap<String, String>) -> Shortcuts {
         let candidates: Vec<(ShortcutAction, Binding)> = ShortcutAction::ALL
             .into_iter()
@@ -408,11 +428,20 @@ impl Shortcuts {
             }
             processed.push(*action);
         }
-        if table.has_clash() {
-            Shortcuts::default()
-        } else {
-            table
+        // A default can still collide with an accepted custom key. Revert only the custom
+        // entries involved, so unrelated customizations survive.
+        let defaults = Shortcuts::default();
+        while let Some((i, j)) = table.first_clash() {
+            let revert = if table.entries[i] != defaults.entries[i] {
+                i
+            } else if table.entries[j] != defaults.entries[j] {
+                j
+            } else {
+                return defaults;
+            };
+            table.entries[revert] = defaults.entries[revert].clone();
         }
+        table
     }
 
     pub fn to_raw(&self) -> BTreeMap<String, String> {

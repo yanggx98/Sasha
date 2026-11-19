@@ -358,3 +358,62 @@ fn reset_refuses_when_the_default_key_is_taken_by_another_action() {
     s.reset_all();
     assert_eq!(s, Shortcuts::default());
 }
+
+#[test]
+fn set_rejects_keys_reserved_for_editing_and_the_system() {
+    let mut s = Shortcuts::default();
+    let reserved = [
+        chord(CTRL, "c"),
+        chord(CTRL, "v"),
+        chord(CTRL, "x"),
+        chord(CTRL, "a"),
+        chord(CTRL, "z"),
+        chord(CTRL, "y"),
+        chord(CTRL_SHIFT, "z"),
+        chord(CTRL, "enter"),
+        chord(ALT, "enter"),
+        chord(CTRL, "escape"),
+        chord(CTRL, "f3"),
+        chord(ALT, "f3"),
+        chord(ALT, "f4"),
+    ];
+    for binding in reserved {
+        assert_eq!(
+            s.set(ShortcutAction::NewSession, binding.clone()),
+            Err(ShortcutError::Reserved),
+            "{binding:?} should be reserved"
+        );
+    }
+    assert_eq!(s, Shortcuts::default());
+    assert_eq!(s.set(ShortcutAction::NewSession, chord(CTRL, "g")), Ok(()));
+    assert_eq!(s.set(ShortcutAction::NewSession, chord(ALT, "f5")), Ok(()));
+}
+
+#[test]
+fn from_raw_ignores_reserved_keys() {
+    let s = Shortcuts::from_raw(&raw(&[("new_session", "ctrl-v"), ("search", "ctrl-enter")]));
+    assert_eq!(s, Shortcuts::default());
+}
+
+#[test]
+fn a_clash_in_the_file_only_reverts_the_entries_involved() {
+    let s = Shortcuts::from_raw(&raw(&[
+        ("new_session", "ctrl-w"),
+        ("close_session", "ctrl-w"),
+        ("quick_send", "ctrl-alt"),
+        ("search", "ctrl-g"),
+    ]));
+    assert_eq!(
+        s.binding(ShortcutAction::NewSession),
+        Shortcuts::default().binding(ShortcutAction::NewSession)
+    );
+    assert_eq!(
+        s.binding(ShortcutAction::CloseSession),
+        Shortcuts::default().binding(ShortcutAction::CloseSession)
+    );
+    assert_eq!(
+        s.binding(ShortcutAction::QuickSend),
+        Binding::Mods(CTRL_ALT)
+    );
+    assert_eq!(s.binding(ShortcutAction::Search), chord(CTRL, "g"));
+}

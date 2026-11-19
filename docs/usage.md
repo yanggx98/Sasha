@@ -146,13 +146,14 @@ every row. Changes apply immediately and are saved in `config.toml`.
 | Close session | `Ctrl+W` | The whole key |
 | Next session | `Ctrl+Tab` | The whole key |
 | Previous session | `Ctrl+Shift+Tab` | The whole key |
-| Open log search | `Ctrl+F` (`Cmd+F` on macOS) | The whole key |
+| Open log search | `Ctrl+F` | The whole key |
 | Jump to session 1–9 | `Ctrl+1` … `Ctrl+9` | The modifier keys only |
 | Send quick command 1–9 | `Alt+1` … `Alt+9` | The modifier keys only |
 
 For the two 1–9 rows, press the modifier keys together with any digit, for example
-`Ctrl+Alt+1`; only the modifiers are kept. `Ctrl+9` jumps to the last session. Copy
-(`Ctrl+C`), `F3`, `Esc` and `Enter` are fixed.
+`Ctrl+Alt+1`; only the modifiers are kept. `Ctrl+9` jumps to the last session. Keys used
+by editing and the system are reserved and refused: `Enter`, `Esc`, `F3`, `Alt+F4`, and
+`Ctrl`/`Cmd` with `A`, `C`, `V`, `X`, `Z` or `Y`.
 
 Rules: a shortcut needs `Ctrl`, `Alt` or `Cmd` (Shift alone is not enough), and two actions
 cannot share a key. A key that is already taken is refused and the message names the action
@@ -171,8 +172,9 @@ quick_send = "ctrl-alt"
 
 Values are lower-case and joined with `-`; the last part of a single key is the key name
 (`t`, `tab`, `f3`), and the 1–9 rows hold only modifiers (`ctrl`, `alt`, `shift`, `cmd`).
-A missing, invalid or clashing entry keeps its default; if the file as a whole cannot be
-made consistent, all shortcuts fall back to the defaults. Other settings are not affected.
+A missing, invalid, reserved or clashing entry keeps its default. If a default then collides
+with one of your custom keys, those custom entries go back to their defaults as well; the rest
+is kept. Other settings are not affected.
 
 ## Command line
 
