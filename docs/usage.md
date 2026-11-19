@@ -36,10 +36,12 @@ matches the displayed text; HEX mode matches the displayed space-separated HEX
 text: `AA 55` matches those displayed bytes, while `AA55` does not. Regex operates
 on that same text, not raw bytes. Changing text/HEX mode reapplies the filter.
 An invalid or overly complex regex shows an error and keeps the complete last
-valid filter active, including for new data. The count shows visible / cached
-entries. `↺` resets the direction and all content options and takes effect
-immediately. While a filter is active, the filter button on the toolbar is highlighted
-and shows a small dot. The filter remains active when the drawer is collapsed.
+valid filter active, including for new data. `↺` resets the direction and all content options and takes effect
+immediately. While a filter is active, an accent-colored frame wraps the main area (not the status bar): its top
+edge (where the title bar sits) shows "Filter mode" with how many entries are filtered out
+and how many are shown, and the content shrinks into the frame (with a short transition of
+about 0.2 s when the filter is switched on or off); the filter button on the toolbar is also
+highlighted with a small dot. The filter remains active when the drawer is collapsed.
 
 Filters belong to each session and survive tab switches, but are not saved across
 app restarts. Search, selection copying and Save operate on filtered entries.
@@ -159,7 +161,13 @@ locale = "en-US"
 log_font_size = 14
 stream_output_scope = "future_only" # or "current_buffer_and_future"
 theme = "dark"                # built-in id or a file in themes/
+filter_frame_effects = true   # breathing glow and flowing highlight on the filter frame
 ```
+
+The filter frame has two effects by default: the whole frame slowly brightens and dims
+(breathing), and a glow keeps rising through it from bottom to top (flow). They run only
+while a filter is on. Turn them off in **Settings → View → Filter Frame Effects**
+to keep the frame still, which also stops the continuous redraws.
 
 Supported locale values are `en-US` and `zh-CN`; the default is `zh-CN`.
 The log font size presets are 12, 13, 14, and 15 logical pixels.

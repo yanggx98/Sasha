@@ -93,6 +93,10 @@ pub struct AppConfig {
     /// Check GitHub Releases for a newer version once at startup.
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
+    /// Animate the log filter's accent frame (breathing glow and a flowing highlight).
+    /// Off keeps the frame still, which also stops the continuous redraws.
+    #[serde(default = "default_filter_frame_effects")]
+    pub filter_frame_effects: bool,
     /// Keyboard shortcut bindings, stored as the `[shortcuts]` table.
     #[serde(
         default,
@@ -117,6 +121,7 @@ impl Default for AppConfig {
             quick_commands: Vec::new(),
             timer_interval_ms: DEFAULT_TIMER_INTERVAL_MS,
             auto_check_updates: true,
+            filter_frame_effects: true,
             shortcuts: Shortcuts::default(),
         }
     }
@@ -174,6 +179,10 @@ fn default_log_buffer_limit() -> u32 {
 }
 
 fn default_auto_check_updates() -> bool {
+    true
+}
+
+fn default_filter_frame_effects() -> bool {
     true
 }
 
@@ -935,6 +944,24 @@ timer_interval_ms = 1
             !ConfigStore::load_from_path(path)
                 .config()
                 .auto_check_updates
+        );
+    }
+
+    #[test]
+    fn filter_frame_effects_defaults_on_and_roundtrips() {
+        let dir = TempDir::new("filter-frame-effects");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert!(store.config().filter_frame_effects);
+
+        store
+            .update(|cfg| cfg.filter_frame_effects = false)
+            .unwrap();
+        assert!(
+            !ConfigStore::load_from_path(path)
+                .config()
+                .filter_frame_effects
         );
     }
 

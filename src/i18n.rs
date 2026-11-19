@@ -45,12 +45,20 @@ pub fn tr_shared(locale: Locale, key: &'static str) -> SharedString {
     tr(locale, key).into()
 }
 
-pub fn filter_count_label(locale: Locale, visible: usize, total: usize) -> SharedString {
+/// Text of the banner shown while a log filter is on: `hidden` entries are filtered out
+/// of `total` cached ones, leaving `visible`.
+pub fn filter_banner_label(
+    locale: Locale,
+    visible: usize,
+    total: usize,
+    hidden: usize,
+) -> SharedString {
     rust_i18n::t!(
-        "filter.count",
+        "filter.banner",
         locale = locale.code(),
         visible = visible,
-        total = total
+        total = total,
+        hidden = hidden
     )
     .into_owned()
     .into()
@@ -364,12 +372,12 @@ mod tests {
     #[test]
     fn dynamic_helpers_format_for_each_locale() {
         assert_eq!(
-            filter_count_label(Locale::ZhCn, 12, 50).as_str(),
-            "显示 12 条，共缓存 50 条"
+            filter_banner_label(Locale::ZhCn, 12, 50, 38).as_str(),
+            "过滤模式 · 已过滤 38 条 · 显示 12 / 50 条"
         );
         assert_eq!(
-            filter_count_label(Locale::EnUs, 12, 50).as_str(),
-            "Showing 12 of 50 cached entries"
+            filter_banner_label(Locale::EnUs, 12, 50, 38).as_str(),
+            "Filter mode · 38 filtered out · showing 12 of 50"
         );
         assert_eq!(picker_apply_value(Locale::ZhCn, "9600"), "应用输入值: 9600");
         assert_eq!(

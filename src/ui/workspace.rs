@@ -42,7 +42,11 @@ use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
-use crate::ui::filter_bar::{FilterControl, LogFilterBar};
+use crate::ui::filter_bar::{
+    FILTER_FRAME_RADIUS, FILTER_FRAME_SIDE, FILTER_FRAME_TOP, FILTER_FRAME_TRANSITION_MS,
+    FilterControl, FilterFrameFx, FilterFrameLabel, FrameTransition, LogFilterBar,
+    animate_content_corners, animate_frame_inset,
+};
 use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::marker_editor::{
     MARKER_EDITOR_HEIGHT, MARKER_EDITOR_WIDTH, MarkerEditor, MarkerEditorState,
@@ -124,6 +128,12 @@ struct SessionTab {
     row_hint_key: Option<(usize, u16)>,
     log_filter: LogFilterState,
     log_projection: LogProjection,
+    /// Whether the filter frame was drawn as on when this tab was last shown.
+    frame_shown: bool,
+    /// Bumped each time the frame switches on or off while this tab is on screen.
+    frame_key: u64,
+    /// When that last happened; the transition plays only for a moment after it.
+    frame_changed_at: Option<Instant>,
     filter_input: Option<Entity<InputState>>,
     filter_input_display: Option<(Locale, bool)>,
     _filter_subscription: Option<Subscription>,
@@ -211,6 +221,9 @@ impl SessionTab {
             row_hint_key: None,
             log_filter: LogFilterState::default(),
             log_projection: LogProjection::default(),
+            frame_shown: false,
+            frame_key: 0,
+            frame_changed_at: None,
             filter_input: None,
             filter_input_display: None,
             _filter_subscription: None,
@@ -552,6 +565,11 @@ pub struct SashaApp {
     /// The log-marker form, open for at most one entry at a time.
     marker_editor: Option<MarkerEditorState>,
     _marker_editor_subscription: Option<Subscription>,
+    /// The filter frame's animated effects, created the first time they are needed.
+    filter_frame_fx: Option<Entity<FilterFrameFx>>,
+    /// The tab the filter frame was last drawn for, to tell a filter being switched on or off
+    /// from a switch to another tab.
+    last_frame_tab: Option<u64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -656,6 +674,8 @@ impl SashaApp {
             cached_bg_image: None,
             marker_editor: None,
             _marker_editor_subscription: None,
+            filter_frame_fx: None,
+            last_frame_tab: None,
         }
     }
 
@@ -1591,6 +1611,66 @@ impl SashaApp {
             self.disconnect_real_serial(None, cx);
         } else {
             self.connect_real_serial(cx);
+        }
+    }
+
+    /// Works out how to draw the filter frame for the visible tab: whether it is mounted at all
+    /// and whether it is mid-transition.
+    ///
+    /// A transition plays only when the filter is switched on or off while this tab is on screen;
+    /// arriving at a tab that already has a filter on just shows the frame.
+    fn frame_state(
+        &mut self,
+        tab_id: u64,
+        filter_on: bool,
+        cx: &mut Context<Self>,
+    ) -> (bool, Option<FrameTransition>) {
+        let same_tab = self.last_frame_tab.replace(tab_id) == Some(tab_id);
+        let now = Instant::now();
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return (filter_on, None);
+        };
+        let window = Duration::from_millis(FILTER_FRAME_TRANSITION_MS + 120);
+        if tab.frame_shown != filter_on {
+            tab.frame_shown = filter_on;
+            if same_tab {
+                tab.frame_key += 1;
+                tab.frame_changed_at = Some(now);
+                // Nothing else redraws once a leaving frame has finished, so ask for it.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(window).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+        }
+        let animating = tab
+            .frame_changed_at
+            .is_some_and(|at| now.duration_since(at) < window);
+        let transition = animating.then_some(FrameTransition {
+            key: (tab_id << 32) | (tab.frame_key & 0xFFFF_FFFF),
+            entering: filter_on,
+        });
+        // A leaving frame stays mounted until its transition has run.
+        (filter_on || animating, transition)
+    }
+
+    /// The frame's effects view, kept in step with the theme's accent.
+    fn ensure_filter_frame_fx(
+        &mut self,
+        accent: Hsla,
+        cx: &mut Context<Self>,
+    ) -> Entity<FilterFrameFx> {
+        match &self.filter_frame_fx {
+            Some(fx) => {
+                fx.update(cx, |fx, cx| fx.set_accent(accent, cx));
+                fx.clone()
+            }
+            None => {
+                let fx = cx.new(|_| FilterFrameFx::new(accent));
+                self.filter_frame_fx = Some(fx.clone());
+                fx
+            }
         }
     }
 
@@ -3517,6 +3597,11 @@ impl Render for SashaApp {
             tab.log_selection.observe_log_len(log_len);
             tab.sync_log_list_state(log_font_size);
         }
+        let frame_fx_enabled = self.config_store.read(cx).config().filter_frame_effects;
+        let filter_on = self.active_tab().log_filter.is_active();
+        let frame_fx = (filter_on && frame_fx_enabled)
+            .then(|| self.ensure_filter_frame_fx(surface_theme.accent_blue, cx));
+        let (frame_mounted, frame_transition) = self.frame_state(active_id, filter_on, cx);
         let send_input = self.ensure_send_input(active_id, window, cx);
         let timer_input = self.ensure_timer_input(active_id, window, cx);
         let timer_draft_pending = {
@@ -4205,138 +4290,198 @@ impl Render for SashaApp {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(
+                            .child(animate_frame_inset(
+                                // Everything above the status bar. While filtering it sits on
+                                // an accent fill whose top edge (the title bar band) carries the
+                                // filter summary; the content on top has four rounded corners,
+                                // so the fill shows through at each. The status bar stays outside
+                                // the frame.
                                 v_flex()
-                                    .id("receive-area")
+                                    .id("workspace-frame")
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
                                     .w_full()
-                                    .child(LogView::new(
-                                        self.theme,
-                                        locale,
-                                        logs,
-                                        receive_state.clone(),
-                                        simulated_notice.into(),
-                                        log_font_size,
-                                        log_focus,
-                                        log_list_state,
-                                        search_matches,
-                                        active_search_match,
-                                        markers,
-                                        on_mark,
-                                        on_jump,
-                                        on_disable_auto_scroll,
-                                    ))
-                                    .when_some(search_input, |this, input| {
-                                        this.child(
-                                            div().absolute().bottom(px(8.)).right(px(20.)).child(
-                                                LogSearchBar::new(
-                                                    self.theme,
+                                    .when(frame_mounted, |this| {
+                                        // With effects on, the fx view paints the accent fill
+                                        // itself (it has to animate it); otherwise it is static.
+                                        // The fill goes first so the label and content sit on it.
+                                        this.when(frame_fx.is_none(), |this| {
+                                            this.bg(surface_theme.accent_blue)
+                                        })
+                                        .rounded_tl(px(FILTER_FRAME_RADIUS))
+                                        .pt(px(FILTER_FRAME_TOP))
+                                        .px(px(FILTER_FRAME_SIDE))
+                                        .pb(px(FILTER_FRAME_SIDE))
+                                        .children(frame_fx)
+                                        .child(
+                                            FilterFrameLabel {
+                                                theme: surface_theme,
+                                                locale,
+                                                visible: filter_visible,
+                                                total: filter_total,
+                                            },
+                                        )
+                                    })
+                                    .child(animate_content_corners(
+                                        v_flex()
+                                            .id("workspace-content")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .w_full()
+                                            .when(frame_mounted, |this| {
+                                                this.bg(surface_theme.bg_canvas)
+                                                    .rounded(px(FILTER_FRAME_RADIUS))
+                                            })
+                                            .child(
+                                                v_flex()
+                                                    .id("receive-area")
+                                                    .relative()
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .w_full()
+                                                    .child(LogView::new(
+                                                        self.theme,
+                                                        locale,
+                                                        logs,
+                                                        receive_state.clone(),
+                                                        simulated_notice.into(),
+                                                        log_font_size,
+                                                        log_focus,
+                                                        log_list_state,
+                                                        search_matches,
+                                                        active_search_match,
+                                                        markers,
+                                                        on_mark,
+                                                        on_jump,
+                                                        on_disable_auto_scroll,
+                                                    ))
+                                                    .when_some(search_input, |this, input| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .bottom(px(8.))
+                                                                .right(px(20.))
+                                                                .child(LogSearchBar::new(
+                                                                    self.theme,
+                                                                    locale,
+                                                                    input,
+                                                                    search_count_label,
+                                                                    search_has_matches,
+                                                                    on_search_prev,
+                                                                    on_search_next,
+                                                                    on_search_close,
+                                                                )),
+                                                        )
+                                                    }),
+                                            )
+                                            .children(stream_error.map(|error| {
+                                                div()
+                                                    .px_4()
+                                                    .text_xs()
+                                                    .text_color(self.theme.text_primary)
+                                                    .child(format!(
+                                                        "{}: {}",
+                                                        tr(locale, "stream.error"),
+                                                        error
+                                                    ))
+                                            }))
+                                            .children(save_log_error.map(|error| {
+                                                div()
+                                                    .px_4()
+                                                    .text_xs()
+                                                    .text_color(self.theme.text_primary)
+                                                    .child(format!(
+                                                        "{}: {}",
+                                                        tr(locale, "stream.save_log_error"),
+                                                        error
+                                                    ))
+                                            }))
+                                            .child(
+                                                ReceiveToolbar::new(
+                                                    surface_theme,
                                                     locale,
-                                                    input,
-                                                    search_count_label,
-                                                    search_has_matches,
-                                                    on_search_prev,
-                                                    on_search_next,
-                                                    on_search_close,
+                                                    receive_state,
+                                                    send_state.send_hex,
+                                                    send_state.line_ending,
+                                                    search_open,
+                                                    motion.rx_hex,
+                                                    motion.rx_timestamp,
+                                                    motion.rx_pause,
+                                                    motion.rx_auto_scroll,
+                                                    motion.tx_send_hex,
+                                                    motion.tx_line_ending,
+                                                    on_rx_hex,
+                                                    on_rx_timestamp,
+                                                    on_rx_pause,
+                                                    on_rx_auto_scroll,
+                                                    on_rx_clear,
+                                                    on_rx_save,
+                                                    on_rx_search,
+                                                    on_tx_send_hex,
+                                                    on_tx_line_ending,
+                                                )
+                                                .search_shortcut(search_keys.clone())
+                                                .send_collapse(
+                                                    send_collapsed,
+                                                    on_tx_collapse.clone(),
+                                                )
+                                                .log_filter(
+                                                    filter_open,
+                                                    filter_active,
+                                                    on_rx_filter,
+                                                )
+                                                .filter_panel(filter_input.map(|input| {
+                                                    LogFilterBar {
+                                                        theme: surface_theme,
+                                                        locale,
+                                                        input,
+                                                        filter: filter_draft,
+                                                        invalid: filter_invalid,
+                                                        pending: filter_pending,
+                                                        on_control: on_filter_control,
+                                                    }
+                                                }))
+                                                .stream_output(
+                                                    stream_active,
+                                                    stream_tooltip,
+                                                    on_rx_stream,
                                                 ),
+                                            )
+                                            // The send card overlaps the strip's lower edge so the strip reads as
+                                            // a drawer tucked underneath it.
+                                            // When collapsed, the toolbar sits on top and the strip hangs below it.
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .flex_shrink_0()
+                                                    .mt(px(if send_collapsed { 0. } else { -12. }))
+                                                    // Lifts the card off the status bar's divider.
+                                                    .mb(px(8.))
+                                                    .child(
+                                                        SendCard::new(
+                                                            surface_theme,
+                                                            locale,
+                                                            send_state,
+                                                            is_connected,
+                                                            is_simulated,
+                                                            motion.tx_display_hex,
+                                                            motion.connection,
+                                                            send_input,
+                                                            send_error,
+                                                            on_tx_display_hex,
+                                                            on_tx_submit,
+                                                        )
+                                                        .timer(timer_controls)
+                                                        .when(send_collapsed, |card| {
+                                                            card.collapsed(on_tx_collapse)
+                                                        }),
+                                                    ),
                                             ),
-                                        )
-                                    }),
-                            )
-                            .children(stream_error.map(|error| {
-                                div()
-                                    .px_4()
-                                    .text_xs()
-                                    .text_color(self.theme.text_primary)
-                                    .child(format!("{}: {}", tr(locale, "stream.error"), error))
-                            }))
-                            .children(save_log_error.map(|error| {
-                                div()
-                                    .px_4()
-                                    .text_xs()
-                                    .text_color(self.theme.text_primary)
-                                    .child(format!(
-                                        "{}: {}",
-                                        tr(locale, "stream.save_log_error"),
-                                        error
-                                    ))
-                            }))
-                            .child(
-                                ReceiveToolbar::new(
-                                    surface_theme,
-                                    locale,
-                                    receive_state,
-                                    send_state.send_hex,
-                                    send_state.line_ending,
-                                    search_open,
-                                    motion.rx_hex,
-                                    motion.rx_timestamp,
-                                    motion.rx_pause,
-                                    motion.rx_auto_scroll,
-                                    motion.tx_send_hex,
-                                    motion.tx_line_ending,
-                                    on_rx_hex,
-                                    on_rx_timestamp,
-                                    on_rx_pause,
-                                    on_rx_auto_scroll,
-                                    on_rx_clear,
-                                    on_rx_save,
-                                    on_rx_search,
-                                    on_tx_send_hex,
-                                    on_tx_line_ending,
-                                )
-                                .search_shortcut(search_keys.clone())
-                                .send_collapse(send_collapsed, on_tx_collapse.clone())
-                                .log_filter(filter_open, filter_active, on_rx_filter)
-                                .filter_panel(filter_input.map(|input| LogFilterBar {
-                                    theme: surface_theme,
-                                    locale,
-                                    input,
-                                    filter: filter_draft,
-                                    invalid: filter_invalid,
-                                    pending: filter_pending,
-                                    visible: filter_visible,
-                                    total: filter_total,
-                                    on_control: on_filter_control,
-                                }))
-                                .stream_output(
-                                    stream_active,
-                                    stream_tooltip,
-                                    on_rx_stream,
-                                ),
-                            )
-                            // The send card overlaps the strip's lower edge so the strip reads as
-                            // a drawer tucked underneath it.
-                            // When collapsed, the toolbar sits on top and the strip hangs below it.
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex_shrink_0()
-                                    .mt(px(if send_collapsed { 0. } else { -12. }))
-                                    // Lifts the card off the status bar's divider.
-                                    .mb(px(8.))
-                                    .child(
-                                        SendCard::new(
-                                            surface_theme,
-                                            locale,
-                                            send_state,
-                                            is_connected,
-                                            is_simulated,
-                                            motion.tx_display_hex,
-                                            motion.connection,
-                                            send_input,
-                                            send_error,
-                                            on_tx_display_hex,
-                                            on_tx_submit,
-                                        )
-                                        .timer(timer_controls)
-                                        .when(send_collapsed, |card| {
-                                            card.collapsed(on_tx_collapse)
-                                        }),
-                                    ),
-                            )
+                                        frame_transition,
+                                    )),
+                                frame_transition,
+                            ))
                             .child(BottomBar::new(
                                 self.theme,
                                 locale,
