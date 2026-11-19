@@ -3,6 +3,7 @@
 pub mod args;
 pub mod exit;
 pub mod matcher;
+pub mod monitor;
 pub mod send;
 pub mod session;
 
@@ -44,6 +45,7 @@ where
             exit::CliExit::Ok
         }
         args::Command::Send(send) => send::run_send(send, out, err),
+        args::Command::Monitor(monitor) => monitor::run_monitor(monitor, out, err),
         _ => {
             let _ = writeln!(err, "error: this command is not implemented yet");
             exit::CliExit::Failure

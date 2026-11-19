@@ -75,6 +75,21 @@ pub struct SendArgs {
 pub struct MonitorArgs {
     #[command(flatten)]
     pub serial: SerialArgs,
+    /// Stop after this many milliseconds
+    #[arg(long)]
+    pub duration: Option<u64>,
+    /// Stop as soon as the received data matches this regex
+    #[arg(long)]
+    pub until: Option<String>,
+    /// Print received bytes as hex
+    #[arg(long)]
+    pub hex: bool,
+    /// Prefix each line with a timestamp
+    #[arg(long)]
+    pub timestamp: bool,
+    /// One JSON object per received chunk
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
