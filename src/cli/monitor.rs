@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::model::current_timestamp_hms_ms;
-use crate::session_service::{RxRecvError, SessionService};
+use crate::session_service::{RxRecvError, RxSubscriber};
 
 use super::args::MonitorArgs;
 use super::exit::{CliError, CliExit};
@@ -103,6 +103,8 @@ pub enum MonitorEnd {
     Matched,
     Interrupted,
     Disconnected(String),
+    /// Something other than the port went wrong, e.g. the receive buffer overflowed.
+    Failed(String),
 }
 
 pub struct MonitorOptions {
@@ -112,17 +114,14 @@ pub struct MonitorOptions {
 }
 
 /// Streams received data through `emit` until one of the end conditions is reached.
+///
+/// The subscriber is passed in so it can be created before the first byte can arrive.
 pub fn monitor_flow(
-    service: &SessionService,
-    generation: u64,
+    subscriber: &RxSubscriber,
     opts: &mut MonitorOptions,
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
 ) -> MonitorEnd {
-    let subscriber = match service.subscribe_rx(generation) {
-        Ok(subscriber) => subscriber,
-        Err(err) => return MonitorEnd::Disconnected(err.to_string()),
-    };
     let deadline = opts.duration.map(|d| Instant::now() + d);
     let finish = |opts: &mut MonitorOptions, emit: &mut dyn FnMut(String), end: MonitorEnd| {
         for line in opts.formatter.finish(&current_timestamp_hms_ms()) {
@@ -161,7 +160,7 @@ pub fn monitor_flow(
                 return finish(opts, emit, MonitorEnd::Disconnected(reason));
             }
             Err(err @ RxRecvError::Overflow { .. }) => {
-                return finish(opts, emit, MonitorEnd::Disconnected(err.to_string()));
+                return finish(opts, emit, MonitorEnd::Failed(err.to_string()));
             }
         }
     }
@@ -173,6 +172,7 @@ pub fn exit_for(end: &MonitorEnd, had_until: bool) -> CliExit {
         MonitorEnd::Duration if had_until => CliExit::Timeout,
         MonitorEnd::Duration | MonitorEnd::Matched | MonitorEnd::Interrupted => CliExit::Ok,
         MonitorEnd::Disconnected(_) => CliExit::OpenFailed,
+        MonitorEnd::Failed(_) => CliExit::Failure,
     }
 }
 
@@ -211,22 +211,16 @@ fn monitor_once(
     // keeps its default behaviour of ending the process.
     let _ = ctrlc::set_handler(move || handler_stop.store(true, Ordering::SeqCst));
 
-    let session = LiveSession::open(&config)?;
+    let (session, subscriber) = LiveSession::open_with_rx(&config)?;
     let mut write_failed = false;
-    let end = monitor_flow(
-        &session.service,
-        session.generation,
-        &mut opts,
-        &stop,
-        &mut |line| {
-            if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
-                write_failed = true;
-                stop.store(true, Ordering::SeqCst);
-            }
-        },
-    );
+    let end = monitor_flow(&subscriber, &mut opts, &stop, &mut |line| {
+        if writeln!(out, "{line}").and_then(|()| out.flush()).is_err() {
+            write_failed = true;
+            stop.store(true, Ordering::SeqCst);
+        }
+    });
     session.close();
-    if let MonitorEnd::Disconnected(reason) = &end {
+    if let MonitorEnd::Disconnected(reason) | MonitorEnd::Failed(reason) = &end {
         let _ = writeln!(err, "error: {reason}");
     }
     if write_failed {
@@ -238,7 +232,7 @@ fn monitor_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session_service::PortWriter;
+    use crate::session_service::{PortWriter, SessionService};
     use std::thread;
 
     struct NullWriter;
@@ -253,6 +247,10 @@ mod tests {
         let service = Arc::new(SessionService::new());
         let generation = service.attach_writer(NullWriter);
         (service, generation)
+    }
+
+    fn subscribed(service: &SessionService, generation: u64) -> RxSubscriber {
+        service.subscribe_rx(generation).unwrap()
     }
 
     fn options(duration: Option<u64>, until: Option<&str>) -> MonitorOptions {
@@ -302,9 +300,9 @@ mod tests {
     fn monitor_flow_stops_after_duration() {
         let (service, generation) = connected();
         let started = Instant::now();
+        let subscriber = subscribed(&service, generation);
         let end = monitor_flow(
-            &service,
-            generation,
+            &subscriber,
             &mut options(Some(200), None),
             &AtomicBool::new(false),
             &mut |_| {},
@@ -324,9 +322,9 @@ mod tests {
             })
         };
         let mut lines = Vec::new();
+        let subscriber = subscribed(&service, generation);
         let end = monitor_flow(
-            &service,
-            generation,
+            &subscriber,
             &mut options(Some(5000), Some("READY")),
             &AtomicBool::new(false),
             &mut |line| lines.push(line),
@@ -346,9 +344,9 @@ mod tests {
                 service.disconnect(Some("unplugged".into()));
             })
         };
+        let subscriber = subscribed(&service, generation);
         let end = monitor_flow(
-            &service,
-            generation,
+            &subscriber,
             &mut options(None, None),
             &AtomicBool::new(false),
             &mut |_| {},
@@ -368,15 +366,43 @@ mod tests {
                 stop.store(true, Ordering::SeqCst);
             })
         };
-        let end = monitor_flow(
-            &service,
-            generation,
-            &mut options(None, None),
-            &stop,
-            &mut |_| {},
-        );
+        let subscriber = subscribed(&service, generation);
+        let end = monitor_flow(&subscriber, &mut options(None, None), &stop, &mut |_| {});
         setter.join().unwrap();
         assert_eq!(end, MonitorEnd::Interrupted);
+    }
+
+    #[test]
+    fn monitor_flow_sees_data_published_before_it_starts() {
+        let (service, generation) = connected();
+        let subscriber = subscribed(&service, generation);
+        service.publish_rx(generation, b"early banner\r\n");
+        let mut lines = Vec::new();
+        let end = monitor_flow(
+            &subscriber,
+            &mut options(Some(200), None),
+            &AtomicBool::new(false),
+            &mut |line| lines.push(line),
+        );
+        assert_eq!(end, MonitorEnd::Duration);
+        assert_eq!(lines, vec!["early banner".to_string()]);
+    }
+
+    #[test]
+    fn monitor_flow_reports_receive_overflow_as_a_failure() {
+        let (service, generation) = connected();
+        let subscriber = service.subscribe_rx_with_limits(generation, 1, 4).unwrap();
+        service.publish_rx(generation, b"aaaa");
+        service.publish_rx(generation, b"bbbb");
+        service.publish_rx(generation, b"cccc");
+        let end = monitor_flow(
+            &subscriber,
+            &mut options(Some(500), None),
+            &AtomicBool::new(false),
+            &mut |_| {},
+        );
+        assert!(matches!(end, MonitorEnd::Failed(_)), "end was {end:?}");
+        assert_eq!(exit_for(&end, false), CliExit::Failure);
     }
 
     #[test]

@@ -203,9 +203,11 @@ mod tests {
         Cli::try_parse_from(argv).is_err()
     }
 
+    type Recorded = Arc<Mutex<Vec<Vec<u8>>>>;
+
     /// Records writes and, if asked, signals each write so a test thread can answer at once.
     struct TestWriter {
-        writes: Arc<Mutex<Vec<Vec<u8>>>>,
+        writes: Recorded,
         on_write: Option<Sender<()>>,
     }
 
@@ -219,9 +221,7 @@ mod tests {
         }
     }
 
-    fn connected(
-        on_write: Option<Sender<()>>,
-    ) -> (Arc<SessionService>, u64, Arc<Mutex<Vec<Vec<u8>>>>) {
+    fn connected(on_write: Option<Sender<()>>) -> (Arc<SessionService>, u64, Recorded) {
         let service = Arc::new(SessionService::new());
         let writes = Arc::new(Mutex::new(Vec::new()));
         let generation = service.attach_writer(TestWriter {

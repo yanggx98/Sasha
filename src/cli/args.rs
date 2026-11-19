@@ -177,7 +177,11 @@ impl SerialArgs {
             },
             stop_bits: match self.stop_bits {
                 StopBitsArg::One => StopBits::One,
-                StopBitsArg::OnePointFive => StopBits::OnePointFive,
+                StopBitsArg::OnePointFive => {
+                    return Err(CliError::usage(
+                        "--stop-bits 1.5 is not supported by serial ports; use 1 or 2",
+                    ));
+                }
                 StopBitsArg::Two => StopBits::Two,
             },
             flow_control: match self.flow_control {
@@ -244,6 +248,13 @@ mod tests {
         assert_eq!(config.flow_control, FlowControl::Hardware);
         assert!(config.dtr);
         assert!(config.rts);
+    }
+
+    #[test]
+    fn one_and_a_half_stop_bits_is_a_usage_error() {
+        let args = parse_serial(&["--port", "COM3", "--stop-bits", "1.5"]).unwrap();
+        let err = args.to_config().expect_err("1.5 stop bits is unsupported");
+        assert_eq!(err.exit, super::super::exit::CliExit::Usage);
     }
 
     #[test]

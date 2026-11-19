@@ -7,7 +7,7 @@ use std::thread::{self, JoinHandle};
 use crate::i18n::Locale;
 use crate::model::SerialConfig;
 use crate::serial::{SerialConnection, SerialEvent};
-use crate::session_service::SessionService;
+use crate::session_service::{RxSubscriber, SessionService};
 
 use super::exit::CliError;
 
@@ -39,6 +39,12 @@ pub struct LiveSession {
 impl LiveSession {
     /// Opens the port. Any failure (including a port that is busy) is `CliExit::OpenFailed`.
     pub fn open(config: &SerialConfig) -> Result<LiveSession, CliError> {
+        Self::open_with_rx(config).map(|(session, _rx)| session)
+    }
+
+    /// Like [`LiveSession::open`], also returning a receiver subscribed before the pump
+    /// starts, so no received byte can slip past it.
+    pub fn open_with_rx(config: &SerialConfig) -> Result<(LiveSession, RxSubscriber), CliError> {
         let (mut connection, events) = SerialConnection::open_for(config, Locale::EnUs)
             .map_err(|msg| CliError::open_failed(format!("cannot open {}: {msg}", config.port)))?;
         let writer = connection.take_writer().ok_or_else(|| {
@@ -46,13 +52,19 @@ impl LiveSession {
         })?;
         let service = Arc::new(SessionService::new());
         let generation = service.attach_writer(writer);
+        let subscriber = service
+            .subscribe_rx(generation)
+            .map_err(|err| CliError::open_failed(err.to_string()))?;
         let pump = spawn_pump(Arc::clone(&service), generation, events);
-        Ok(LiveSession {
-            service,
-            generation,
-            connection,
-            pump: Some(pump),
-        })
+        Ok((
+            LiveSession {
+                service,
+                generation,
+                connection,
+                pump: Some(pump),
+            },
+            subscriber,
+        ))
     }
 
     /// Releases the port: stops the writer, closes the connection and joins the pump.

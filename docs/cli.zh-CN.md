@@ -11,7 +11,7 @@ sasha-cli run     <脚本.lua> --port <端口> [串口选项] [--timeout <毫秒
 ```
 
 命令行提示和错误信息只提供英文。正常结果写 stdout，错误和诊断写 stderr。每个命令自己打开串口、
-退出前关闭（`ports` 不打开任何端口）。端口已被其他程序占用（比如已在 Sasha 窗口里打开）时不会重试，
+退出前关闭（`ports` 不打开任何端口）。只有 `monitor` 会优雅处理 `Ctrl+C`；中断 `send` 或 `run` 时进程由系统结束，串口也会被系统释放。端口已被其他程序占用（比如已在 Sasha 窗口里打开）时不会重试，
 直接以退出码 3 失败。
 
 ## 串口选项
@@ -24,7 +24,7 @@ sasha-cli run     <脚本.lua> --port <端口> [串口选项] [--timeout <毫秒
 | `--baud <N>` | `115200` | 大于 0 |
 | `--data-bits <N>` | `8` | `5`–`8` |
 | `--parity <P>` | `none` | `none`、`odd`、`even` |
-| `--stop-bits <N>` | `1` | `1`、`1.5`、`2`（真实串口不支持 1.5） |
+| `--stop-bits <N>` | `1` | `1`、`2`（`1.5` 会按用法错误拒绝） |
 | `--flow-control <F>` | `none` | `none`、`hardware`、`software` |
 | `--dtr` / `--rts` | 低电平 | 写出该选项表示打开时把对应线拉高 |
 
@@ -42,7 +42,7 @@ sasha-cli run     <脚本.lua> --port <端口> [串口选项] [--timeout <毫秒
 | `--hex <HEX>` | 发送十六进制字节，`"AA BB 01"` 或 `"AABB01"`，大小写均可。 |
 | `--line-ending none\|crlf\|lf` | 追加到 `--text` 之后（默认 `none`）。 |
 | `--checksum <算法>` | 给 `--hex` 追加校验：`sum8`、`xor8`、`crc8`、`crc16_modbus`、`crc16_ccitt`、`crc32`。不能与 `--text` 同用。校验范围是给出的全部字节；CRC-16/Modbus 低字节在前，其余多字节校验高字节在前。 |
-| `--expect <正则>` | 发送后等待接收数据匹配该正则。按字节匹配，二进制响应也可以。 |
+| `--expect <正则>` | 发送后等待接收数据匹配该正则。按字节匹配，二进制响应也可以。正则默认按 Unicode 解释，所以 `\xAA` 表示字符 U+00AA；要匹配原始字节，请写 `(?-u:\xAA)`，例如 `--expect '(?-u:\x01\x03)'`。 |
 | `--timeout <毫秒>` | 等待 `--expect` 的时长（默认 `1000`），必须与 `--expect` 一起使用。 |
 | `--json` | 以 JSON 输出结果。 |
 
@@ -69,7 +69,7 @@ sasha-cli send --port COM3 --hex "01 03 00 00 00 0A" --checksum crc16_modbus
 | `--timestamp` | 每行前加 `[HH:MM:SS.mmm]`。 |
 | `--json` | 每个接收块一个 JSON 对象：`{"ts": "...", "direction": "rx", "hex": "...", "text": "..."}`，优先于 `--hex`。 |
 
-文本模式按 `\n` 分行，去掉行尾的 `\r`，结束时把未写完的一行也输出。不设 `--duration` 和 `--until` 时一直监听，
+文本模式下，不是合法 UTF-8 的字节会被替换成 `�`；二进制或非 UTF-8（如 GBK）数据请用 `--hex` 或 `--json`。文本模式按 `\n` 分行，去掉行尾的 `\r`，结束时把未写完的一行也输出。不设 `--duration` 和 `--until` 时一直监听，
 按 `Ctrl+C` 会先关闭串口再以 `0` 退出。监听中设备被拔出时，向 stderr 报错并以 `3` 退出。
 
 ```text

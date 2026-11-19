@@ -134,7 +134,9 @@ mod tests {
     use crate::session_service::PortWriter;
     use std::sync::{Arc, Mutex};
 
-    struct RecordingWriter(Arc<Mutex<Vec<Vec<u8>>>>);
+    type Recorded = Arc<Mutex<Vec<Vec<u8>>>>;
+
+    struct RecordingWriter(Recorded);
 
     impl PortWriter for RecordingWriter {
         fn write_all_and_flush(&mut self, data: &[u8]) -> Result<(), String> {
@@ -143,7 +145,7 @@ mod tests {
         }
     }
 
-    fn connected() -> (Arc<SessionService>, u64, Arc<Mutex<Vec<Vec<u8>>>>) {
+    fn connected() -> (Arc<SessionService>, u64, Recorded) {
         let service = Arc::new(SessionService::new());
         let writes = Arc::new(Mutex::new(Vec::new()));
         let generation = service.attach_writer(RecordingWriter(Arc::clone(&writes)));

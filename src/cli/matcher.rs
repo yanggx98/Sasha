@@ -66,6 +66,18 @@ mod tests {
     }
 
     #[test]
+    fn unicode_off_escapes_match_raw_bytes() {
+        // Documented in docs/cli.md: byte escapes need (?-u) to mean raw bytes.
+        let mut matcher = ExpectMatcher::new(r"(?-u:\x01\x03)").unwrap();
+        assert_eq!(
+            matcher.push(&[0xAA, 0x01, 0x03, 0x04]),
+            Some(vec![0xAA, 0x01, 0x03])
+        );
+        let mut default_mode = ExpectMatcher::new(r"\xAA").unwrap();
+        assert_eq!(default_mode.push(&[0xAA]), None);
+    }
+
+    #[test]
     fn buffer_is_bounded() {
         let mut matcher = ExpectMatcher::new("OK").unwrap();
         let junk = vec![b'x'; 512 * 1024];

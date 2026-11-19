@@ -13,7 +13,8 @@ sasha-cli run     <SCRIPT.lua> --port <PORT> [serial options] [--timeout <MS>]
 
 Messages are in English. Normal results go to stdout; errors and diagnostics go to stderr.
 Every command opens the port itself and closes it before exiting (`ports` does not open
-any port). A port that is already open elsewhere, such as in the Sasha window, is not
+any port). Only `monitor` handles `Ctrl+C` gracefully; if you interrupt `send` or `run`, the
+process is ended by the system, which also releases the port. A port that is already open elsewhere, such as in the Sasha window, is not
 retried: the command fails with exit code 3.
 
 ## Serial options
@@ -26,7 +27,7 @@ Used by `send`, `monitor` and `run`. Defaults match the GUI.
 | `--baud <N>` | `115200` | greater than 0 |
 | `--data-bits <N>` | `8` | `5`–`8` |
 | `--parity <P>` | `none` | `none`, `odd`, `even` |
-| `--stop-bits <N>` | `1` | `1`, `1.5`, `2` (1.5 is rejected by real ports) |
+| `--stop-bits <N>` | `1` | `1`, `2` (`1.5` is rejected as a usage error) |
 | `--flow-control <F>` | `none` | `none`, `hardware`, `software` |
 | `--dtr` / `--rts` | low | present = drive the line high when opening |
 
@@ -45,7 +46,7 @@ Sends once, optionally waits for a response, then exits.
 | `--hex <HEX>` | Send bytes given as hex pairs, `"AA BB 01"` or `"AABB01"`, any case. |
 | `--line-ending none\|crlf\|lf` | Appended to `--text` (default `none`). |
 | `--checksum <ALGO>` | Append a checksum to `--hex`: `sum8`, `xor8`, `crc8`, `crc16_modbus`, `crc16_ccitt`, `crc32`. Not allowed with `--text`. The checksum covers all the bytes given; CRC-16/Modbus is sent low byte first, other multi-byte checksums high byte first. |
-| `--expect <REGEX>` | After sending, wait until the received data matches this regular expression. Works on bytes, so binary responses are fine. |
+| `--expect <REGEX>` | After sending, wait until the received data matches this regular expression. Matches on bytes, so binary responses work. Patterns are Unicode-aware, so `\xAA` means the character U+00AA; to match a raw byte write `(?-u:\xAA)`, e.g. `--expect '(?-u:\x01\x03)'`. |
 | `--timeout <MS>` | How long to wait for `--expect` (default `1000`). Needs `--expect`. |
 | `--json` | Print the result as JSON. |
 
@@ -74,7 +75,7 @@ Listens without sending and prints what arrives.
 | `--timestamp` | Prefix each line with `[HH:MM:SS.mmm]`. |
 | `--json` | One JSON object per chunk: `{"ts": "...", "direction": "rx", "hex": "...", "text": "..."}`. Takes precedence over `--hex`. |
 
-In text mode output is split into lines at `\n`; a trailing `\r` is dropped and an unfinished
+In text mode, bytes that are not valid UTF-8 are replaced with `�`; use `--hex` or `--json` for binary or non-UTF-8 (for example GBK) data. Output is split into lines at `\n`; a trailing `\r` is dropped and an unfinished
 line is printed when the command ends. With neither `--duration` nor `--until`, it listens
 until you press `Ctrl+C`, which closes the port and exits with `0`. If the device is
 unplugged while listening, the command reports it on stderr and exits with `3`.
