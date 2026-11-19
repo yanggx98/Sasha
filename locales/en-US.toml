@@ -302,6 +302,7 @@ start = 'Stream output: choose a file and append logs (current text/HEX format)'
 stop = 'Stop stream output'
 busy = 'Preparing or stopping stream output…'
 error = 'Stream output failed'
+save_log_error = 'Failed to save log'
 
 [flow]
 none = "None"

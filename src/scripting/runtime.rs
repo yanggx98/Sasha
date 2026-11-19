@@ -77,7 +77,10 @@ impl CancellableSleeper {
     }
 
     pub(crate) fn wake(&self) {
-        let mut guard = self.woken.lock().unwrap();
+        let mut guard = self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = true;
         self.condvar.notify_all();
     }
@@ -91,7 +94,10 @@ impl CancellableSleeper {
         generation: u64,
     ) -> Result<(), ScriptAbort> {
         let deadline = deadline_after(duration);
-        let mut guard = self.woken.lock().unwrap();
+        let mut guard = self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if cancel_token.load(Ordering::Acquire) {
                 return Err(ScriptAbort::Cancelled);
@@ -105,7 +111,10 @@ impl CancellableSleeper {
             }
             *guard = false;
             let wait = (deadline - now).min(SLEEP_DISCONNECT_POLL_INTERVAL);
-            let (next_guard, _) = self.condvar.wait_timeout(guard, wait).unwrap();
+            let (next_guard, _) = self
+                .condvar
+                .wait_timeout(guard, wait)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard = next_guard;
         }
     }
@@ -201,13 +210,20 @@ impl ScriptContext {
             message,
         };
         {
-            let mut logs = self.shared.logs.lock().unwrap();
+            let mut logs = self
+                .shared
+                .logs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if logs.len() >= SCRIPT_LOG_MAX_LINES {
                 logs.pop_front();
             }
             logs.push_back(entry.clone());
         }
-        let mut events = self.events.lock().unwrap();
+        let mut events = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if events.len() >= SCRIPT_EVENT_QUEUE_MAX {
             // Shed the oldest log line; lifecycle events are never dropped.
             if let Some(pos) = events
@@ -299,10 +315,15 @@ pub(crate) fn run_script_instance(
     };
 
     {
-        let mut status = shared.status.lock().unwrap();
+        let mut status = shared
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *status = final_status.clone();
     }
-    let mut queue = events.lock().unwrap();
+    let mut queue = events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     queue.push_back(ScriptEvent::StatusChanged {
         run_id: shared.run_id,
         status: final_status,
@@ -361,7 +382,11 @@ fn execute_lua(
 }
 
 fn resolve_stop_reason(shared: &InstanceShared, session_service: &SessionService) -> StopReason {
-    if let Some(reason) = *shared.stop_reason.lock().unwrap() {
+    if let Some(reason) = *shared
+        .stop_reason
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
         return reason;
     }
     if !session_service.is_connected() || session_service.generation() != shared.generation {

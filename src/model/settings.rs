@@ -405,14 +405,45 @@ impl ConfigStore {
     }
 }
 
-/// Resolves the `config.toml` path in the application root directory.
+/// Resolves the `config.toml` path: beside the executable (portable layout), or
+/// `%APPDATA%\Sasha` when the executable's directory is not writable (for example
+/// under `Program Files`) and no config exists there yet.
 pub fn default_config_path() -> PathBuf {
     let base_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
-    base_dir.join(CONFIG_FILE_NAME)
+    let fallback_dir = std::env::var_os("APPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|appdata| PathBuf::from(appdata).join("Sasha"));
+    resolve_config_path(&base_dir, fallback_dir)
+}
+
+fn resolve_config_path(base_dir: &Path, fallback_dir: Option<PathBuf>) -> PathBuf {
+    let preferred = base_dir.join(CONFIG_FILE_NAME);
+    if preferred.exists() || dir_is_writable(base_dir) {
+        return preferred;
+    }
+    match fallback_dir {
+        Some(dir) => dir.join(CONFIG_FILE_NAME),
+        None => preferred,
+    }
+}
+
+fn dir_is_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".sasha-write-test-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn migrate_config(config: &mut AppConfig) {
@@ -679,6 +710,30 @@ mod tests {
         assert_eq!(
             path.file_name().and_then(|n| n.to_str()),
             Some(CONFIG_FILE_NAME)
+        );
+    }
+
+    #[test]
+    fn config_path_prefers_writable_exe_dir_and_falls_back_otherwise() {
+        let dir = TempDir::new("cfg-path");
+        let fallback = dir.file("appdata").join("Sasha");
+
+        // Writable base dir: portable layout wins.
+        assert_eq!(
+            resolve_config_path(&dir.path, Some(fallback.clone())),
+            dir.file(CONFIG_FILE_NAME)
+        );
+
+        // Unwritable (here: nonexistent) base dir and no config: use the fallback.
+        let missing = dir.file("missing");
+        assert_eq!(
+            resolve_config_path(&missing, Some(fallback.clone())),
+            fallback.join(CONFIG_FILE_NAME)
+        );
+        // ...unless there is no fallback.
+        assert_eq!(
+            resolve_config_path(&missing, None),
+            missing.join(CONFIG_FILE_NAME)
         );
     }
 

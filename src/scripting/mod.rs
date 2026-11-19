@@ -170,7 +170,10 @@ impl ScriptManager {
         });
 
         {
-            let mut events = self.events.lock().unwrap();
+            let mut events = self
+                .events
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             events.push_back(ScriptEvent::Started {
                 run_id,
                 path,
@@ -194,7 +197,10 @@ impl ScriptManager {
             })
             .map_err(|err| format!("failed to spawn script thread: {err}"))?;
 
-        let mut instances = self.instances.lock().unwrap();
+        let mut instances = self
+            .instances
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         instances.insert(
             run_id,
             ManagedInstance {
@@ -208,7 +214,10 @@ impl ScriptManager {
 
     /// Requests cancellation of a single active script instance.
     pub fn stop_instance(&mut self, run_id: u64) -> bool {
-        let instances = self.instances.lock().unwrap();
+        let instances = self
+            .instances
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(instance) = instances.get(&run_id) else {
             return false;
         };
@@ -227,21 +236,45 @@ impl ScriptManager {
 
     /// Returns the number of currently active (`Running` or `Stopping`) script instances.
     pub fn running_count(&self) -> usize {
-        let instances = self.instances.lock().unwrap();
+        let instances = self
+            .instances
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         instances
             .values()
-            .filter(|inst| inst.shared.status.lock().unwrap().is_active())
+            .filter(|inst| {
+                inst.shared
+                    .status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_active()
+            })
             .count()
     }
 
     /// Returns snapshots of all known script instances ordered by `run_id`.
     pub fn snapshots(&self) -> Vec<ScriptInstanceSnapshot> {
-        let instances = self.instances.lock().unwrap();
+        let instances = self
+            .instances
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         instances
             .values()
             .map(|inst| {
-                let status = inst.shared.status.lock().unwrap().clone();
-                let logs = inst.shared.logs.lock().unwrap().iter().cloned().collect();
+                let status = inst
+                    .shared
+                    .status
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                let logs = inst
+                    .shared
+                    .logs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .iter()
+                    .cloned()
+                    .collect();
                 ScriptInstanceSnapshot {
                     run_id: inst.shared.run_id,
                     path: inst.shared.path.clone(),
@@ -255,14 +288,20 @@ impl ScriptManager {
 
     /// Drains all buffered [`ScriptEvent`]s since the last call.
     pub fn drain_events(&mut self) -> Vec<ScriptEvent> {
-        let mut events = self.events.lock().unwrap();
+        let mut events = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         events.drain(..).collect()
     }
 
     /// Joins all worker threads that have been spawned by this manager.
     pub fn join_all(&mut self) {
         let handles: Vec<JoinHandle<()>> = {
-            let mut instances = self.instances.lock().unwrap();
+            let mut instances = self
+                .instances
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             instances
                 .values_mut()
                 .filter_map(|inst| inst.thread.take())
@@ -313,11 +352,17 @@ fn request_stop(
     reason: StopReason,
 ) -> bool {
     let transition = {
-        let mut status = shared.status.lock().unwrap();
+        let mut status = shared
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !status.is_active() {
             return false;
         }
-        let mut stop_reason = shared.stop_reason.lock().unwrap();
+        let mut stop_reason = shared
+            .stop_reason
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if stop_reason.is_none() || reason == StopReason::Disconnected {
             *stop_reason = Some(reason);
         }
@@ -334,7 +379,9 @@ fn request_stop(
     shared.rx_subscriber.wake();
 
     if transition {
-        let mut queue = events.lock().unwrap();
+        let mut queue = events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         queue.push_back(ScriptEvent::StatusChanged {
             run_id: shared.run_id,
             status: ScriptStatus::Stopping,
@@ -349,7 +396,9 @@ fn stop_all_instances(
     reason: StopReason,
 ) {
     let shared_list: Vec<Arc<InstanceShared>> = {
-        let guard = instances.lock().unwrap();
+        let guard = instances
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard
             .values()
             .map(|inst| Arc::clone(&inst.shared))

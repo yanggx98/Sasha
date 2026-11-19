@@ -141,6 +141,8 @@ struct SessionTab {
     script_load_error: Option<SharedString>,
     stream_busy: bool,
     stream_error: Option<SharedString>,
+    /// Error from the last "save log" export, shown until the next attempt.
+    save_log_error: Option<SharedString>,
     stream_poll_task: Option<Task<()>>,
 }
 
@@ -226,6 +228,7 @@ impl SessionTab {
             script_load_error: None,
             stream_busy: false,
             stream_error: None,
+            save_log_error: None,
             stream_poll_task: None,
         }
     }
@@ -2227,12 +2230,23 @@ impl SashaApp {
         };
         let suggested_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tab_id = tab.id;
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("sasha-log.txt"));
 
-        cx.spawn(async move |_, _| {
-            if let Ok(Ok(Some(path))) = rx.await {
-                let _ = std::fs::write(&path, content_to_save.as_bytes());
-            }
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = rx.await else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { std::fs::write(&path, content_to_save.as_bytes()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(tab_id) {
+                    tab.save_log_error = result.err().map(|err| err.to_string().into());
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -3993,6 +4007,7 @@ impl Render for SashaApp {
             tr_shared(locale, "stream.start")
         };
         let stream_error = self.active_tab().stream_error.clone();
+        let save_log_error = self.active_tab().save_log_error.clone();
         let weak = cx.entity().downgrade();
         let on_rx_stream = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.toggle_stream_output(cx));
@@ -4236,6 +4251,17 @@ impl Render for SashaApp {
                                     .text_xs()
                                     .text_color(self.theme.text_primary)
                                     .child(format!("{}: {}", tr(locale, "stream.error"), error))
+                            }))
+                            .children(save_log_error.map(|error| {
+                                div()
+                                    .px_4()
+                                    .text_xs()
+                                    .text_color(self.theme.text_primary)
+                                    .child(format!(
+                                        "{}: {}",
+                                        tr(locale, "stream.save_log_error"),
+                                        error
+                                    ))
                             }))
                             .child(
                                 ReceiveToolbar::new(

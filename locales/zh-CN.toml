@@ -302,6 +302,7 @@ start = '流输出：选择文件并追加记录（固定当前文本/HEX格式�
 stop = '停止流输出'
 busy = '正在准备或停止流输出…'
 error = '流输出失败'
+save_log_error = '保存日志失败'
 
 [flow]
 none = "无"
