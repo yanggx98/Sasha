@@ -305,7 +305,9 @@ impl RenderOnce for QuickSendPanel {
                     .items_center()
                     .px_3()
                     .gap_1()
-                    .border_b_1()
+                    // Collapsed, the next section's top border is already the divider; a second
+                    // line here would stack into one thick line.
+                    .when(!self.collapsed, |this| this.border_b_1())
                     .border_color(theme.border_card)
                     .child(self.action_icon(
                         "quick-section-toggle",
