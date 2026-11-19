@@ -1,6 +1,8 @@
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::assets::IconName as LucideIcon;
+use gpui_kit::component::Sizable as _;
+use gpui_kit::component::color_picker::ColorPicker;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::slider::{Slider, SliderEvent, SliderState, SliderValue};
 use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
@@ -678,8 +680,12 @@ impl SettingsWindow {
         let editor = self.theme_editor.as_ref()?;
         let theme = self.theme;
         let parsed = editor.parsed(cx);
-        let rows = FIELDS.iter().zip(&editor.inputs).zip(&parsed).map(
-            |(((label_key, _), input), value)| {
+        let rows = FIELDS
+            .iter()
+            .zip(&editor.inputs)
+            .zip(&editor.pickers)
+            .zip(&parsed)
+            .map(|((((label_key, _), input), picker), value)| {
                 let valid = value.is_ok();
                 h_flex()
                     .w_full()
@@ -693,16 +699,7 @@ impl SettingsWindow {
                             .text_color(theme.text_secondary)
                             .child(tr_shared(locale, label_key)),
                     )
-                    .child(
-                        div()
-                            .flex_shrink_0()
-                            .w(px(18.))
-                            .h(px(18.))
-                            .rounded(px(4.))
-                            .border_1()
-                            .border_color(theme.border_card)
-                            .when_some(value.as_ref().ok().copied(), |this, color| this.bg(color)),
-                    )
+                    .child(ColorPicker::new(picker).small())
                     .child(
                         div()
                             .w(px(140.))
@@ -724,8 +721,7 @@ impl SettingsWindow {
                             .child(Input::new(input).appearance(false)),
                     )
                     .into_any_element()
-            },
-        );
+            });
 
         let name_row = div()
             .w(px(260.))

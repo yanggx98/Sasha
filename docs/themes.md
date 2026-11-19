@@ -55,7 +55,8 @@ text_muted = "#6B8394"
 
 **Settings > View > Theme > Edit Colors** opens an editor for the eight base colors
 (`canvas`, `card`, `text`, `accent`, `rx`, `tx`, `error`, `border`). Each row is a swatch
-plus a `#RRGGBB` / `#RRGGBBAA` field; valid values preview live, invalid ones are
+plus a `#RRGGBB` / `#RRGGBBAA` field; click the swatch to open a color picker (palette,
+sliders, alpha), which stays in sync with the field. Valid values preview live, invalid ones are
 outlined in red and not applied.
 
 - Built-in themes can't be edited: enter a name and **Save As** to create

@@ -3,6 +3,7 @@
 //! Rendering and actions live in `settings_window.rs`; this file owns the
 //! eight color inputs, the name input and the draft parsing.
 
+use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 
@@ -28,6 +29,7 @@ pub struct ThemeEditor {
     pub builtin: bool,
     pub base: ThemeBase,
     pub inputs: Vec<Entity<InputState>>,
+    pub pickers: Vec<Entity<ColorPickerState>>,
     pub name_input: Entity<InputState>,
     /// The delete button was clicked once and awaits confirmation.
     pub delete_armed: bool,
@@ -42,21 +44,57 @@ impl ThemeEditor {
         cx: &mut Context<SettingsWindow>,
     ) -> Self {
         let mut inputs = Vec::new();
+        let mut pickers = Vec::new();
         let mut subscriptions = Vec::new();
         for (_, get) in FIELDS {
-            let text = format_hex(get(&entry.colors));
+            let color = get(&entry.colors);
+            let text = format_hex(color);
             let input = cx.new(|cx| InputState::new(window, cx));
             input.update(cx, |state, cx| state.set_value(text, window, cx));
+            let picker = cx.new(|cx| ColorPickerState::new(window, cx).default_value(color));
+
+            // Text field -> picker (skipped when they already agree, which
+            // avoids the slider/hex rounding feedback loop while dragging).
+            let picker_for_input = picker.clone();
             subscriptions.push(cx.subscribe_in(
                 &input,
                 window,
-                |this, _, event: &InputEvent, _window, cx| {
+                move |this, input, event: &InputEvent, window, cx| {
                     if matches!(event, InputEvent::Change) {
+                        let text = input.read(cx).value().to_string();
+                        if let Ok(color) = parse_color(&text) {
+                            let same = picker_for_input
+                                .read(cx)
+                                .value()
+                                .is_some_and(|v| format_hex(v) == format_hex(color));
+                            if !same {
+                                picker_for_input
+                                    .update(cx, |state, cx| state.set_value(color, window, cx));
+                            }
+                        }
                         this.theme_editor_changed(cx);
                     }
                 },
             ));
+            // Picker -> text field.
+            let input_for_picker = input.clone();
+            subscriptions.push(cx.subscribe_in(
+                &picker,
+                window,
+                move |this, _, event: &ColorPickerEvent, window, cx| {
+                    let ColorPickerEvent::Change(Some(color)) = event else {
+                        return;
+                    };
+                    let hex = format_hex(*color);
+                    let current = input_for_picker.read(cx).value().to_string();
+                    if parse_color(&current).map(format_hex).ok().as_deref() != Some(hex.as_str()) {
+                        input_for_picker.update(cx, |state, cx| state.set_value(hex, window, cx));
+                    }
+                    this.theme_editor_changed(cx);
+                },
+            ));
             inputs.push(input);
+            pickers.push(picker);
         }
         let name = if entry.builtin {
             String::new()
@@ -70,6 +108,7 @@ impl ThemeEditor {
             builtin: entry.builtin,
             base: entry.base,
             inputs,
+            pickers,
             name_input,
             delete_armed: false,
             _subscriptions: subscriptions,
