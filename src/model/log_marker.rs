@@ -56,6 +56,16 @@ pub enum MarkerError {
     NameTooLong,
 }
 
+impl MarkerError {
+    /// Locale key of the message shown to the user.
+    pub fn locale_key(self) -> &'static str {
+        match self {
+            Self::EmptyName => "marker.err_empty_name",
+            Self::NameTooLong => "marker.err_name_long",
+        }
+    }
+}
+
 /// Markers keyed by `LogEntry.id`, in id order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogMarkers {

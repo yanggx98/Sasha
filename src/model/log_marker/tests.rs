@@ -91,3 +91,12 @@ fn minimap_fraction_is_within_bounds() {
     assert_eq!(minimap_fraction(3, 0), 0.0);
     assert!(minimap_fraction(10, 100) < minimap_fraction(11, 100));
 }
+
+#[test]
+fn marker_errors_map_to_locale_keys() {
+    assert_eq!(MarkerError::EmptyName.locale_key(), "marker.err_empty_name");
+    assert_eq!(
+        MarkerError::NameTooLong.locale_key(),
+        "marker.err_name_long"
+    );
+}

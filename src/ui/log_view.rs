@@ -8,9 +8,15 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{Locale, tr_shared};
-use crate::model::{LogDirection, LogEntry, ReceiveViewState, SearchMatch, selectable_log_line};
+use crate::model::{
+    LogDirection, LogEntry, LogMarkers, ReceiveViewState, SearchMatch, selectable_log_line,
+};
+use crate::ui::marker_editor::marker_color_hsla;
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_store::search_highlight_colors;
+
+/// Called with a log entry id and the window position when a row is right-clicked.
+pub type MarkCallback = Rc<dyn Fn(u64, Point<Pixels>, &mut Window, &mut App)>;
 
 /// Scrollable receive/transmit log area.
 /// Occupies `flex_1` above the floating send card so the card never occludes logs.
@@ -26,6 +32,8 @@ pub struct LogView {
     list_state: ListState,
     search_matches: Rc<Vec<SearchMatch>>,
     active_match: Option<usize>,
+    markers: Rc<LogMarkers>,
+    on_mark: MarkCallback,
 }
 
 impl LogView {
@@ -41,6 +49,8 @@ impl LogView {
         list_state: ListState,
         search_matches: Rc<Vec<SearchMatch>>,
         active_match: Option<usize>,
+        markers: Rc<LogMarkers>,
+        on_mark: MarkCallback,
     ) -> Self {
         Self {
             theme,
@@ -53,6 +63,8 @@ impl LogView {
             list_state,
             search_matches,
             active_match,
+            markers,
+            on_mark,
         }
     }
 }
@@ -70,6 +82,8 @@ impl RenderOnce for LogView {
         let simulated_notice = self.simulated_notice;
         let search_matches = self.search_matches;
         let active_match = self.active_match;
+        let markers = self.markers;
+        let on_mark = self.on_mark;
 
         div()
             .id("log-scroll-container")
@@ -118,14 +132,31 @@ impl RenderOnce for LogView {
                             }
                         }
 
+                        let marker_color = markers.get(entry.id).map(|marker| marker.color);
+                        let entry_id = entry.id;
+                        let on_mark = on_mark.clone();
+
                         h_flex()
                             .w_full()
                             .items_baseline()
                             .gap_2()
-                            .pl_3()
+                            .pl(px(10.))
                             .pr_4()
                             .when(index == 0, |this| this.pt_2())
                             .pb_1()
+                            // The marker bar sits in the left padding so text never shifts.
+                            .border_l_2()
+                            .border_color(
+                                marker_color
+                                    .map(|color| marker_color_hsla(color, 1.0))
+                                    .unwrap_or_else(gpui_kit::transparent_black),
+                            )
+                            .when_some(marker_color, |this, color| {
+                                this.bg(marker_color_hsla(color, 0.18))
+                            })
+                            .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                on_mark(entry_id, event.position, window, cx);
+                            })
                             .font_family(crate::ui::fonts::MONO_FONT)
                             .text_size(px(log_font_size as f32))
                             .text_color(theme.text_primary)

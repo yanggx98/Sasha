@@ -374,3 +374,13 @@ err_conflict = "已被“%{action}”使用。"
 err_reserved = "该按键被编辑操作或系统占用（复制、粘贴、Enter、Esc、F3、Alt+F4 等）。"
 err_invalid_key = "该按键不能在此使用。"
 err_digit_family = "请按下修饰键加 1 到 9 之间的数字。"
+
+[marker]
+title_new = "标记这条日志"
+title_edit = "编辑标记"
+name_placeholder = "标记名称"
+ok = "确定"
+cancel = "取消"
+delete = "移除"
+err_empty_name = "请输入标记名称。"
+err_name_long = "名称太长（最多 32 个字符）。"

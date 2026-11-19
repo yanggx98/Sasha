@@ -374,3 +374,13 @@ err_conflict = "Already used by \"%{action}\"."
 err_reserved = "That key is reserved for editing or the system (copy, paste, Enter, Esc, F3, Alt+F4)."
 err_invalid_key = "That key can't be used here."
 err_digit_family = "Press the modifier keys together with a digit from 1 to 9."
+
+[marker]
+title_new = "Mark this entry"
+title_edit = "Edit marker"
+name_placeholder = "Marker name"
+ok = "OK"
+cancel = "Cancel"
+delete = "Remove"
+err_empty_name = "Enter a name for the marker."
+err_name_long = "The name is too long (32 characters at most)."

@@ -17,6 +17,7 @@ use crate::i18n::{
     Locale, bottom_buffer_label, quick_save_failed, quick_skipped, signal_write_failed,
     timer_interval_error, tr, tr_shared,
 };
+use crate::model::MarkerColor;
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::log::{LogEntry, format_visible_logs};
 use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
@@ -42,6 +43,9 @@ use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
 use crate::ui::filter_bar::{FilterControl, LogFilterBar};
 use crate::ui::log_view::{LogView, log_row_height_hint};
+use crate::ui::marker_editor::{
+    MARKER_EDITOR_HEIGHT, MARKER_EDITOR_WIDTH, MarkerEditor, MarkerEditorState,
+};
 use crate::ui::motion::{TransitionFlag, UiMotionState};
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::quick_command_window::{
@@ -285,6 +289,10 @@ impl SessionTab {
     }
 
     fn sync_log_list_state(&mut self, log_font_size: u16) {
+        // Markers die with the entries the buffer limit evicted.
+        self.state
+            .markers
+            .prune_before(self.state.logs.first().map(|entry| entry.id));
         let old_len = self.log_projection.rows.len();
         let old_offset = self.log_list_state.logical_scroll_top();
         let anchor_id = self
@@ -529,6 +537,9 @@ pub struct SashaApp {
     _picker_subscription: Option<Subscription>,
     picker_error: Option<SharedString>,
     cached_bg_image: Option<(PathBuf, Option<Arc<Image>>)>,
+    /// The log-marker form, open for at most one entry at a time.
+    marker_editor: Option<MarkerEditorState>,
+    _marker_editor_subscription: Option<Subscription>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -615,6 +626,8 @@ impl SashaApp {
             _picker_subscription: None,
             picker_error: None,
             cached_bg_image: None,
+            marker_editor: None,
+            _marker_editor_subscription: None,
         }
     }
 
@@ -891,6 +904,106 @@ impl SashaApp {
         } else {
             false
         }
+    }
+
+    /// Opens the marker form for a right-clicked log entry, prefilled when it is marked.
+    fn open_marker_editor(
+        &mut self,
+        entry_id: u64,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.active_tab_id;
+        let existing = self
+            .tab_mut(tab_id)
+            .and_then(|tab| tab.state.markers.get(entry_id).cloned());
+        let locale = self.config_store.read(cx).config().locale;
+        let placeholder = tr_shared(locale, "marker.name_placeholder");
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        if let Some(marker) = &existing {
+            let name = marker.name.clone();
+            input.update(cx, |state, cx| state.set_value(name, window, cx));
+        }
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            move |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.confirm_marker(cx);
+                }
+            },
+        );
+        input.read(cx).focus_handle(cx).focus(window, cx);
+
+        let viewport = window.viewport_size();
+        let max_x = (viewport.width - MARKER_EDITOR_WIDTH - px(8.)).max(px(8.));
+        let max_y = (viewport.height - MARKER_EDITOR_HEIGHT - px(8.)).max(px(8.));
+        self.marker_editor = Some(MarkerEditorState {
+            tab_id,
+            entry_id,
+            position: point(
+                position.x.clamp(px(8.), max_x),
+                position.y.clamp(px(8.), max_y),
+            ),
+            color: existing
+                .as_ref()
+                .map(|marker| marker.color)
+                .unwrap_or(MarkerColor::Red),
+            input,
+            existing: existing.is_some(),
+            error: None,
+        });
+        self._marker_editor_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    fn pick_marker_color(&mut self, color: MarkerColor, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.marker_editor {
+            editor.color = color;
+            cx.notify();
+        }
+    }
+
+    /// Applies the form. An invalid name keeps the form open with the draft.
+    fn confirm_marker(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.marker_editor.as_ref() else {
+            return;
+        };
+        let name = editor.input.read(cx).value().to_string();
+        let (tab_id, entry_id, color) = (editor.tab_id, editor.entry_id, editor.color);
+        let locale = self.config_store.read(cx).config().locale;
+        let Some(tab) = self.tab_mut(tab_id) else {
+            self.close_marker_editor(cx);
+            return;
+        };
+        match tab.state.markers.set(entry_id, &name, color) {
+            Ok(()) => self.close_marker_editor(cx),
+            Err(err) => {
+                if let Some(editor) = &mut self.marker_editor {
+                    editor.error = Some(tr_shared(locale, err.locale_key()));
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn delete_marker(&mut self, cx: &mut Context<Self>) {
+        if let Some((tab_id, entry_id)) = self
+            .marker_editor
+            .as_ref()
+            .map(|editor| (editor.tab_id, editor.entry_id))
+            && let Some(tab) = self.tab_mut(tab_id)
+        {
+            tab.state.markers.remove(entry_id);
+        }
+        self.close_marker_editor(cx);
+    }
+
+    fn close_marker_editor(&mut self, cx: &mut Context<Self>) {
+        self.marker_editor = None;
+        self._marker_editor_subscription = None;
+        cx.notify();
     }
 
     fn ensure_start_manual_port_input(
@@ -3285,6 +3398,51 @@ impl Render for SashaApp {
         let buffer_used = tab.state.log_buffer_used_bytes();
         let active_picker = tab.state.active_picker;
         let picker_overlay = active_picker.zip(self.picker_input.clone());
+        let markers = Rc::new(tab.state.markers.clone());
+        let weak_mark = cx.entity().downgrade();
+        let on_mark = Rc::new(
+            move |entry_id: u64, position: Point<Pixels>, window: &mut Window, cx: &mut App| {
+                let _ = weak_mark.update(cx, |this, cx| {
+                    this.open_marker_editor(entry_id, position, window, cx)
+                });
+            },
+        );
+        let marker_overlay = self
+            .marker_editor
+            .as_ref()
+            .filter(|editor| editor.tab_id == active_id)
+            .map(|editor| {
+                let weak = cx.entity().downgrade();
+                let on_pick_color =
+                    Rc::new(move |color: MarkerColor, _: &mut Window, cx: &mut App| {
+                        let _ = weak.update(cx, |this, cx| this.pick_marker_color(color, cx));
+                    });
+                let weak = cx.entity().downgrade();
+                let on_confirm = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.confirm_marker(cx));
+                });
+                let weak = cx.entity().downgrade();
+                let on_cancel = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.close_marker_editor(cx));
+                });
+                let weak = cx.entity().downgrade();
+                let on_delete = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.delete_marker(cx));
+                });
+                MarkerEditor {
+                    theme: self.theme,
+                    locale,
+                    position: editor.position,
+                    color: editor.color,
+                    existing: editor.existing,
+                    input: editor.input.clone(),
+                    error: editor.error.clone(),
+                    on_pick_color,
+                    on_confirm,
+                    on_cancel,
+                    on_delete,
+                }
+            });
         let script_items = tab.script_panel_items(locale);
         let main_width = (window.viewport_size().width - TAB_RAIL_WIDTH).max(px(0.));
         let script_panel_width = panel_width(tab.script_preferred_width, main_width);
@@ -3658,6 +3816,13 @@ impl Render for SashaApp {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.marker_editor.is_some()
+                    && event.keystroke.key.eq_ignore_ascii_case("escape")
+                {
+                    this.close_marker_editor(cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.handle_tab_shortcut(event, window, cx) {
                     cx.stop_propagation();
                     return;
@@ -3767,6 +3932,8 @@ impl Render for SashaApp {
                                         log_list_state,
                                         search_matches,
                                         active_search_match,
+                                        markers,
+                                        on_mark,
                                     ))
                                     .when_some(search_input, |this, input| {
                                         this.child(
@@ -3912,6 +4079,7 @@ impl Render for SashaApp {
                     .child(tab_rail),
             )
             .child(self.build_top_bar(script_panel_width))
+            .when_some(marker_overlay, |this, overlay| this.child(overlay))
             .when_some(picker_overlay, |this, (kind, input)| {
                 this.child(
                     div()
