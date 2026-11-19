@@ -1,31 +1,57 @@
 name: Release
 
-# Push a tag such as v0.1.0 (or v0.1.0-b for a pre-release) to build the Windows
-# executable and publish it as a GitHub Release. The tag must match the version in
-# Cargo.toml.
+# Push a tag such as v0.1.0 (or v0.1.0-b for a pre-release) to build the Windows,
+# Linux and macOS packages and publish them as a GitHub Release. The tag must match
+# the version in Cargo.toml.
+#
+# Windows is the validated platform: its build must pass or nothing is published.
+# Linux and macOS are unverified on real hardware, so a failure there is reported
+# but does not block the release; the release simply ships without that package.
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    runs-on: windows-latest
+  build:
+    name: build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os != 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset: sasha-windows-x86_64.exe
+          - os: ubuntu-latest
+            asset: sasha-linux-x86_64.tar.gz
+          - os: macos-latest
+            asset: sasha-macos-aarch64.tar.gz
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
       - name: Check tag matches Cargo.toml version
-        shell: pwsh
         run: |
-          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
-          $line = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1
-          $cargoVersion = $line.Matches[0].Groups[1].Value
-          if ($tagVersion -ne $cargoVersion) {
-            throw "Tag version '$tagVersion' does not match Cargo.toml version '$cargoVersion'"
-          }
+          tag_version="${GITHUB_REF_NAME#v}"
+          cargo_version="$(grep -m1 -E '^version[[:space:]]*=' Cargo.toml | sed -E 's/^version[[:space:]]*=[[:space:]]*"(.+)".*/\1/')"
+          if [ "$tag_version" != "$cargo_version" ]; then
+            echo "Tag version '$tag_version' does not match Cargo.toml version '$cargo_version'"
+            exit 1
+          fi
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libudev-dev libfontconfig-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libxcb1-dev libx11-xcb-dev libasound2-dev libvulkan1
 
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal
@@ -39,20 +65,48 @@ jobs:
         run: cargo build --release --locked
 
       - name: Package
-        shell: pwsh
         run: |
-          $asset = "sasha-windows-x86_64.exe"
-          Copy-Item target/release/sasha.exe $asset
-          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
-          "$hash  $asset" | Out-File -Encoding ascii "$asset.sha256"
+          mkdir dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/sasha.exe "dist/${{ matrix.asset }}"
+          else
+            # tar keeps the executable bit, which a raw download would lose.
+            tar -czf "dist/${{ matrix.asset }}" -C target/release sasha
+          fi
+          cd dist
+          if command -v sha256sum >/dev/null; then
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.os }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
 
       - name: Publish release
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ghArgs = @("release", "create", "${{ github.ref_name }}",
-            "sasha-windows-x86_64.exe", "sasha-windows-x86_64.exe.sha256",
-            "--title", "${{ github.ref_name }}", "--generate-notes")
-          if ("${{ github.ref_name }}".Contains("-")) { $ghArgs += "--prerelease" }
-          gh @ghArgs
+          ls -l dist
+          # Windows is mandatory; never publish without it.
+          test -f dist/sasha-windows-x86_64.exe
+          args=(release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" --generate-notes)
+          case "$GITHUB_REF_NAME" in *-*) args+=(--prerelease) ;; esac
+          gh "${args[@]}"

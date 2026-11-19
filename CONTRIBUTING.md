@@ -54,3 +54,9 @@ notify users but link to the release page instead of installing.
 
 By contributing, you agree that your contributions are licensed under
 **GPL-3.0-only**, the same as the project.
+
+Pushing the tag runs the release workflow, which builds `sasha-windows-x86_64.exe`,
+`sasha-linux-x86_64.tar.gz` and `sasha-macos-aarch64.tar.gz` (each with a `.sha256`
+file) and publishes them together. The Windows build must pass; a Linux or macOS
+failure only leaves that package out. The in-app updater installs the Windows asset
+only; other platforms are directed to the release page.
