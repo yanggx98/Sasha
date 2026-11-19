@@ -2,13 +2,13 @@
 
 English · [简体中文](themes.zh-CN.md)
 
-Sasha ships built-in **Dark** (default), **Light**, **Claude Dark**, **Claude Light**, **Gemini Dark** and **Gemini Light** themes (the Claude pair uses a warm charcoal/ivory palette with a clay accent; the Gemini pair uses an obsidian/cool-ice palette with a Google blue accent). Pick one in
+Sasha ships built-in **Dark** (default), **Light**, **Claude Dark**, **Claude Light**, **Gemini Dark**, **Gemini Light**, **DeepSeek Dark** and **DeepSeek Light** themes (the Claude pair uses a warm charcoal/ivory palette with a clay accent; the Gemini pair uses an obsidian/cool-ice palette with a Google blue accent; the DeepSeek pair uses a cool near-black/white palette with the DeepSeek blue accent). Pick one in
 **Settings > View > Theme**; it applies immediately and is saved as `theme = "<id>"`
 in `config.toml`.
 
 Custom themes are `*.toml` files in the `themes` folder next to `config.toml`
 (created on first start; **Settings > View > Theme Folder > Open Folder** opens it).
-The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`; `dark`, `light`, `claude-dark`, `claude-light`, `gemini-dark`, `gemini-light` are reserved). Adding, editing or deleting a file updates the list
+The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`; `dark`, `light`, `claude-dark`, `claude-light`, `gemini-dark`, `gemini-light`, `deepseek-dark`, `deepseek-light` are reserved). Adding, editing or deleting a file updates the list
 automatically, and the active theme is re-applied as soon as its file changes.
 
 A complete example is also in [`themes/example.toml`](themes/example.toml):

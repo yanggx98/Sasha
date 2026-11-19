@@ -20,6 +20,8 @@ pub const BUILTIN_CLAUDE_DARK_ID: &str = "claude-dark";
 pub const BUILTIN_CLAUDE_LIGHT_ID: &str = "claude-light";
 pub const BUILTIN_GEMINI_DARK_ID: &str = "gemini-dark";
 pub const BUILTIN_GEMINI_LIGHT_ID: &str = "gemini-light";
+pub const BUILTIN_DEEPSEEK_DARK_ID: &str = "deepseek-dark";
+pub const BUILTIN_DEEPSEEK_LIGHT_ID: &str = "deepseek-light";
 
 const DARK_TOML: &str = include_str!("theme_assets/dark.toml");
 const LIGHT_TOML: &str = include_str!("theme_assets/light.toml");
@@ -27,6 +29,8 @@ const CLAUDE_DARK_TOML: &str = include_str!("theme_assets/claude-dark.toml");
 const CLAUDE_LIGHT_TOML: &str = include_str!("theme_assets/claude-light.toml");
 const GEMINI_DARK_TOML: &str = include_str!("theme_assets/gemini-dark.toml");
 const GEMINI_LIGHT_TOML: &str = include_str!("theme_assets/gemini-light.toml");
+const DEEPSEEK_DARK_TOML: &str = include_str!("theme_assets/deepseek-dark.toml");
+const DEEPSEEK_LIGHT_TOML: &str = include_str!("theme_assets/deepseek-light.toml");
 
 /// Light or dark family a theme belongs to (also decides gpui `ThemeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -450,7 +454,7 @@ pub fn parse_theme(id: &str, text: &str) -> Result<ThemeEntry, ThemeError> {
     parse_with(id, text, false, Some(fallback_colors))
 }
 
-/// The built-in themes: dark, light, Claude dark/light, Gemini dark/light.
+/// The built-in themes: dark, light, Claude, Gemini and DeepSeek pairs.
 pub fn builtin_themes() -> Vec<ThemeEntry> {
     [
         (BUILTIN_DARK_ID, DARK_TOML),
@@ -459,6 +463,8 @@ pub fn builtin_themes() -> Vec<ThemeEntry> {
         (BUILTIN_CLAUDE_LIGHT_ID, CLAUDE_LIGHT_TOML),
         (BUILTIN_GEMINI_DARK_ID, GEMINI_DARK_TOML),
         (BUILTIN_GEMINI_LIGHT_ID, GEMINI_LIGHT_TOML),
+        (BUILTIN_DEEPSEEK_DARK_ID, DEEPSEEK_DARK_TOML),
+        (BUILTIN_DEEPSEEK_LIGHT_ID, DEEPSEEK_LIGHT_TOML),
     ]
     .iter()
     .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
@@ -477,6 +483,8 @@ fn is_builtin_id(id: &str) -> bool {
         BUILTIN_CLAUDE_LIGHT_ID,
         BUILTIN_GEMINI_DARK_ID,
         BUILTIN_GEMINI_LIGHT_ID,
+        BUILTIN_DEEPSEEK_DARK_ID,
+        BUILTIN_DEEPSEEK_LIGHT_ID,
     ]
     .contains(&id)
 }
@@ -1067,7 +1075,7 @@ mod tests {
     }
 
     #[test]
-    fn builtins_are_dark_light_claude_then_gemini() {
+    fn builtins_are_dark_light_then_brand_pairs() {
         let ids: Vec<_> = builtin_themes().into_iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
@@ -1077,7 +1085,9 @@ mod tests {
                 "claude-dark",
                 "claude-light",
                 "gemini-dark",
-                "gemini-light"
+                "gemini-light",
+                "deepseek-dark",
+                "deepseek-light"
             ]
         );
     }
@@ -1171,11 +1181,11 @@ mod tests {
     fn scan_handles_missing_and_empty_dir() {
         let missing = std::env::temp_dir().join("sasha_theme_test_definitely_missing_dir");
         let scan = scan_dir(&missing);
-        assert_eq!(scan.themes.len(), 6);
+        assert_eq!(scan.themes.len(), 8);
         assert!(scan.errors.is_empty());
         let dir = TempDir::new("empty");
         let scan = scan_dir(&dir.path);
-        assert_eq!(scan.themes.len(), 6);
+        assert_eq!(scan.themes.len(), 8);
         assert!(scan.errors.is_empty());
     }
 
@@ -1198,13 +1208,15 @@ mod tests {
                 "claude-light",
                 "gemini-dark",
                 "gemini-light",
+                "deepseek-dark",
+                "deepseek-light",
                 "alpha",
                 "zeta"
             ]
         );
         assert!(scan.themes[0].builtin);
         assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x0D1117).into());
-        assert_eq!(scan.themes[7].name, "Zeta");
+        assert_eq!(scan.themes[9].name, "Zeta");
         assert_eq!(scan.errors.len(), 2);
         let broken = scan
             .errors
@@ -1328,7 +1340,7 @@ mod tests {
         assert_eq!(st.current().id, "mine");
         fs::remove_dir_all(&dir.path).unwrap();
         assert!(st.rescan());
-        assert_eq!(st.themes().len(), 6);
+        assert_eq!(st.themes().len(), 8);
         assert_eq!(st.current().id, "dark");
         assert_eq!(st.selected_id(), "mine");
         assert!(!st.messages().is_empty());
@@ -1455,6 +1467,8 @@ mod tests {
                 "claude-light",
                 "gemini-dark",
                 "gemini-light",
+                "deepseek-dark",
+                "deepseek-light",
                 "mine"
             ]
         );

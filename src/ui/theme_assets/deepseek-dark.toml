@@ -1,0 +1,12 @@
+# Built-in DeepSeek-inspired dark theme: cool near-black with the DeepSeek blue accent.
+name = "DeepSeek Dark"
+base = "dark"
+
+canvas = "#1A1B1F"
+card = "#24262C"
+text = "#E7E8EC"
+accent = "#4A66F5"
+rx = "#4DD48A"
+tx = "#86A4FF"
+error = "#FF7369"
+border = "#FFFFFF1A"
