@@ -272,12 +272,89 @@ fn reset_restores_defaults() {
     let mut s = Shortcuts::default();
     s.set(ShortcutAction::NewSession, chord(CTRL, "n")).unwrap();
     s.set(ShortcutAction::Search, chord(CTRL, "g")).unwrap();
-    s.reset(ShortcutAction::NewSession);
+    assert_eq!(s.reset(ShortcutAction::NewSession), Ok(()));
     assert_eq!(
         s.binding(ShortcutAction::NewSession),
         Shortcuts::default().binding(ShortcutAction::NewSession)
     );
     assert_eq!(s.binding(ShortcutAction::Search), chord(CTRL, "g"));
+    s.reset_all();
+    assert_eq!(s, Shortcuts::default());
+}
+
+#[test]
+fn binding_from_recording_for_single_key_actions() {
+    assert_eq!(
+        binding_from_recording(ShortcutAction::Search, "g", CTRL),
+        Ok(chord(CTRL, "g"))
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::Search, "G", CTRL),
+        Ok(chord(CTRL, "g"))
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::NextSession, "tab", CTRL_ALT),
+        Ok(chord(CTRL_ALT, "tab"))
+    );
+    // A bare modifier press is not a key.
+    assert_eq!(
+        binding_from_recording(ShortcutAction::Search, "shift", SHIFT),
+        Err(ShortcutError::InvalidKey)
+    );
+}
+
+#[test]
+fn binding_from_recording_for_digit_families_keeps_only_modifiers() {
+    assert_eq!(
+        binding_from_recording(ShortcutAction::JumpSession, "3", CTRL_ALT),
+        Ok(Binding::Mods(CTRL_ALT))
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::QuickSend, "9", ALT),
+        Ok(Binding::Mods(ALT))
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::JumpSession, "a", CTRL),
+        Err(ShortcutError::InvalidKey)
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::JumpSession, "0", CTRL),
+        Err(ShortcutError::InvalidKey)
+    );
+    assert_eq!(
+        binding_from_recording(ShortcutAction::JumpSession, "shift", CTRL),
+        Err(ShortcutError::InvalidKey)
+    );
+}
+
+#[test]
+fn a_recorded_binding_still_goes_through_set_validation() {
+    let mut s = Shortcuts::default();
+    let recorded = binding_from_recording(ShortcutAction::Search, "g", SHIFT).unwrap();
+    assert_eq!(
+        s.set(ShortcutAction::Search, recorded),
+        Err(ShortcutError::NeedsModifier)
+    );
+    let recorded = binding_from_recording(ShortcutAction::NewSession, "w", CTRL).unwrap();
+    assert_eq!(
+        s.set(ShortcutAction::NewSession, recorded),
+        Err(ShortcutError::Conflict(ShortcutAction::CloseSession))
+    );
+}
+
+#[test]
+fn reset_refuses_when_the_default_key_is_taken_by_another_action() {
+    let mut s = Shortcuts::default();
+    s.set(ShortcutAction::NewSession, chord(CTRL, "n")).unwrap();
+    // Ctrl+T is free now, so another action may take it.
+    s.set(ShortcutAction::CloseSession, chord(CTRL, "t"))
+        .unwrap();
+    assert_eq!(
+        s.reset(ShortcutAction::NewSession),
+        Err(ShortcutError::Conflict(ShortcutAction::CloseSession))
+    );
+    assert_eq!(s.binding(ShortcutAction::NewSession), chord(CTRL, "n"));
+    // Resetting everything always works.
     s.reset_all();
     assert_eq!(s, Shortcuts::default());
 }

@@ -267,6 +267,23 @@ fn validate(action: ShortcutAction, binding: Binding) -> Result<Binding, Shortcu
     }
 }
 
+/// Turns a recorded key press into the binding to try for `action`. Single-key actions take
+/// the whole chord; the 1 to 9 families need a digit key and keep only the modifiers.
+/// The result still has to pass [`Shortcuts::set`].
+pub fn binding_from_recording(
+    action: ShortcutAction,
+    key: &str,
+    mods: Modifiers,
+) -> Result<Binding, ShortcutError> {
+    let chord = KeyChord::from_keystroke(key, mods).ok_or(ShortcutError::InvalidKey)?;
+    if action.is_digit_family() {
+        digit_of(&chord.key).ok_or(ShortcutError::InvalidKey)?;
+        Ok(Binding::Mods(mods))
+    } else {
+        Ok(Binding::Chord(chord))
+    }
+}
+
 fn parse_binding(action: ShortcutAction, text: &str) -> Option<Binding> {
     if action.is_digit_family() {
         Modifiers::parse(text).map(Binding::Mods)
@@ -305,8 +322,17 @@ impl Shortcuts {
         Ok(())
     }
 
-    pub fn reset(&mut self, action: ShortcutAction) {
-        self.entries[action.index()] = action.default_binding();
+    /// Puts `action` back to its default key. Refused when another action has since taken
+    /// that key; the table is then left unchanged.
+    pub fn reset(&mut self, action: ShortcutAction) -> Result<(), ShortcutError> {
+        let default = action.default_binding();
+        for other in ShortcutAction::ALL {
+            if other != action && clash(&default, &self.entries[other.index()]) {
+                return Err(ShortcutError::Conflict(other));
+            }
+        }
+        self.entries[action.index()] = default;
+        Ok(())
     }
 
     pub fn reset_all(&mut self) {

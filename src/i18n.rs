@@ -121,6 +121,15 @@ pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
     .into_owned()
 }
 
+pub fn shortcut_conflict(locale: Locale, action: &str) -> String {
+    rust_i18n::t!(
+        "shortcuts.err_conflict",
+        locale = locale.code(),
+        action = action
+    )
+    .into_owned()
+}
+
 pub fn settings_save_error(locale: Locale, err: &str) -> String {
     rust_i18n::t!("settings.save_error", locale = locale.code(), err = err).into_owned()
 }
