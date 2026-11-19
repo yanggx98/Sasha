@@ -1,0 +1,12 @@
+# Built-in Grok dark theme: neutral near-black with a magenta accent (GrokNight).
+name = "Grok Dark"
+base = "dark"
+
+canvas = "#141414"
+card = "#242424"
+text = "#E1E1E1"
+accent = "#BB9AF7"
+rx = "#9ECE6A"
+tx = "#7DCFFF"
+error = "#F7768E"
+border = "#E1E1E11F"

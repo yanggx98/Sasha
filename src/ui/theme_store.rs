@@ -22,6 +22,8 @@ pub const BUILTIN_GEMINI_DARK_ID: &str = "gemini-dark";
 pub const BUILTIN_GEMINI_LIGHT_ID: &str = "gemini-light";
 pub const BUILTIN_DEEPSEEK_DARK_ID: &str = "deepseek-dark";
 pub const BUILTIN_DEEPSEEK_LIGHT_ID: &str = "deepseek-light";
+pub const BUILTIN_GROK_DARK_ID: &str = "grok-dark";
+pub const BUILTIN_GROK_LIGHT_ID: &str = "grok-light";
 
 const DARK_TOML: &str = include_str!("theme_assets/dark.toml");
 const LIGHT_TOML: &str = include_str!("theme_assets/light.toml");
@@ -31,6 +33,8 @@ const GEMINI_DARK_TOML: &str = include_str!("theme_assets/gemini-dark.toml");
 const GEMINI_LIGHT_TOML: &str = include_str!("theme_assets/gemini-light.toml");
 const DEEPSEEK_DARK_TOML: &str = include_str!("theme_assets/deepseek-dark.toml");
 const DEEPSEEK_LIGHT_TOML: &str = include_str!("theme_assets/deepseek-light.toml");
+const GROK_DARK_TOML: &str = include_str!("theme_assets/grok-dark.toml");
+const GROK_LIGHT_TOML: &str = include_str!("theme_assets/grok-light.toml");
 
 /// Light or dark family a theme belongs to (also decides gpui `ThemeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -454,7 +458,7 @@ pub fn parse_theme(id: &str, text: &str) -> Result<ThemeEntry, ThemeError> {
     parse_with(id, text, false, Some(fallback_colors))
 }
 
-/// The built-in themes: dark, light, Claude, Gemini and DeepSeek pairs.
+/// The built-in themes: dark, light, then Claude, Gemini, DeepSeek and Grok pairs.
 pub fn builtin_themes() -> Vec<ThemeEntry> {
     [
         (BUILTIN_DARK_ID, DARK_TOML),
@@ -465,6 +469,8 @@ pub fn builtin_themes() -> Vec<ThemeEntry> {
         (BUILTIN_GEMINI_LIGHT_ID, GEMINI_LIGHT_TOML),
         (BUILTIN_DEEPSEEK_DARK_ID, DEEPSEEK_DARK_TOML),
         (BUILTIN_DEEPSEEK_LIGHT_ID, DEEPSEEK_LIGHT_TOML),
+        (BUILTIN_GROK_DARK_ID, GROK_DARK_TOML),
+        (BUILTIN_GROK_LIGHT_ID, GROK_LIGHT_TOML),
     ]
     .iter()
     .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
@@ -485,6 +491,8 @@ fn is_builtin_id(id: &str) -> bool {
         BUILTIN_GEMINI_LIGHT_ID,
         BUILTIN_DEEPSEEK_DARK_ID,
         BUILTIN_DEEPSEEK_LIGHT_ID,
+        BUILTIN_GROK_DARK_ID,
+        BUILTIN_GROK_LIGHT_ID,
     ]
     .contains(&id)
 }
@@ -1087,7 +1095,9 @@ mod tests {
                 "gemini-dark",
                 "gemini-light",
                 "deepseek-dark",
-                "deepseek-light"
+                "deepseek-light",
+                "grok-dark",
+                "grok-light"
             ]
         );
     }
@@ -1181,11 +1191,11 @@ mod tests {
     fn scan_handles_missing_and_empty_dir() {
         let missing = std::env::temp_dir().join("sasha_theme_test_definitely_missing_dir");
         let scan = scan_dir(&missing);
-        assert_eq!(scan.themes.len(), 8);
+        assert_eq!(scan.themes.len(), 10);
         assert!(scan.errors.is_empty());
         let dir = TempDir::new("empty");
         let scan = scan_dir(&dir.path);
-        assert_eq!(scan.themes.len(), 8);
+        assert_eq!(scan.themes.len(), 10);
         assert!(scan.errors.is_empty());
     }
 
@@ -1210,13 +1220,15 @@ mod tests {
                 "gemini-light",
                 "deepseek-dark",
                 "deepseek-light",
+                "grok-dark",
+                "grok-light",
                 "alpha",
                 "zeta"
             ]
         );
         assert!(scan.themes[0].builtin);
         assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x0D1117).into());
-        assert_eq!(scan.themes[9].name, "Zeta");
+        assert_eq!(scan.themes[11].name, "Zeta");
         assert_eq!(scan.errors.len(), 2);
         let broken = scan
             .errors
@@ -1340,7 +1352,7 @@ mod tests {
         assert_eq!(st.current().id, "mine");
         fs::remove_dir_all(&dir.path).unwrap();
         assert!(st.rescan());
-        assert_eq!(st.themes().len(), 8);
+        assert_eq!(st.themes().len(), 10);
         assert_eq!(st.current().id, "dark");
         assert_eq!(st.selected_id(), "mine");
         assert!(!st.messages().is_empty());
@@ -1469,6 +1481,8 @@ mod tests {
                 "gemini-light",
                 "deepseek-dark",
                 "deepseek-light",
+                "grok-dark",
+                "grok-light",
                 "mine"
             ]
         );
