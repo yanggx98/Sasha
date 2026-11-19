@@ -958,6 +958,25 @@ impl SashaApp {
         cx.notify();
     }
 
+    /// Scrolls the log to a marked entry. Entries hidden by the filter are not scrolled to.
+    pub fn jump_to_log_entry(&mut self, entry_id: u64, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        let Ok(index) = tab
+            .log_projection
+            .rows
+            .binary_search_by_key(&entry_id, |row| row.id)
+        else {
+            return;
+        };
+        // New data would otherwise scroll straight back to the end.
+        if tab.state.receive.auto_scroll {
+            tab.state.toggle_auto_scroll();
+            tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
+        }
+        tab.log_list_state.scroll_to_reveal_item(index);
+        cx.notify();
+    }
+
     fn pick_marker_color(&mut self, color: MarkerColor, cx: &mut Context<Self>) {
         if let Some(editor) = &mut self.marker_editor {
             editor.color = color;
@@ -3407,6 +3426,10 @@ impl Render for SashaApp {
                 });
             },
         );
+        let weak_jump = cx.entity().downgrade();
+        let on_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak_jump.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
+        });
         let marker_overlay = self
             .marker_editor
             .as_ref()
@@ -3934,6 +3957,7 @@ impl Render for SashaApp {
                                         active_search_match,
                                         markers,
                                         on_mark,
+                                        on_jump,
                                     ))
                                     .when_some(search_input, |this, input| {
                                         this.child(

@@ -100,3 +100,38 @@ fn marker_errors_map_to_locale_keys() {
         "marker.err_name_long"
     );
 }
+
+#[test]
+fn visible_marker_positions_only_includes_visible_rows() {
+    let mut markers = LogMarkers::default();
+    for id in [11, 13, 99] {
+        markers.set(id, "m", MarkerColor::Red).unwrap();
+    }
+    let rows = [10, 11, 12, 13];
+    assert_eq!(
+        visible_marker_positions(&rows, &markers),
+        vec![(1, 11), (3, 13)]
+    );
+}
+
+#[test]
+fn visible_marker_positions_is_empty_without_markers_or_rows() {
+    let markers = LogMarkers::default();
+    assert!(visible_marker_positions(&[1, 2, 3], &markers).is_empty());
+    let mut markers = LogMarkers::default();
+    markers.set(1, "m", MarkerColor::Red).unwrap();
+    assert!(visible_marker_positions(&[], &markers).is_empty());
+}
+
+#[test]
+fn visible_marker_positions_handles_many_rows_in_order() {
+    let mut markers = LogMarkers::default();
+    for id in (0..1000u64).step_by(100) {
+        markers.set(id, "m", MarkerColor::Blue).unwrap();
+    }
+    let rows: Vec<u64> = (0..1000).collect();
+    let positions = visible_marker_positions(&rows, &markers);
+    assert_eq!(positions.len(), 10);
+    assert!(positions.windows(2).all(|w| w[0].0 < w[1].0));
+    assert_eq!(positions[3], (300, 300));
+}

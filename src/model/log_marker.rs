@@ -131,6 +131,15 @@ impl LogMarkers {
     }
 }
 
+/// `(row index, entry id)` for every marker whose entry is among `row_ids`, the ids of the
+/// currently visible rows in ascending order. Markers on filtered-out entries are skipped.
+pub fn visible_marker_positions(row_ids: &[u64], markers: &LogMarkers) -> Vec<(usize, u64)> {
+    markers
+        .iter()
+        .filter_map(|(id, _)| row_ids.binary_search(&id).ok().map(|index| (index, id)))
+        .collect()
+}
+
 /// Relative position `0.0..=1.0` of row `index` among `total` rows, for the mini map.
 pub fn minimap_fraction(index: usize, total: usize) -> f32 {
     if total == 0 {
