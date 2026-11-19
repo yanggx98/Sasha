@@ -1,0 +1,12 @@
+# Built-in Gemini-inspired light theme: cool ice surface with a Google blue accent.
+name = "Gemini Light"
+base = "light"
+
+canvas = "#F0F4F9"
+card = "#FFFFFF"
+text = "#1F1F1F"
+accent = "#0B57D0"
+rx = "#137333"
+tx = "#1A73E8"
+error = "#B3261E"
+border = "#1F1F1F20"
