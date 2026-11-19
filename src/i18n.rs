@@ -121,6 +121,15 @@ pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
     .into_owned()
 }
 
+pub fn marker_clear_confirm(locale: Locale, count: usize) -> String {
+    rust_i18n::t!(
+        "marker.clear_confirm",
+        locale = locale.code(),
+        count = count
+    )
+    .into_owned()
+}
+
 pub fn shortcut_conflict(locale: Locale, action: &str) -> String {
     rust_i18n::t!(
         "shortcuts.err_conflict",

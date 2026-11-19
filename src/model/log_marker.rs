@@ -140,6 +140,15 @@ pub fn visible_marker_positions(row_ids: &[u64], markers: &LogMarkers) -> Vec<(u
         .collect()
 }
 
+/// Every marker as `(entry id, visible)` in ascending id order, where `visible` says whether
+/// the entry is among `visible_ids` (ascending ids of the rows the filter lets through).
+pub fn panel_items(markers: &LogMarkers, visible_ids: &[u64]) -> Vec<(u64, bool)> {
+    markers
+        .iter()
+        .map(|(id, _)| (id, visible_ids.binary_search(&id).is_ok()))
+        .collect()
+}
+
 /// Relative position `0.0..=1.0` of row `index` among `total` rows, for the mini map.
 pub fn minimap_fraction(index: usize, total: usize) -> f32 {
     if total == 0 {

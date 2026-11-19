@@ -135,3 +135,34 @@ fn visible_marker_positions_handles_many_rows_in_order() {
     assert!(positions.windows(2).all(|w| w[0].0 < w[1].0));
     assert_eq!(positions[3], (300, 300));
 }
+
+#[test]
+fn panel_items_marks_filtered_entries() {
+    let mut markers = LogMarkers::default();
+    for id in [3, 7, 9] {
+        markers.set(id, "m", MarkerColor::Green).unwrap();
+    }
+    assert_eq!(
+        panel_items(&markers, &[3, 9]),
+        vec![(3, true), (7, false), (9, true)]
+    );
+}
+
+#[test]
+fn panel_items_orders_by_entry_id_and_handles_no_visible_rows() {
+    let mut markers = LogMarkers::default();
+    for id in [9, 2, 5] {
+        markers.set(id, "m", MarkerColor::Purple).unwrap();
+    }
+    let ids: Vec<u64> = panel_items(&markers, &[])
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(ids, vec![2, 5, 9]);
+    assert!(
+        panel_items(&markers, &[])
+            .iter()
+            .all(|(_, visible)| !visible)
+    );
+    assert!(panel_items(&LogMarkers::default(), &[1, 2]).is_empty());
+}

@@ -3,6 +3,7 @@ pub mod filter_bar;
 pub mod fonts;
 pub mod log_view;
 pub mod marker_editor;
+pub mod marker_panel;
 pub mod motion;
 pub mod parameter_picker;
 pub mod quick_command_window;

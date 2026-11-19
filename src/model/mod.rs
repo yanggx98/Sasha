@@ -21,7 +21,7 @@ pub use log::{
 };
 pub use log_marker::{
     LogMarker, LogMarkers, MARKER_NAME_MAX_CHARS, MarkerColor, MarkerError, minimap_fraction,
-    visible_marker_positions,
+    panel_items, visible_marker_positions,
 };
 pub use session::{
     ReceiveViewState, SendDraftState, SendLineEnding, SessionCounters, SessionState,

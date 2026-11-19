@@ -17,7 +17,6 @@ use crate::i18n::{
     Locale, bottom_buffer_label, quick_save_failed, quick_skipped, signal_write_failed,
     timer_interval_error, tr, tr_shared,
 };
-use crate::model::MarkerColor;
 use crate::model::log::format_hex_input_with_cursor;
 use crate::model::log::{LogEntry, format_visible_logs};
 use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
@@ -37,6 +36,7 @@ use crate::model::{
     ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
     format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
 };
+use crate::model::{MarkerColor, panel_items};
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
@@ -46,6 +46,7 @@ use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::marker_editor::{
     MARKER_EDITOR_HEIGHT, MARKER_EDITOR_WIDTH, MarkerEditor, MarkerEditorState,
 };
+use crate::ui::marker_panel::{MarkerPanel, MarkerPanelItem};
 use crate::ui::motion::{TransitionFlag, UiMotionState};
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::quick_command_window::{
@@ -113,6 +114,8 @@ struct SessionTab {
     quick_search_input: Option<Entity<InputState>>,
     _quick_search_sub: Option<Subscription>,
     quick_pending_delete: Option<String>,
+    marker_collapsed: bool,
+    marker_pending_clear: bool,
     log_focus: FocusHandle,
     log_list_state: ListState,
     /// `(item count, font size)` last given a uniform row-height hint.
@@ -197,6 +200,8 @@ impl SessionTab {
             quick_search_input: None,
             _quick_search_sub: None,
             quick_pending_delete: None,
+            marker_collapsed: false,
+            marker_pending_clear: false,
             log_focus: cx.focus_handle(),
             log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             row_hint_key: None,
@@ -974,6 +979,19 @@ impl SashaApp {
             tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
         }
         tab.log_list_state.scroll_to_reveal_item(index);
+        cx.notify();
+    }
+
+    /// Removes one marker from the dock list.
+    fn remove_marker(&mut self, entry_id: u64, cx: &mut Context<Self>) {
+        self.active_tab_mut().state.markers.remove(entry_id);
+        cx.notify();
+    }
+
+    fn clear_markers(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.markers.clear();
+        tab.marker_pending_clear = false;
         cx.notify();
     }
 
@@ -3430,6 +3448,87 @@ impl Render for SashaApp {
         let on_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
             let _ = weak_jump.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
         });
+        let marker_items: Vec<MarkerPanelItem> = {
+            let tab = self.active_tab();
+            let visible_ids: Vec<u64> = tab.log_projection.rows.iter().map(|row| row.id).collect();
+            panel_items(&tab.state.markers, &visible_ids)
+                .into_iter()
+                .filter_map(|(entry_id, visible)| {
+                    let marker = tab.state.markers.get(entry_id)?;
+                    let index = tab
+                        .state
+                        .logs
+                        .binary_search_by_key(&entry_id, |entry| entry.id)
+                        .ok()?;
+                    let entry = &tab.state.logs[index];
+                    Some(MarkerPanelItem {
+                        entry_id,
+                        name: marker.name.clone(),
+                        color: marker.color,
+                        label: format!("{} {}", entry.timestamp, entry.direction.tag()),
+                        filtered: !visible,
+                    })
+                })
+                .collect()
+        };
+        let marker_collapsed = self.active_tab().marker_collapsed;
+        let marker_pending_clear = self.active_tab().marker_pending_clear;
+        let weak = cx.entity().downgrade();
+        let on_marker_toggle = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                let tab = this.active_tab_mut();
+                tab.marker_collapsed = !tab.marker_collapsed;
+                cx.notify();
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_edit = Rc::new(
+            move |entry_id: u64, position: Point<Pixels>, window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.open_marker_editor(entry_id, position, window, cx)
+                });
+            },
+        );
+        let weak = cx.entity().downgrade();
+        let on_marker_remove = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.remove_marker(entry_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_request_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.active_tab_mut().marker_pending_clear = true;
+                cx.notify();
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_confirm_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.clear_markers(cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_cancel_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.active_tab_mut().marker_pending_clear = false;
+                cx.notify();
+            });
+        });
+        let marker_panel = MarkerPanel {
+            theme: surface_theme,
+            locale,
+            items: marker_items,
+            collapsed: marker_collapsed,
+            pending_clear: marker_pending_clear,
+            on_toggle_section: on_marker_toggle,
+            on_jump: on_marker_jump,
+            on_edit: on_marker_edit,
+            on_delete: on_marker_remove,
+            on_request_clear: on_marker_request_clear,
+            on_confirm_clear: on_marker_confirm_clear,
+            on_cancel_clear: on_marker_cancel_clear,
+        };
         let marker_overlay = self
             .marker_editor
             .as_ref()
@@ -4089,7 +4188,10 @@ impl Render for SashaApp {
                                     .border_l_1()
                                     .border_color(self.theme.border_card)
                                     .child(script_panel)
-                                    .child(quick_send_panel),
+                                    .child(quick_send_panel)
+                                    .when(!panel_is_compact(script_panel_width), |this| {
+                                        this.child(marker_panel)
+                                    }),
                             )
                             .child(
                                 resize_handle("script-resize", Axis::Horizontal)
