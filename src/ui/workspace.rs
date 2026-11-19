@@ -44,7 +44,7 @@ use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
 use crate::ui::filter_bar::{
     FILTER_FRAME_RADIUS, FILTER_FRAME_SIDE, FILTER_FRAME_TOP, FILTER_FRAME_TRANSITION_MS,
-    FilterControl, FilterFrameFx, FilterFrameLabel, FrameTransition, LogFilterBar,
+    FilterControl, FilterFrameEdge, FilterFrameLabel, FrameTransition, LogFilterBar,
     animate_content_corners, animate_frame_inset,
 };
 use crate::ui::log_view::{LogView, log_row_height_hint};
@@ -565,11 +565,11 @@ pub struct SashaApp {
     /// The log-marker form, open for at most one entry at a time.
     marker_editor: Option<MarkerEditorState>,
     _marker_editor_subscription: Option<Subscription>,
-    /// The filter frame's animated effects, created the first time they are needed.
-    filter_frame_fx: Option<Entity<FilterFrameFx>>,
     /// The tab the filter frame was last drawn for, to tell a filter being switched on or off
     /// from a switch to another tab.
     last_frame_tab: Option<u64>,
+    /// The line running around the filter frame's content, created the first time it is needed.
+    filter_frame_edge: Option<Entity<FilterFrameEdge>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -674,8 +674,8 @@ impl SashaApp {
             cached_bg_image: None,
             marker_editor: None,
             _marker_editor_subscription: None,
-            filter_frame_fx: None,
             last_frame_tab: None,
+            filter_frame_edge: None,
         }
     }
 
@@ -1655,21 +1655,21 @@ impl SashaApp {
         (filter_on || animating, transition)
     }
 
-    /// The frame's effects view, kept in step with the theme's accent.
-    fn ensure_filter_frame_fx(
+    /// The frame's edge line, kept in step with the theme's accent.
+    fn ensure_filter_frame_edge(
         &mut self,
         accent: Hsla,
         cx: &mut Context<Self>,
-    ) -> Entity<FilterFrameFx> {
-        match &self.filter_frame_fx {
-            Some(fx) => {
-                fx.update(cx, |fx, cx| fx.set_accent(accent, cx));
-                fx.clone()
+    ) -> Entity<FilterFrameEdge> {
+        match &self.filter_frame_edge {
+            Some(edge) => {
+                edge.update(cx, |edge, cx| edge.set_accent(accent, cx));
+                edge.clone()
             }
             None => {
-                let fx = cx.new(|_| FilterFrameFx::new(accent));
-                self.filter_frame_fx = Some(fx.clone());
-                fx
+                let edge = cx.new(|_| FilterFrameEdge::new(accent));
+                self.filter_frame_edge = Some(edge.clone());
+                edge
             }
         }
     }
@@ -3597,11 +3597,11 @@ impl Render for SashaApp {
             tab.log_selection.observe_log_len(log_len);
             tab.sync_log_list_state(log_font_size);
         }
-        let frame_fx_enabled = self.config_store.read(cx).config().filter_frame_effects;
         let filter_on = self.active_tab().log_filter.is_active();
-        let frame_fx = (filter_on && frame_fx_enabled)
-            .then(|| self.ensure_filter_frame_fx(surface_theme.accent_blue, cx));
         let (frame_mounted, frame_transition) = self.frame_state(active_id, filter_on, cx);
+        // The line sits at the content's final edge, so wait until the content has got there.
+        let frame_edge = (filter_on && frame_transition.is_none())
+            .then(|| self.ensure_filter_frame_edge(surface_theme.accent_blue, cx));
         let send_input = self.ensure_send_input(active_id, window, cx);
         let timer_input = self.ensure_timer_input(active_id, window, cx);
         let timer_draft_pending = {
@@ -4303,25 +4303,18 @@ impl Render for SashaApp {
                                     .min_h_0()
                                     .w_full()
                                     .when(frame_mounted, |this| {
-                                        // With effects on, the fx view paints the accent fill
-                                        // itself (it has to animate it); otherwise it is static.
-                                        // The fill goes first so the label and content sit on it.
-                                        this.when(frame_fx.is_none(), |this| {
-                                            this.bg(surface_theme.accent_blue)
-                                        })
-                                        .rounded_tl(px(FILTER_FRAME_RADIUS))
-                                        .pt(px(FILTER_FRAME_TOP))
-                                        .px(px(FILTER_FRAME_SIDE))
-                                        .pb(px(FILTER_FRAME_SIDE))
-                                        .children(frame_fx)
-                                        .child(
-                                            FilterFrameLabel {
+                                        this.bg(surface_theme.accent_blue)
+                                            .rounded_tl(px(FILTER_FRAME_RADIUS))
+                                            .pt(px(FILTER_FRAME_TOP))
+                                            .px(px(FILTER_FRAME_SIDE))
+                                            .pb(px(FILTER_FRAME_SIDE))
+                                            .children(frame_edge)
+                                            .child(FilterFrameLabel {
                                                 theme: surface_theme,
                                                 locale,
                                                 visible: filter_visible,
                                                 total: filter_total,
-                                            },
-                                        )
+                                            })
                                     })
                                     .child(animate_content_corners(
                                         v_flex()

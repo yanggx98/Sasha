@@ -595,16 +595,6 @@ impl SettingsWindow {
         cx.notify();
     }
 
-    fn set_filter_frame_effects(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        let result = self.config_store.update(cx, |store, cx| {
-            let res = store.update(|cfg| cfg.filter_frame_effects = enabled);
-            cx.notify();
-            res
-        });
-        self.save_error = result.err();
-        cx.notify();
-    }
-
     /// Status line, detail and action buttons for the About page's update area.
     fn render_update_status(&self, locale: Locale, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme;
@@ -1509,46 +1499,6 @@ impl SettingsWindow {
             .into_any_element();
         let theme_editor_panel = self.render_theme_editor(locale, cx);
 
-        let frame_effects = self.config_store.read(cx).config().filter_frame_effects;
-        let frame_effects_picker = h_flex()
-            .p_0p5()
-            .rounded(px(6.))
-            .bg(theme.bg_card)
-            .gap_0p5()
-            .children(
-                [(true, "settings.on"), (false, "settings.off")]
-                    .into_iter()
-                    .enumerate()
-                    .map(|(idx, (value, key))| {
-                        let selected = frame_effects == value;
-                        div()
-                            .id(ElementId::named_usize("settings-frame-effects", idx))
-                            .px_2p5()
-                            .py_1()
-                            .rounded(px(4.))
-                            .text_xs()
-                            .cursor_pointer()
-                            .when(selected, |this| {
-                                this.bg(theme.bg_toggle_active)
-                                    .text_color(theme.accent_blue_hover)
-                                    .font_weight(FontWeight::MEDIUM)
-                            })
-                            .when(!selected, |this| {
-                                this.text_color(theme.text_secondary)
-                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
-                            })
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.set_filter_frame_effects(value, cx);
-                                }),
-                            )
-                            .child(tr_shared(locale, key))
-                    }),
-            )
-            .into_any_element();
-
         v_flex()
             .w_full()
             .child(self.render_section_header(SettingsTab::View, locale))
@@ -1579,11 +1529,6 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.bg_opacity_title"),
                 tr_shared(locale, "settings.bg_opacity_desc"),
                 bg_opacity_controls,
-            ))
-            .child(self.render_setting_row(
-                tr_shared(locale, "settings.frame_effects_title"),
-                tr_shared(locale, "settings.frame_effects_desc"),
-                frame_effects_picker,
             ))
     }
 

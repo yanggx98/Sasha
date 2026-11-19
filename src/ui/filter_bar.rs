@@ -1,5 +1,5 @@
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tooltip::Tooltip;
@@ -154,83 +154,158 @@ where
         .into_any_element()
 }
 
-/// How far toward white the accent is pulled to make the colour of the glow and the breath.
-const FILTER_FX_WASH_WHITE: f32 = 0.7;
-const FILTER_FX_BREATH_MS: u64 = 3200;
-const FILTER_FX_RISE_MS: u64 = 3600;
-/// How far the frame's accent shifts toward the wash colour at the peak of a breath.
-const FILTER_FX_GLOW_ALPHA: f32 = 0.24;
-/// Peak opacity of the glow that rises through the frame.
-const FILTER_FX_RISE_ALPHA: f32 = 0.60;
-/// Height of that glow, as a fraction of the frame's height.
-const FILTER_FX_RISE_HEIGHT: f32 = 0.42;
+/// Thickness of the loop's line.
+const FILTER_EDGE_LINE: f32 = 2.;
+/// One lap of the bright segment around the content's edge.
+const FILTER_EDGE_LAP_MS: u128 = 2600;
+/// How much of the perimeter the bright segment covers.
+const FILTER_EDGE_SEGMENT: f32 = 0.22;
+/// The segment is drawn in this many pieces, each a little brighter than the one behind it, so
+/// that its tail fades out.
+const FILTER_EDGE_PIECES: usize = 24;
+/// Opacity of the dim track the segment runs along.
+const FILTER_EDGE_TRACK_ALPHA: f32 = 0.20;
+/// How far toward white the accent is pulled for the line.
+const FILTER_EDGE_WHITE: f32 = 0.85;
 
-/// Breathing curve over one period: 0 at both ends, 1 in the middle, smooth at the loop
-/// point (a plain ease would kink there).
-fn breath_curve(t: f32) -> f32 {
-    0.5 - 0.5 * (t * std::f32::consts::TAU).cos()
+/// The point `d` along the perimeter of a `w` × `h` rectangle with corner radius `r`, as an
+/// offset from the rectangle's top-left. Clockwise, starting where the top edge begins (just past
+/// the top-left corner). `d` wraps around the perimeter.
+fn rounded_rect_point(w: f32, h: f32, r: f32, d: f32) -> (f32, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let straight_x = (w - 2. * r).max(0.);
+    let straight_y = (h - 2. * r).max(0.);
+    let arc = FRAC_PI_2 * r;
+    let mut d = d.rem_euclid(2. * (straight_x + straight_y) + 4. * arc);
+
+    if d < straight_x {
+        return (r + d, 0.);
+    }
+    d -= straight_x;
+    if d < arc {
+        let a = -FRAC_PI_2 + d / r;
+        return (w - r + r * a.cos(), r + r * a.sin());
+    }
+    d -= arc;
+    if d < straight_y {
+        return (w, r + d);
+    }
+    d -= straight_y;
+    if d < arc {
+        let a = d / r;
+        return (w - r + r * a.cos(), h - r + r * a.sin());
+    }
+    d -= arc;
+    if d < straight_x {
+        return (w - r - d, h);
+    }
+    d -= straight_x;
+    if d < arc {
+        let a = FRAC_PI_2 + d / r;
+        return (r + r * a.cos(), h - r + r * a.sin());
+    }
+    d -= arc;
+    if d < straight_y {
+        return (0., h - r - d);
+    }
+    d -= straight_y;
+    let a = PI + d / r;
+    (r + r * a.cos(), r + r * a.sin())
 }
 
-/// Top edge of the rising glow, as a fraction of the frame's height. The glow stays inside the
-/// frame the whole time: its bottom edge on the frame's bottom at `progress == 0`, its top edge
-/// on the frame's top at `1`. Staying inside means nothing has to be clipped (the frame's
-/// top-left corner is round and clipping can only be rectangular).
-fn rise_top(progress: f32) -> f32 {
-    (1.0 - FILTER_FX_RISE_HEIGHT) * (1.0 - progress)
+/// Length of the perimeter that [`rounded_rect_point`] walks.
+fn rounded_rect_perimeter(w: f32, h: f32, r: f32) -> f32 {
+    2. * ((w - 2. * r).max(0.) + (h - 2. * r).max(0.)) + 2. * std::f32::consts::PI * r
 }
 
-/// Opacity of the rising glow: 0 at both ends and 1 in the middle, so it fades in and out in
-/// place instead of sliding in from outside the frame.
-fn rise_opacity(progress: f32) -> f32 {
-    (progress * std::f32::consts::PI).sin()
+/// Strokes the stretch of the perimeter from distance `from` to `to`.
+fn stroke_perimeter(
+    window: &mut Window,
+    origin: Point<Pixels>,
+    size: (f32, f32, f32),
+    (from, to): (f32, f32),
+    step: f32,
+    color: Hsla,
+) {
+    let (w, h, r) = size;
+    let pieces = (((to - from) / step).ceil() as usize).max(1);
+    let mut path = PathBuilder::stroke(px(FILTER_EDGE_LINE));
+    for i in 0..=pieces {
+        let d = from + (to - from) * i as f32 / pieces as f32;
+        let (x, y) = rounded_rect_point(w, h, r, d);
+        let p = point(origin.x + px(x), origin.y + px(y));
+        if i == 0 {
+            path.move_to(p);
+        } else {
+            path.line_to(p);
+        }
+    }
+    if let Ok(path) = path.build() {
+        window.paint_path(path, color);
+    }
 }
 
-/// The glow that rises through the frame: a band that fades in over its upper half and out over
-/// its lower half, so it has no hard edge.
-fn rising_glow(id: &'static str, wash: Hsla) -> impl IntoElement {
-    let leading = linear_gradient(
-        180.,
-        linear_color_stop(wash.opacity(0.), 0.),
-        linear_color_stop(wash.opacity(FILTER_FX_RISE_ALPHA), 1.),
+/// Paints the loop around the content card inside the frame `bounds`: a dim track along the
+/// card's outer edge and, when `lap` is given (how far round it is, `0..1`), a bright segment
+/// with a fading tail running along it. The line hugs the card, just outside it, so it follows
+/// the card's rounded corners.
+fn paint_edge_loop(bounds: Bounds<Pixels>, color: Hsla, lap: Option<f32>, window: &mut Window) {
+    let half = FILTER_EDGE_LINE / 2.;
+    let origin = point(
+        bounds.left() + px(FILTER_FRAME_SIDE - half),
+        bounds.top() + px(FILTER_FRAME_TOP - half),
     );
-    let trailing = linear_gradient(
-        180.,
-        linear_color_stop(wash.opacity(FILTER_FX_RISE_ALPHA), 0.),
-        linear_color_stop(wash.opacity(0.), 1.),
+    let w = f32::from(bounds.size.width) - 2. * FILTER_FRAME_SIDE + FILTER_EDGE_LINE;
+    let h = f32::from(bounds.size.height) - FILTER_FRAME_TOP - FILTER_FRAME_SIDE + FILTER_EDGE_LINE;
+    let size = (w, h, FILTER_FRAME_RADIUS + half);
+    let total = rounded_rect_perimeter(w, h, size.2);
+
+    stroke_perimeter(
+        window,
+        origin,
+        size,
+        (0., total),
+        4.,
+        color.opacity(FILTER_EDGE_TRACK_ALPHA),
     );
-    div()
-        .absolute()
-        .left_0()
-        .w_full()
-        .h(relative(FILTER_FX_RISE_HEIGHT))
-        .flex()
-        .flex_col()
-        .child(div().w_full().flex_1().bg(leading))
-        .child(div().w_full().flex_1().bg(trailing))
-        .with_animation(
-            id,
-            Animation::new(Duration::from_millis(FILTER_FX_RISE_MS)).repeat(),
-            |glow, progress| {
-                glow.top(relative(rise_top(progress)))
-                    .opacity(rise_opacity(progress))
-            },
-        )
+    let Some(lap) = lap else { return };
+    let length = total * FILTER_EDGE_SEGMENT;
+    let head = lap * total;
+    let piece = length / FILTER_EDGE_PIECES as f32;
+    for k in 0..FILTER_EDGE_PIECES {
+        let start = head - length + piece * k as f32;
+        // Overlap neighbouring pieces a little so the joins leave no gap.
+        let end = start + piece + 0.8;
+        let brightness = ((k + 1) as f32 / FILTER_EDGE_PIECES as f32).powf(1.6);
+        stroke_perimeter(
+            window,
+            origin,
+            size,
+            (start, end),
+            3.,
+            color.opacity(brightness),
+        );
+    }
 }
 
-/// The filter frame's accent fill and its continuous effects: the whole fill breathes (its
-/// colour drifts toward the wash and back) while a glow keeps rising through it from the
-/// bottom to the top.
+/// A thin line that keeps running around the content card's outer edge while a filter is on, like
+/// an indeterminate progress bar around the frame.
 ///
 /// This is its own view on purpose. GPUI redraws the view that owns a running animation on
 /// every frame; owned by the workspace, that would rebuild the whole window 60 times a second
-/// for as long as a filter is on. Here only this small view is redrawn.
-pub struct FilterFrameFx {
+/// for as long as a filter is on. Here only this small view is redrawn. When the system asks for
+/// reduced motion, it draws just the still track.
+pub struct FilterFrameEdge {
     accent: Hsla,
+    started: Instant,
 }
 
-impl FilterFrameFx {
+impl FilterFrameEdge {
     pub fn new(accent: Hsla) -> Self {
-        Self { accent }
+        Self {
+            accent,
+            started: Instant::now(),
+        }
     }
 
     pub fn set_accent(&mut self, accent: Hsla, cx: &mut Context<Self>) {
@@ -241,31 +316,23 @@ impl FilterFrameFx {
     }
 }
 
-impl Render for FilterFrameFx {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let accent = self.accent;
-        // The glow and the breathing both lighten the frame: the accent pulled toward white.
-        // (Not the label's colour: that is black on a pale accent, and a glow has to brighten.)
-        let wash = lerp_color(accent, white(), FILTER_FX_WASH_WHITE);
-
-        // This is the frame's whole accent fill, painted beneath the content: the edges and the
-        // pockets that the content's rounded corners uncover are the same surface, so they
-        // breathe together. (A glow laid over just the edges would leave the pockets behind.)
-        div()
-            .absolute()
-            .top_0()
-            .left_0()
-            .size_full()
-            .rounded_tl(px(FILTER_FRAME_RADIUS))
-            .bg(accent)
-            .child(rising_glow("filter-frame-rise", wash))
-            .with_animation(
-                "filter-frame-breath",
-                Animation::new(Duration::from_millis(FILTER_FX_BREATH_MS))
-                    .repeat()
-                    .with_easing(breath_curve),
-                move |fill, glow| fill.bg(lerp_color(accent, wash, glow * FILTER_FX_GLOW_ALPHA)),
-            )
+impl Render for FilterFrameEdge {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pulled toward white, not the label's colour: that is black on a pale accent.
+        let color = lerp_color(self.accent, white(), FILTER_EDGE_WHITE);
+        let lap = (!cx.reduce_motion()).then(|| {
+            window.request_animation_frame();
+            (self.started.elapsed().as_millis() % FILTER_EDGE_LAP_MS) as f32
+                / FILTER_EDGE_LAP_MS as f32
+        });
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| paint_edge_loop(bounds, color, lap, window),
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 }
 
@@ -412,33 +479,6 @@ mod tests {
     use super::*;
 
     #[core::prelude::v1::test]
-    fn breath_curve_is_a_smooth_loop_between_zero_and_one() {
-        assert!(breath_curve(0.0).abs() < 1e-6);
-        assert!((breath_curve(0.5) - 1.0).abs() < 1e-6);
-        assert!(breath_curve(1.0).abs() < 1e-5);
-        // Same value (and slope) at the loop point, so there is no jump when it repeats.
-        assert!((breath_curve(0.001) - breath_curve(0.999)).abs() < 1e-4);
-        for step in 0..=100 {
-            let value = breath_curve(step as f32 / 100.0);
-            assert!((0.0..=1.0).contains(&value));
-        }
-    }
-
-    #[core::prelude::v1::test]
-    fn rising_glow_stays_inside_the_frame_and_moves_up() {
-        // Bottom edge (top + height) on the frame's bottom at the start, top edge on its top at
-        // the end: it never leaves the frame, so it needs no clipping.
-        assert!((rise_top(0.0) + FILTER_FX_RISE_HEIGHT - 1.0).abs() < 1e-6);
-        assert!(rise_top(1.0).abs() < 1e-6);
-        for step in 0..=100 {
-            let top = rise_top(step as f32 / 100.0);
-            assert!(top >= -1e-6 && top + FILTER_FX_RISE_HEIGHT <= 1.0 + 1e-6);
-        }
-        // It moves up, not down.
-        assert!(rise_top(0.5) < rise_top(0.25));
-    }
-
-    #[core::prelude::v1::test]
     fn frame_progress_runs_forward_when_entering_and_back_when_leaving() {
         assert_eq!(frame_progress(true, 0.0), 0.0);
         assert_eq!(frame_progress(true, 1.0), 1.0);
@@ -448,10 +488,60 @@ mod tests {
         assert_eq!(frame_progress(false, -1.0), 1.0);
     }
 
+    fn near(a: (f32, f32), b: (f32, f32)) -> bool {
+        (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3
+    }
+
     #[core::prelude::v1::test]
-    fn rising_glow_fades_in_and_out_in_place() {
-        assert!(rise_opacity(0.0).abs() < 1e-6);
-        assert!(rise_opacity(1.0).abs() < 1e-5);
-        assert!((rise_opacity(0.5) - 1.0).abs() < 1e-6);
+    fn the_loop_walks_the_rounded_rectangle_clockwise_from_the_top_edge() {
+        let (w, h, r) = (100., 60., 10.);
+        let arc = std::f32::consts::FRAC_PI_2 * r;
+        let top = w - 2. * r;
+        let side = h - 2. * r;
+        // Start of the top edge, then its end.
+        assert!(near(rounded_rect_point(w, h, r, 0.), (r, 0.)));
+        assert!(near(rounded_rect_point(w, h, r, top), (w - r, 0.)));
+        // After each corner: the right edge, bottom edge, left edge and top edge begin.
+        assert!(near(rounded_rect_point(w, h, r, top + arc), (w, r)));
+        assert!(near(
+            rounded_rect_point(w, h, r, top + arc + side + arc),
+            (w - r, h)
+        ));
+        assert!(near(
+            rounded_rect_point(w, h, r, top + arc + side + arc + top + arc),
+            (0., h - r)
+        ));
+        let lap = rounded_rect_perimeter(w, h, r);
+        assert!(near(rounded_rect_point(w, h, r, lap), (r, 0.)));
+        // Down the right side (y grows) and back up the left (y shrinks).
+        assert!(
+            rounded_rect_point(w, h, r, top + arc + 5.).1
+                > rounded_rect_point(w, h, r, top + arc).1
+        );
+    }
+
+    #[core::prelude::v1::test]
+    fn the_loop_stays_on_the_outline_and_has_no_jumps() {
+        let (w, h, r) = (120., 80., 9.);
+        let lap = rounded_rect_perimeter(w, h, r);
+        let mut previous = rounded_rect_point(w, h, r, 0.);
+        let steps = 2000;
+        for i in 1..=steps {
+            let p = rounded_rect_point(w, h, r, lap * i as f32 / steps as f32);
+            // Every point is on the rectangle's outline.
+            assert!((0.0..=w).contains(&p.0) && (0.0..=h).contains(&p.1));
+            // No two neighbouring samples are further apart than their spacing allows.
+            let gap = ((p.0 - previous.0).powi(2) + (p.1 - previous.1).powi(2)).sqrt();
+            assert!(
+                gap <= lap / steps as f32 * 1.01,
+                "jump of {gap} at step {i}"
+            );
+            previous = p;
+        }
+        // Negative distances wrap, so a tail starting "behind" the start still lands on the path.
+        assert!(near(
+            rounded_rect_point(w, h, r, -lap + 3.),
+            rounded_rect_point(w, h, r, 3.)
+        ));
     }
 }
