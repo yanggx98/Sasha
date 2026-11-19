@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mlua::{Lua, MultiValue, Value};
 
 use crate::session_service::SessionTxError;
 
-use super::runtime::{ScriptAbort, ScriptContext};
+use super::runtime::{ScriptAbort, ScriptContext, deadline_after};
 use super::{DEFAULT_RX_TIMEOUT_MS, ScriptLogLevel};
 
 /// Registers `serial`, `task`, `log`, and global `print` into the Lua VM.
@@ -61,7 +61,7 @@ fn register_serial_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
         }
 
         if timeout_ms > 0 {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            let deadline = deadline_after(Duration::from_millis(timeout_ms));
             while read_ctx
                 .wait_for_rx_chunk(deadline)
                 .map_err(mlua::Error::external)?
@@ -99,7 +99,7 @@ fn register_serial_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
             }
 
             if timeout_ms > 0 {
-                let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                let deadline = deadline_after(Duration::from_millis(timeout_ms));
                 while wait_ctx
                     .wait_for_rx_chunk(deadline)
                     .map_err(mlua::Error::external)?

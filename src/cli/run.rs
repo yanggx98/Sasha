@@ -52,7 +52,7 @@ pub fn script_flow(
             return CliExit::OpenFailed;
         }
     };
-    let deadline = timeout.map(|t| Instant::now() + t);
+    let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
     let mut timed_out = false;
     let status = loop {
         print_logs(&mut manager, out);

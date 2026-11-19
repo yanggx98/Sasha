@@ -122,7 +122,7 @@ pub fn monitor_flow(
     stop: &AtomicBool,
     emit: &mut dyn FnMut(String),
 ) -> MonitorEnd {
-    let deadline = opts.duration.map(|d| Instant::now() + d);
+    let deadline = opts.duration.and_then(|d| Instant::now().checked_add(d));
     let finish = |opts: &mut MonitorOptions, emit: &mut dyn FnMut(String), end: MonitorEnd| {
         for line in opts.formatter.finish(&current_timestamp_hms_ms()) {
             emit(line);

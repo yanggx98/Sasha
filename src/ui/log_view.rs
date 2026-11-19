@@ -258,6 +258,8 @@ fn color_highlight(color: Hsla) -> HighlightStyle {
 /// so rows above that would otherwise contribute 0 and the scrollbar would
 /// hit the top of its track while earlier logs were still above.
 pub(crate) fn log_row_height_hint(font_size: u16) -> Pixels {
+    // Mirrors GPUI's default line-height factor; keep the literal (not a std constant).
+    #[allow(clippy::approx_constant)]
     let line_height = (font_size as f32 * 1.618_034).round();
     px(line_height + 4.)
 }

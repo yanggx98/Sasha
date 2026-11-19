@@ -23,6 +23,9 @@ pub const SCRIPT_RX_BUFFER_MAX_BYTES: usize = 1024 * 1024;
 /// Maximum number of log lines retained per script instance.
 pub const SCRIPT_LOG_MAX_LINES: usize = 500;
 
+/// Maximum buffered events per manager before the oldest log events are shed.
+pub const SCRIPT_EVENT_QUEUE_MAX: usize = 10_000;
+
 /// Default timeout in milliseconds when `timeout_ms` is omitted in `serial.read` / `serial.wait_text`.
 pub const DEFAULT_RX_TIMEOUT_MS: u64 = 5_000;
 

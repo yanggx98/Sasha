@@ -549,3 +549,118 @@ fn checksum_module_computes_values_and_appends_in_wire_order() {
         vec![vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC5, 0xCD]]
     );
 }
+
+#[test]
+fn huge_timeouts_do_not_panic_and_remain_cancellable() {
+    let (service, generation, _) = setup_connected_service();
+    let mut manager = ScriptManager::new();
+
+    let ids: Vec<u64> = [
+        "log.info('started')\ntask.sleep(1e18)",
+        "log.info('started')\nserial.read(nil, 1e18)",
+        "log.info('started')\nserial.wait_text('NEVER', 1e18)",
+    ]
+    .into_iter()
+    .map(|src| {
+        manager
+            .start_script(
+                PathBuf::from("huge.lua"),
+                src.to_string(),
+                &service,
+                generation,
+            )
+            .unwrap()
+    })
+    .collect();
+
+    for id in &ids {
+        wait_until_log_contains(&manager, *id, "started", Duration::from_secs(2));
+    }
+    thread::sleep(Duration::from_millis(100));
+    assert_eq!(manager.running_count(), 3, "no script may have panicked");
+    for id in &ids {
+        assert!(manager.stop_instance(*id));
+    }
+    for id in ids {
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(2));
+        assert_eq!(
+            snap.status,
+            ScriptStatus::Stopped {
+                reason: StopReason::User
+            }
+        );
+    }
+}
+
+#[test]
+fn pcall_cannot_swallow_cancellation() {
+    let (service, generation, _) = setup_connected_service();
+    let mut manager = ScriptManager::new();
+
+    let source = r#"
+        log.info('started')
+        local ok = pcall(function() return 1 end)
+        assert(ok == true)
+        local ok2, v = pcall(function(a) return a * 2 end, 21)
+        assert(ok2 and v == 42)
+        local ok3 = pcall(error, "plain failure")
+        assert(ok3 == false)
+        local co = coroutine.create(function(x) return x end)
+        local ok4, r = coroutine.resume(co, 7)
+        assert(ok4 and r == 7)
+        while true do
+            pcall(task.sleep, 20)
+            xpcall(task.sleep, print, 20)
+            coroutine.resume(coroutine.create(function() task.sleep(20) end))
+        end
+    "#;
+    let run_id = manager
+        .start_script(
+            PathBuf::from("pcall.lua"),
+            source.to_string(),
+            &service,
+            generation,
+        )
+        .unwrap();
+    wait_until_log_contains(&manager, run_id, "started", Duration::from_secs(2));
+    thread::sleep(Duration::from_millis(100));
+    assert!(manager.stop_instance(run_id));
+    let snap = wait_until_finished(&manager, run_id, Duration::from_secs(2));
+    assert_eq!(
+        snap.status,
+        ScriptStatus::Stopped {
+            reason: StopReason::User
+        }
+    );
+}
+
+#[test]
+fn event_queue_is_bounded_but_keeps_lifecycle_events() {
+    let (service, generation, _) = setup_connected_service();
+    let mut manager = ScriptManager::new();
+
+    let source = format!(
+        "for i = 1, {} do log.info('x') end",
+        super::SCRIPT_EVENT_QUEUE_MAX + 500
+    );
+    let run_id = manager
+        .start_script(PathBuf::from("flood.lua"), source, &service, generation)
+        .unwrap();
+    let snap = wait_until_finished(&manager, run_id, Duration::from_secs(5));
+    assert_eq!(snap.status, ScriptStatus::Completed);
+
+    let events = manager.drain_events();
+    assert!(events.len() <= super::SCRIPT_EVENT_QUEUE_MAX + 2);
+    assert!(
+        events
+            .iter()
+            .any(|ev| matches!(ev, ScriptEvent::Started { .. }))
+    );
+    assert!(events.iter().any(|ev| matches!(
+        ev,
+        ScriptEvent::StatusChanged {
+            status: ScriptStatus::Completed,
+            ..
+        }
+    )));
+}

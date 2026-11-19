@@ -98,7 +98,11 @@ pub fn send_flow(
     let (Some((mut matcher, timeout)), Some(subscriber)) = (expect, subscriber) else {
         return Ok(SendOutcome::Sent);
     };
-    let deadline = Instant::now() + timeout;
+    let started = Instant::now();
+    // Saturate on absurd `--timeout` values instead of panicking on overflow.
+    let deadline = started
+        .checked_add(timeout)
+        .unwrap_or_else(|| started + Duration::from_secs(60 * 60 * 24 * 365));
     loop {
         let now = Instant::now();
         if now >= deadline {
