@@ -85,6 +85,8 @@ struct SessionTab {
     start_baud_input: Option<Entity<InputState>>,
     _start_baud_sub: Option<Subscription>,
     serial_conn: Option<SerialConnection>,
+    /// True while the port is being opened on a background thread.
+    connecting: bool,
     serial_rx_task: Option<Task<()>>,
     session_service: SessionService,
     send_input: Option<Entity<TextareaState>>,
@@ -170,6 +172,7 @@ impl SessionTab {
             start_baud_input: None,
             _start_baud_sub: None,
             serial_conn: None,
+            connecting: false,
             serial_rx_task: None,
             session_service: SessionService::new(),
             send_input: None,
@@ -1093,15 +1096,53 @@ impl SashaApp {
             self.active_tab_mut().start_page.set_manual_port_value(&raw);
         }
 
+        if self.active_tab().connecting {
+            return;
+        }
         let locale = self.current_locale(cx);
         let config = self.active_tab().start_page.config.clone();
-        match SerialConnection::open_for(&config, locale) {
+        {
+            let tab = self.active_tab_mut();
+            tab.connecting = true;
+            tab.start_page.connecting = true;
+            tab.start_page.connect_error = None;
+        }
+        let open_config = config.clone();
+        // Opening a port can block for seconds on some drivers; keep it off the UI thread.
+        let opening = cx
+            .background_executor()
+            .spawn(async move { SerialConnection::open_for(&open_config, locale) });
+        cx.spawn(async move |this, cx| {
+            let result = opening.await;
+            let _ = this.update(cx, |app, cx| {
+                app.finish_connect_from_start_page(tab_id, config, result, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_connect_from_start_page(
+        &mut self,
+        tab_id: u64,
+        config: crate::model::SerialConfig,
+        result: Result<(SerialConnection, Receiver<SerialEvent>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return; // tab closed while opening; dropping `result` closes the port
+        };
+        tab.connecting = false;
+        tab.start_page.connecting = false;
+        match result {
             Ok((mut conn, rx)) => {
                 let writer = conn
                     .take_writer()
                     .expect("newly opened SerialConnection must have a writer");
                 let log_buffer_limit = self.saved_log_buffer_limit(cx);
-                let tab = self.active_tab_mut();
+                let Some(tab) = self.tab_mut(tab_id) else {
+                    return;
+                };
                 tab.disconnect_real_serial(None);
                 let generation = tab.session_service.attach_writer(writer);
                 tab.state = SessionState::new_real_session(config, true);
@@ -1117,7 +1158,9 @@ impl SashaApp {
                 cx.notify();
             }
             Err(err) => {
-                self.active_tab_mut().start_page.connect_error = Some(err);
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.start_page.connect_error = Some(err);
+                }
                 cx.notify();
             }
         }
@@ -1223,18 +1266,45 @@ impl SashaApp {
 
     fn connect_real_serial(&mut self, cx: &mut Context<Self>) {
         let tab_id = self.active_tab_id;
+        if self.active_tab().connecting {
+            return;
+        }
         let config = {
             let tab = self.active_tab_mut();
             tab.disconnect_real_serial(None);
+            tab.connecting = true;
             tab.state.config.clone()
         };
         let locale = self.current_locale(cx);
-        match SerialConnection::open_for(&config, locale) {
+        // Opening a port can block for seconds on some drivers; keep it off the UI thread.
+        let opening = cx
+            .background_executor()
+            .spawn(async move { SerialConnection::open_for(&config, locale) });
+        cx.spawn(async move |this, cx| {
+            let result = opening.await;
+            let _ = this.update(cx, |app, cx| {
+                app.finish_connect_real_serial(tab_id, result, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_connect_real_serial(
+        &mut self,
+        tab_id: u64,
+        result: Result<(SerialConnection, Receiver<SerialEvent>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return; // tab closed while opening; dropping `result` closes the port
+        };
+        tab.connecting = false;
+        match result {
             Ok((mut conn, rx)) => {
                 let writer = conn
                     .take_writer()
                     .expect("newly opened SerialConnection must have a writer");
-                let tab = self.active_tab_mut();
                 let generation = tab.session_service.attach_writer(writer);
                 tab.serial_conn = Some(conn);
                 tab.state.set_connected(true);
@@ -1243,10 +1313,11 @@ impl SashaApp {
                 self.start_serial_rx_loop(tab_id, rx, generation, cx);
             }
             Err(err) => {
-                let tab = self.active_tab_mut();
-                tab.state.set_connected(false);
-                tab.motion.connection.set(false);
-                tab.send_error = Some(err.into());
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.state.set_connected(false);
+                    tab.motion.connection.set(false);
+                    tab.send_error = Some(err.into());
+                }
             }
         }
         cx.notify();
@@ -3198,7 +3269,11 @@ impl Render for SashaApp {
         let timer_flag = tab.timer_flag;
         let config = tab.state.config.clone();
         let connection = tab.state.connection;
-        let conn_action_label = tab.state.connection_action_label_for(locale);
+        let conn_action_label = if tab.connecting {
+            tr(locale, "status.action_connecting")
+        } else {
+            tab.state.connection_action_label_for(locale)
+        };
         let counters = tab.state.counters;
         let buffer_used = tab.state.log_buffer_used_bytes();
         let active_picker = tab.state.active_picker;
