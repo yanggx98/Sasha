@@ -1,7 +1,7 @@
 use gpui_kit::assets::IconName as LucideIcon;
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{Icon, h_flex, v_flex};
+use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
@@ -290,6 +290,7 @@ impl Render for QuickCommandWindow {
 
         v_flex()
             .id("quick-command-window-root")
+            .relative()
             .size_full()
             .bg(theme.bg_canvas)
             .text_color(theme.text_primary)
@@ -535,6 +536,23 @@ impl Render for QuickCommandWindow {
                                 }),
                             )
                             .child(tr_shared(locale, "quick.save")),
+                    ),
+            )
+            // Transparent TitleBar overlay: draws the minimize/maximize/close controls.
+            .child(
+                div()
+                    .id("quick-command-title-overlay")
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(HEADER_HEIGHT)
+                    .occlude()
+                    .cursor_default()
+                    .child(
+                        TitleBar::new()
+                            .bg(gpui_kit::transparent_black())
+                            .border_b_0(),
                     ),
             )
     }
