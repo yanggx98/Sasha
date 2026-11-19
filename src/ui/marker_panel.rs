@@ -12,6 +12,7 @@ use crate::i18n::{Locale, marker_clear_confirm, tr_shared};
 use crate::model::MarkerColor;
 use crate::ui::marker_editor::marker_color_hsla;
 use crate::ui::receive_toolbar::ToolbarActionCallback;
+use crate::ui::script_panel::rail_button;
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_store::contrast_foreground;
 
@@ -35,6 +36,9 @@ pub struct MarkerPanel {
     pub locale: Locale,
     pub items: Vec<MarkerPanelItem>,
     pub collapsed: bool,
+    /// Icon-only dock: show just the rail button.
+    pub compact: bool,
+    pub on_expand_dock: ToolbarActionCallback,
     pub pending_clear: bool,
     pub on_toggle_section: ToolbarActionCallback,
     pub on_jump: MarkerIdCallback,
@@ -111,6 +115,26 @@ impl RenderOnce for MarkerPanel {
         let theme = self.theme;
         let locale = self.locale;
         let count = self.items.len();
+
+        if self.compact {
+            return v_flex()
+                .id("marker-panel")
+                .w_full()
+                .flex_none()
+                .px_1p5()
+                .bg(theme.bg_canvas)
+                .occlude()
+                .child(rail_button(
+                    theme,
+                    "marker-rail",
+                    LucideIcon::Bookmark,
+                    tr_shared(locale, "marker.panel_title"),
+                    (count > 0).then_some(count),
+                    self.on_expand_dock.clone(),
+                ))
+                .into_any_element();
+        }
+
         let section_icon = if self.collapsed {
             LucideIcon::ChevronRight
         } else {
@@ -296,5 +320,6 @@ impl RenderOnce for MarkerPanel {
                         .children(rows),
                 )
             })
+            .into_any_element()
     }
 }

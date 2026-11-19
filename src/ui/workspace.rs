@@ -3492,6 +3492,16 @@ impl Render for SashaApp {
             });
         });
         let weak = cx.entity().downgrade();
+        let on_marker_expand = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_WIDTH;
+                    tab.marker_collapsed = false;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
         let on_marker_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
         });
@@ -3530,6 +3540,11 @@ impl Render for SashaApp {
             locale,
             items: marker_items,
             collapsed: marker_collapsed,
+            compact: panel_is_compact(panel_width(
+                self.active_tab().script_preferred_width,
+                (window.viewport_size().width - TAB_RAIL_WIDTH).max(px(0.)),
+            )),
+            on_expand_dock: on_marker_expand,
             pending_clear: marker_pending_clear,
             on_toggle_section: on_marker_toggle,
             on_jump: on_marker_jump,
@@ -4202,9 +4217,7 @@ impl Render for SashaApp {
                                     .border_color(self.theme.border_card)
                                     .child(script_panel)
                                     .child(quick_send_panel)
-                                    .when(!panel_is_compact(script_panel_width), |this| {
-                                        this.child(marker_panel)
-                                    }),
+                                    .child(marker_panel),
                             )
                             .child(
                                 resize_handle("script-resize", Axis::Horizontal)
