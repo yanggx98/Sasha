@@ -16,9 +16,13 @@ use super::theme::NanoTheme;
 
 pub const BUILTIN_DARK_ID: &str = "dark";
 pub const BUILTIN_LIGHT_ID: &str = "light";
+pub const BUILTIN_CLAUDE_DARK_ID: &str = "claude-dark";
+pub const BUILTIN_CLAUDE_LIGHT_ID: &str = "claude-light";
 
 const DARK_TOML: &str = include_str!("theme_assets/dark.toml");
 const LIGHT_TOML: &str = include_str!("theme_assets/light.toml");
+const CLAUDE_DARK_TOML: &str = include_str!("theme_assets/claude-dark.toml");
+const CLAUDE_LIGHT_TOML: &str = include_str!("theme_assets/claude-light.toml");
 
 /// Light or dark family a theme belongs to (also decides gpui `ThemeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,12 +446,17 @@ pub fn parse_theme(id: &str, text: &str) -> Result<ThemeEntry, ThemeError> {
     parse_with(id, text, false, Some(fallback_colors))
 }
 
-/// The two built-in themes: dark, then light.
+/// The built-in themes: dark, light, Claude dark, Claude light.
 pub fn builtin_themes() -> Vec<ThemeEntry> {
-    [(BUILTIN_DARK_ID, DARK_TOML), (BUILTIN_LIGHT_ID, LIGHT_TOML)]
-        .iter()
-        .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
-        .collect()
+    [
+        (BUILTIN_DARK_ID, DARK_TOML),
+        (BUILTIN_LIGHT_ID, LIGHT_TOML),
+        (BUILTIN_CLAUDE_DARK_ID, CLAUDE_DARK_TOML),
+        (BUILTIN_CLAUDE_LIGHT_ID, CLAUDE_LIGHT_TOML),
+    ]
+    .iter()
+    .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
+    .collect()
 }
 
 pub fn builtin_dark() -> ThemeEntry {
@@ -455,7 +464,13 @@ pub fn builtin_dark() -> ThemeEntry {
 }
 
 fn is_builtin_id(id: &str) -> bool {
-    id == BUILTIN_DARK_ID || id == BUILTIN_LIGHT_ID
+    [
+        BUILTIN_DARK_ID,
+        BUILTIN_LIGHT_ID,
+        BUILTIN_CLAUDE_DARK_ID,
+        BUILTIN_CLAUDE_LIGHT_ID,
+    ]
+    .contains(&id)
 }
 
 // --------------------------------------------------------------- writing
@@ -1044,9 +1059,9 @@ mod tests {
     }
 
     #[test]
-    fn builtins_are_dark_then_light() {
+    fn builtins_are_dark_light_then_claude() {
         let ids: Vec<_> = builtin_themes().into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, ["dark", "light"]);
+        assert_eq!(ids, ["dark", "light", "claude-dark", "claude-light"]);
     }
 
     #[test]
@@ -1138,11 +1153,11 @@ mod tests {
     fn scan_handles_missing_and_empty_dir() {
         let missing = std::env::temp_dir().join("sasha_theme_test_definitely_missing_dir");
         let scan = scan_dir(&missing);
-        assert_eq!(scan.themes.len(), 2);
+        assert_eq!(scan.themes.len(), 4);
         assert!(scan.errors.is_empty());
         let dir = TempDir::new("empty");
         let scan = scan_dir(&dir.path);
-        assert_eq!(scan.themes.len(), 2);
+        assert_eq!(scan.themes.len(), 4);
         assert!(scan.errors.is_empty());
     }
 
@@ -1156,10 +1171,20 @@ mod tests {
         dir.write("notes.txt", "ignored");
         let scan = scan_dir(&dir.path);
         let ids: Vec<_> = scan.themes.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["dark", "light", "alpha", "zeta"]);
+        assert_eq!(
+            ids,
+            [
+                "dark",
+                "light",
+                "claude-dark",
+                "claude-light",
+                "alpha",
+                "zeta"
+            ]
+        );
         assert!(scan.themes[0].builtin);
         assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x0D1117).into());
-        assert_eq!(scan.themes[3].name, "Zeta");
+        assert_eq!(scan.themes[5].name, "Zeta");
         assert_eq!(scan.errors.len(), 2);
         let broken = scan
             .errors
@@ -1283,7 +1308,7 @@ mod tests {
         assert_eq!(st.current().id, "mine");
         fs::remove_dir_all(&dir.path).unwrap();
         assert!(st.rescan());
-        assert_eq!(st.themes().len(), 2);
+        assert_eq!(st.themes().len(), 4);
         assert_eq!(st.current().id, "dark");
         assert_eq!(st.selected_id(), "mine");
         assert!(!st.messages().is_empty());
@@ -1401,7 +1426,10 @@ mod tests {
         assert!(!st.select("nope"));
         assert_eq!(st.selected_id(), "mine");
         let ids: Vec<_> = st.themes().iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["dark", "light", "mine"]);
+        assert_eq!(
+            ids,
+            ["dark", "light", "claude-dark", "claude-light", "mine"]
+        );
     }
 
     #[test]
