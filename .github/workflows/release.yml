@@ -68,17 +68,22 @@ jobs:
         run: |
           mkdir dist
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # The bare .exe is what the in-app updater installs (and what older
+            # versions look for); the zip is the convenient manual download.
             cp target/release/sasha.exe "dist/${{ matrix.asset }}"
+            powershell -NoProfile -Command "Compress-Archive -Path target/release/sasha.exe -DestinationPath dist/sasha-windows-x86_64.zip"
           else
             # tar keeps the executable bit, which a raw download would lose.
             tar -czf "dist/${{ matrix.asset }}" -C target/release sasha
           fi
           cd dist
-          if command -v sha256sum >/dev/null; then
-            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-          else
-            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
-          fi
+          for f in *; do
+            if command -v sha256sum >/dev/null; then
+              sha256sum "$f" > "$f.sha256"
+            else
+              shasum -a 256 "$f" > "$f.sha256"
+            fi
+          done
 
       - uses: actions/upload-artifact@v4
         with:
