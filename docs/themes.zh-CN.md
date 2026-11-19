@@ -2,12 +2,12 @@
 
 [English](themes.md) · 简体中文
 
-Sasha 内置**深色**（默认）与**浅色**主题。在 **设置 > 视图 > 界面主题** 中选择，立即生效，
+Sasha 内置**深色**（默认）和**浅色**主题，采用中性底色和玫红强调色。**Claude**、**Gemini**、**DeepSeek**、**Grok** 和 **ChatGPT** 也各有深浅两版，其中 ChatGPT 采用冷灰底色和紫色强调色。在 **设置 > 视图 > 界面主题** 中选择，立即生效，
 并以 `theme = "<id>"` 保存到 `config.toml`。
 
 自定义主题是 `config.toml` 同级 `themes` 目录中的 `*.toml` 文件（首次启动时创建；
 **设置 > 视图 > 主题目录 > 打开目录** 可直接打开）。文件名（去掉 `.toml`）即主题 id
-（`ocean.toml` 的 id 为 `ocean`；`dark`、`light` 为内置保留 id）。增加、修改或删除文件后，
+（例如 `ocean.toml` 的 id 为 `ocean`）。内置保留 id 包括 `dark`、`light`、`claude-dark`、`claude-light`、`gemini-dark`、`gemini-light`、`deepseek-dark`、`deepseek-light`、`grok-dark`、`grok-light`、`codex-dark` 和 `codex-light`。增加、修改或删除文件后，
 列表会自动更新；当前主题的文件被修改时会立即重新应用。
 
 完整示例同样见 [`themes/example.toml`](themes/example.toml)：
@@ -45,3 +45,16 @@ text_muted = "#6B8394"
   其他主题照常加载。若配置的主题缺失或损坏，Sasha 改用内置深色并提示，但保留配置中的 id，
   文件修复后会自动恢复。
 
+
+## 在设置中编辑配色
+
+**设置 > 视图 > 界面主题 > 编辑配色** 可编辑 8 个基础色（`canvas`、`card`、`text`、`accent`、
+`rx`、`tx`、`error`、`border`）。每行是色块加 `#RRGGBB` / `#RRGGBBAA` 输入框，点击色块可打开色盘（调色板、滑块、透明度）并与输入框同步；有效的值会实时
+预览，无效的会标红且不生效。
+
+- 内置主题不能直接修改：输入名称后点 **另存为**，会创建 `themes/<名称>.toml`（文件名为小写
+  后的名称；`dark`、`light`、`con` 等保留名和已被占用的名称会被拒绝）。
+- 自定义主题用 **保存** 写回它自己的文件，也可用 **删除** 移除（需点两次确认）。删除当前主题
+  会切回深色。
+- 保存会重写文件：`[overrides]` 会保留，注释不会。
+- 退出编辑、选择其他主题或关闭设置窗口时，未保存的改动会被丢弃。

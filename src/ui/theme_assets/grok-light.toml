@@ -1,0 +1,12 @@
+# Built-in Grok light theme: neutral gray with a deepened magenta accent (GrokDay).
+name = "Grok Light"
+base = "light"
+
+canvas = "#EEEEEE"
+card = "#FFFFFF"
+text = "#262626"
+accent = "#7D4BC6"
+rx = "#378E23"
+tx = "#2F64D2"
+error = "#CD3048"
+border = "#26262620"

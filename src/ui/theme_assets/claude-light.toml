@@ -1,0 +1,12 @@
+# Built-in Claude-inspired light theme: warm ivory with a clay accent.
+name = "Claude Light"
+base = "light"
+
+canvas = "#FAF9F5"
+card = "#FFFFFF"
+text = "#141413"
+accent = "#C96442"
+rx = "#3F7D3A"
+tx = "#2F6DA8"
+error = "#B53A2E"
+border = "#14141320"

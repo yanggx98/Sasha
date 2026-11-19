@@ -1,0 +1,11 @@
+name = "ChatGPT Light"
+base = "light"
+
+canvas = "#F7F7FA"
+card = "#FFFFFF"
+text = "#262630"
+accent = "#6248C8"
+rx = "#16734F"
+tx = "#315CB0"
+error = "#BD354E"
+border = "#26263025"

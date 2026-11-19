@@ -2,14 +2,13 @@
 
 English · [简体中文](themes.zh-CN.md)
 
-Sasha ships a built-in **Dark** (default) and **Light** theme. Pick one in
+Sasha ships built-in **Dark** (default) and **Light** themes with neutral surfaces and a rose accent. The **Claude**, **Gemini**, **DeepSeek**, **Grok**, and **ChatGPT** palettes each come in dark and light variants. ChatGPT pairs cool gray surfaces with a violet accent. Pick a theme in
 **Settings > View > Theme**; it applies immediately and is saved as `theme = "<id>"`
 in `config.toml`.
 
 Custom themes are `*.toml` files in the `themes` folder next to `config.toml`
 (created on first start; **Settings > View > Theme Folder > Open Folder** opens it).
-The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`; `dark` and
-`light` are reserved). Adding, editing or deleting a file updates the list
+The file name without `.toml` is the theme id (`ocean.toml` -> `ocean`). Built-in ids are reserved: `dark`, `light`, `claude-dark`, `claude-light`, `gemini-dark`, `gemini-light`, `deepseek-dark`, `deepseek-light`, `grok-dark`, `grok-light`, `codex-dark`, and `codex-light`. Adding, editing or deleting a file updates the list
 automatically, and the active theme is re-applied as soon as its file changes.
 
 A complete example is also in [`themes/example.toml`](themes/example.toml):
@@ -50,3 +49,19 @@ text_muted = "#6B8394"
   the Theme Warnings area with its file and field name; other themes still load. If the
   configured theme is missing or broken, Sasha uses the built-in Dark theme and shows a
   warning, but keeps the configured id, so the theme returns when the file is fixed.
+
+## Editing colors in Settings
+
+**Settings > View > Theme > Edit Colors** opens an editor for the eight base colors
+(`canvas`, `card`, `text`, `accent`, `rx`, `tx`, `error`, `border`). Each row is a swatch
+plus a `#RRGGBB` / `#RRGGBBAA` field; click the swatch to open a color picker (palette,
+sliders, alpha), which stays in sync with the field. Valid values preview live, invalid ones are
+outlined in red and not applied.
+
+- Built-in themes can't be edited: enter a name and **Save As** to create
+  `themes/<name>.toml` (the file name is the lowercased name; reserved names such as
+  `dark`, `light` or `con` and names already in use are refused).
+- Custom themes are saved back to their own file with **Save**, and can be removed with
+  **Delete** (click twice to confirm). Deleting the active theme switches back to Dark.
+- Saving rewrites the file: `[overrides]` are kept, comments are not.
+- Leaving the editor, picking another theme or closing Settings discards unsaved changes.

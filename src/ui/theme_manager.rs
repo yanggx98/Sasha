@@ -13,8 +13,10 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use crate::model::ConfigStore;
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_store::{
-    Debouncer, GpuiThemeColors, ThemeBase, ThemeMessage, ThemeState, WatchHealth,
-    gpui_theme_colors, is_toml_path, plan_watch, surface_opacity,
+    BaseColors, Debouncer, GpuiThemeColors, ThemeBase, ThemeEntry, ThemeIdError, ThemeMessage,
+    ThemeState, WatchHealth, delete_theme_file, derive_theme, gpui_theme_colors, is_toml_path,
+    overwrite_theme_file, plan_watch, serialize_theme, surface_opacity, theme_id_from_name,
+    write_new_theme_file,
 };
 
 const THEMES_DIR_NAME: &str = "themes";
@@ -38,6 +40,15 @@ pub enum ThemeSelectError {
     Unknown(String),
     /// The theme was applied but persisting the choice failed.
     Save(String),
+}
+
+/// Why saving or deleting a theme file failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThemeSaveError {
+    InvalidName(ThemeIdError),
+    /// A theme file with that id already exists.
+    Exists,
+    Io(String),
 }
 
 /// Row for the settings dropdown.
@@ -77,6 +88,8 @@ pub struct ThemeManager {
     last_health_check: Instant,
     /// Last failure to persist the selected theme.
     save_error: Option<String>,
+    /// Unsaved editor draft shown instead of the selected theme.
+    preview: Option<ThemeEntry>,
     _poll_task: Option<Task<()>>,
 }
 
@@ -111,6 +124,7 @@ impl ThemeManager {
                 dir_event_pending: false,
                 last_health_check: Instant::now(),
                 save_error: None,
+                preview: None,
                 _poll_task: None,
             };
             manager.start_watching();
@@ -225,7 +239,7 @@ impl ThemeManager {
     /// Writes the current theme into gpui's global `Theme`: change the mode
     /// first (only when it flips or on first use), then one `Theme::update`.
     fn apply_global(&mut self, cx: &mut App) {
-        let entry = self.state.current();
+        let entry = self.effective().clone();
         let colors = gpui_theme_colors(&entry.theme, entry.base);
         if self.applied_base != Some(entry.base) {
             let mode = if entry.base.is_dark() {
@@ -244,12 +258,12 @@ impl ThemeManager {
 
     /// Tokens of the theme currently in effect.
     pub fn nano(&self) -> NanoTheme {
-        self.state.current().theme
+        self.effective().theme
     }
 
     /// Light/dark family of the theme in effect.
     pub fn base(&self) -> ThemeBase {
-        self.state.current().base
+        self.effective().base
     }
 
     /// Alpha for surfaces drawn over a background image (see `surface_opacity`).
@@ -293,6 +307,93 @@ impl ThemeManager {
         out.extend(self.watch_error.clone().map(ThemeMessage::WatchUnavailable));
         out.extend(self.state.messages());
         out
+    }
+
+    /// The draft if one is being previewed, else the selected theme.
+    fn effective(&self) -> &ThemeEntry {
+        self.preview
+            .as_ref()
+            .unwrap_or_else(|| self.state.current())
+    }
+
+    /// A loaded theme by id (for the editor to start from).
+    pub fn theme_entry(&self, id: &str) -> Option<ThemeEntry> {
+        self.state.entry(id).cloned()
+    }
+
+    /// Shows a draft without writing files or config.
+    pub fn preview(&mut self, base: ThemeBase, colors: BaseColors, cx: &mut Context<Self>) {
+        self.preview = Some(ThemeEntry {
+            id: String::new(),
+            name: String::new(),
+            base,
+            builtin: false,
+            theme: derive_theme(base, &colors),
+            colors,
+        });
+        self.apply_global(cx);
+        cx.notify();
+    }
+
+    /// Drops the draft and restores the selected theme.
+    pub fn clear_preview(&mut self, cx: &mut Context<Self>) {
+        if self.preview.take().is_some() {
+            self.apply_global(cx);
+            cx.notify();
+        }
+    }
+
+    /// Writes the draft as a theme file and selects it. `id: None` creates a
+    /// new theme named `name`; `Some(id)` overwrites that custom theme.
+    pub fn save_theme(
+        &mut self,
+        id: Option<&str>,
+        name: &str,
+        base: ThemeBase,
+        colors: &BaseColors,
+        cx: &mut Context<Self>,
+    ) -> Result<String, ThemeSaveError> {
+        let dir = self.state.dir().to_path_buf();
+        let name = name.trim();
+        let result = match id {
+            None => {
+                let new_id = theme_id_from_name(name).map_err(ThemeSaveError::InvalidName)?;
+                let text = serialize_theme(name, base, colors, None);
+                write_new_theme_file(&dir, &new_id, &text).map(|_| new_id)
+            }
+            Some(id) => {
+                let old = std::fs::read_to_string(dir.join(format!("{id}.toml"))).ok();
+                let text = serialize_theme(name, base, colors, old.as_deref());
+                overwrite_theme_file(&dir, id, &text).map(|_| id.to_string())
+            }
+        };
+        let new_id = result.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                ThemeSaveError::Exists
+            } else {
+                ThemeSaveError::Io(err.to_string())
+            }
+        })?;
+        self.preview = None;
+        self.state.rescan();
+        self.select(&new_id, cx).map_err(|err| match err {
+            ThemeSelectError::Unknown(id) => ThemeSaveError::Io(id),
+            ThemeSelectError::Save(msg) => ThemeSaveError::Io(msg),
+        })?;
+        Ok(new_id)
+    }
+
+    /// Deletes a custom theme file; if it was selected, selects `dark` first.
+    pub fn delete_theme(&mut self, id: &str, cx: &mut Context<Self>) -> Result<(), ThemeSaveError> {
+        self.preview = None;
+        if self.state.selected_id() == id {
+            let _ = self.select("dark", cx);
+        }
+        delete_theme_file(self.state.dir(), id).map_err(|e| ThemeSaveError::Io(e.to_string()))?;
+        self.state.rescan();
+        self.apply_global(cx);
+        cx.notify();
+        Ok(())
     }
 
     /// Selects a theme: applies it immediately and persists the id.

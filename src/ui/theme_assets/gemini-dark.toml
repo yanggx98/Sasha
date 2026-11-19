@@ -1,0 +1,12 @@
+# Built-in Gemini-inspired dark theme: obsidian charcoal with a Google blue accent.
+name = "Gemini Dark"
+base = "dark"
+
+canvas = "#131314"
+card = "#1E1F20"
+text = "#E3E3E3"
+accent = "#8AB4F8"
+rx = "#81C995"
+tx = "#A8C7FA"
+error = "#F28B82"
+border = "#E3E3E31F"

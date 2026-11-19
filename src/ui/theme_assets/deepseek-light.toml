@@ -1,0 +1,12 @@
+# Built-in DeepSeek-inspired light theme: cool white with the DeepSeek blue accent.
+name = "DeepSeek Light"
+base = "light"
+
+canvas = "#F6F7FB"
+card = "#FFFFFF"
+text = "#1B1D23"
+accent = "#4A66F5"
+rx = "#1E8E3E"
+tx = "#2457D6"
+error = "#D93025"
+border = "#1B1D2320"

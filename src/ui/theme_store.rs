@@ -16,9 +16,29 @@ use super::theme::NanoTheme;
 
 pub const BUILTIN_DARK_ID: &str = "dark";
 pub const BUILTIN_LIGHT_ID: &str = "light";
+pub const BUILTIN_CLAUDE_DARK_ID: &str = "claude-dark";
+pub const BUILTIN_CLAUDE_LIGHT_ID: &str = "claude-light";
+pub const BUILTIN_GEMINI_DARK_ID: &str = "gemini-dark";
+pub const BUILTIN_GEMINI_LIGHT_ID: &str = "gemini-light";
+pub const BUILTIN_DEEPSEEK_DARK_ID: &str = "deepseek-dark";
+pub const BUILTIN_DEEPSEEK_LIGHT_ID: &str = "deepseek-light";
+pub const BUILTIN_GROK_DARK_ID: &str = "grok-dark";
+pub const BUILTIN_GROK_LIGHT_ID: &str = "grok-light";
+pub const BUILTIN_CODEX_DARK_ID: &str = "codex-dark";
+pub const BUILTIN_CODEX_LIGHT_ID: &str = "codex-light";
 
 const DARK_TOML: &str = include_str!("theme_assets/dark.toml");
 const LIGHT_TOML: &str = include_str!("theme_assets/light.toml");
+const CLAUDE_DARK_TOML: &str = include_str!("theme_assets/claude-dark.toml");
+const CLAUDE_LIGHT_TOML: &str = include_str!("theme_assets/claude-light.toml");
+const GEMINI_DARK_TOML: &str = include_str!("theme_assets/gemini-dark.toml");
+const GEMINI_LIGHT_TOML: &str = include_str!("theme_assets/gemini-light.toml");
+const DEEPSEEK_DARK_TOML: &str = include_str!("theme_assets/deepseek-dark.toml");
+const DEEPSEEK_LIGHT_TOML: &str = include_str!("theme_assets/deepseek-light.toml");
+const GROK_DARK_TOML: &str = include_str!("theme_assets/grok-dark.toml");
+const GROK_LIGHT_TOML: &str = include_str!("theme_assets/grok-light.toml");
+const CODEX_DARK_TOML: &str = include_str!("theme_assets/codex-dark.toml");
+const CODEX_LIGHT_TOML: &str = include_str!("theme_assets/codex-light.toml");
 
 /// Light or dark family a theme belongs to (also decides gpui `ThemeMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +61,8 @@ pub struct ThemeEntry {
     pub base: ThemeBase,
     pub builtin: bool,
     pub theme: NanoTheme,
+    /// The eight base colors the theme was built from (for the editor).
+    pub colors: BaseColors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,8 +185,9 @@ pub fn contrast_foreground(bg: Hsla) -> Hsla {
     }
 }
 
-/// Send-card shadow `(alpha, y_offset_px, blur_px)`. One soft shadow shared by
-/// every theme so dark and light look the same.
+/// Send-area shadow `(alpha, y_offset_px, blur_px)`. One soft shadow shared by
+/// every theme so dark and light look the same. The offset is negative (cast
+/// upward) for the expanded card; the collapsed toolbar mirrors it downward.
 pub fn send_card_shadow() -> (f32, f32, f32) {
     (0.12, -2.0, 8.0)
 }
@@ -183,7 +206,7 @@ pub fn search_highlight_colors(canvas: Hsla) -> (Hsla, Hsla) {
 // ------------------------------------------------------------ derivation
 
 /// The eight base colors a theme file defines.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BaseColors {
     pub canvas: Hsla,
     pub card: Hsla,
@@ -396,6 +419,7 @@ fn parse_with(
         base,
         builtin,
         theme,
+        colors,
     })
 }
 
@@ -438,20 +462,180 @@ pub fn parse_theme(id: &str, text: &str) -> Result<ThemeEntry, ThemeError> {
     parse_with(id, text, false, Some(fallback_colors))
 }
 
-/// The two built-in themes: dark, then light.
+/// The built-in themes: dark, light, then the brand pairs.
 pub fn builtin_themes() -> Vec<ThemeEntry> {
-    [(BUILTIN_DARK_ID, DARK_TOML), (BUILTIN_LIGHT_ID, LIGHT_TOML)]
-        .iter()
-        .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
-        .collect()
+    [
+        (BUILTIN_DARK_ID, DARK_TOML),
+        (BUILTIN_LIGHT_ID, LIGHT_TOML),
+        (BUILTIN_CLAUDE_DARK_ID, CLAUDE_DARK_TOML),
+        (BUILTIN_CLAUDE_LIGHT_ID, CLAUDE_LIGHT_TOML),
+        (BUILTIN_GEMINI_DARK_ID, GEMINI_DARK_TOML),
+        (BUILTIN_GEMINI_LIGHT_ID, GEMINI_LIGHT_TOML),
+        (BUILTIN_DEEPSEEK_DARK_ID, DEEPSEEK_DARK_TOML),
+        (BUILTIN_DEEPSEEK_LIGHT_ID, DEEPSEEK_LIGHT_TOML),
+        (BUILTIN_GROK_DARK_ID, GROK_DARK_TOML),
+        (BUILTIN_GROK_LIGHT_ID, GROK_LIGHT_TOML),
+        (BUILTIN_CODEX_DARK_ID, CODEX_DARK_TOML),
+        (BUILTIN_CODEX_LIGHT_ID, CODEX_LIGHT_TOML),
+    ]
+    .iter()
+    .map(|(id, text)| parse_with(id, text, true, None).expect("built-in theme TOML is valid"))
+    .collect()
 }
 
 pub fn builtin_dark() -> ThemeEntry {
-    builtin_themes().remove(0)
+    parse_with(BUILTIN_DARK_ID, DARK_TOML, true, None).expect("built-in theme TOML is valid")
 }
 
 fn is_builtin_id(id: &str) -> bool {
-    id == BUILTIN_DARK_ID || id == BUILTIN_LIGHT_ID
+    [
+        BUILTIN_DARK_ID,
+        BUILTIN_LIGHT_ID,
+        BUILTIN_CLAUDE_DARK_ID,
+        BUILTIN_CLAUDE_LIGHT_ID,
+        BUILTIN_GEMINI_DARK_ID,
+        BUILTIN_GEMINI_LIGHT_ID,
+        BUILTIN_DEEPSEEK_DARK_ID,
+        BUILTIN_DEEPSEEK_LIGHT_ID,
+        BUILTIN_GROK_DARK_ID,
+        BUILTIN_GROK_LIGHT_ID,
+        BUILTIN_CODEX_DARK_ID,
+        BUILTIN_CODEX_LIGHT_ID,
+    ]
+    .contains(&id)
+}
+
+// --------------------------------------------------------------- writing
+
+/// `#RRGGBB`, or `#RRGGBBAA` when the color is translucent (uppercase).
+pub fn format_hex(c: Hsla) -> String {
+    let c = Rgba::from(c);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b, a) = (byte(c.r), byte(c.g), byte(c.b), byte(c.a));
+    if a == 255 {
+        format!("#{r:02X}{g:02X}{b:02X}")
+    } else {
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+}
+
+/// Public color validator shared with the editor UI.
+pub fn parse_color(text: &str) -> Result<Hsla, String> {
+    parse_hex(text)
+}
+
+/// Theme file text. The `[overrides]` table of `overrides_from` (an earlier
+/// version of the same file) is carried over when it parses.
+pub fn serialize_theme(
+    name: &str,
+    base: ThemeBase,
+    colors: &BaseColors,
+    overrides_from: Option<&str>,
+) -> String {
+    let base_text = if base.is_dark() { "dark" } else { "light" };
+    let mut out = format!(
+        "name = {}\nbase = \"{base_text}\"\n\n",
+        toml::Value::String(name.to_string())
+    );
+    for (key, value) in [
+        ("canvas", colors.canvas),
+        ("card", colors.card),
+        ("text", colors.text),
+        ("accent", colors.accent),
+        ("rx", colors.rx),
+        ("tx", colors.tx),
+        ("error", colors.error),
+        ("border", colors.border),
+    ] {
+        out.push_str(&format!("{key} = \"{}\"\n", format_hex(value)));
+    }
+    let overrides = overrides_from
+        .and_then(|text| toml::from_str::<toml::Table>(text).ok())
+        .and_then(|mut table| table.remove("overrides"))
+        .filter(|value| value.as_table().is_some_and(|t| !t.is_empty()));
+    if let Some(overrides) = overrides {
+        let mut wrapper = toml::Table::new();
+        wrapper.insert("overrides".to_string(), overrides);
+        if let Ok(text) = toml::to_string(&wrapper) {
+            out.push('\n');
+            out.push_str(&text);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeIdError {
+    /// The name has no usable characters.
+    Empty,
+    /// Built-in id or Windows device name.
+    Reserved,
+}
+
+/// Lowercase file-safe id from a display name: alphanumerics (any script) are
+/// kept, every other run becomes one `-`.
+pub fn theme_id_from_name(name: &str) -> Result<String, ThemeIdError> {
+    let mut id = String::new();
+    let mut pending_dash = false;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() {
+            if pending_dash && !id.is_empty() {
+                id.push('-');
+            }
+            pending_dash = false;
+            id.extend(ch.to_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    if id.is_empty() {
+        return Err(ThemeIdError::Empty);
+    }
+    let device = matches!(id.as_str(), "con" | "prn" | "aux" | "nul")
+        || ["com", "lpt"].iter().any(|p| {
+            id.strip_prefix(p)
+                .is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        });
+    if is_builtin_id(&id) || device {
+        return Err(ThemeIdError::Reserved);
+    }
+    Ok(id)
+}
+
+fn builtin_id_error(id: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("`{id}` is a built-in theme id"),
+    )
+}
+
+/// Creates `<id>.toml`; fails with `AlreadyExists` instead of overwriting.
+pub fn write_new_theme_file(dir: &Path, id: &str, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::create_dir_all(dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(format!("{id}.toml")))?;
+    file.write_all(text.as_bytes())
+}
+
+/// Replaces the content of an existing custom theme file.
+pub fn overwrite_theme_file(dir: &Path, id: &str, text: &str) -> std::io::Result<()> {
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::write(dir.join(format!("{id}.toml")), text)
+}
+
+pub fn delete_theme_file(dir: &Path, id: &str) -> std::io::Result<()> {
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::remove_file(dir.join(format!("{id}.toml")))
 }
 
 // ------------------------------------------------------------------ scan
@@ -789,6 +973,11 @@ impl ThemeState {
         true
     }
 
+    /// A loaded theme by id.
+    pub fn entry(&self, id: &str) -> Option<&ThemeEntry> {
+        self.scan.themes.iter().find(|t| t.id == id)
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -894,7 +1083,7 @@ mod tests {
     }
 
     #[test]
-    fn builtin_dark_equals_legacy_default() {
+    fn nano_default_uses_builtin_dark() {
         let dark = builtin_dark();
         assert_eq!(dark.id, "dark");
         assert!(dark.builtin && dark.base == ThemeBase::Dark);
@@ -902,13 +1091,29 @@ mod tests {
     }
 
     #[test]
-    fn builtins_are_dark_then_light() {
+    fn builtins_are_dark_light_then_brand_pairs() {
         let ids: Vec<_> = builtin_themes().into_iter().map(|t| t.id).collect();
-        assert_eq!(ids, ["dark", "light"]);
+        assert_eq!(
+            ids,
+            [
+                "dark",
+                "light",
+                "claude-dark",
+                "claude-light",
+                "gemini-dark",
+                "gemini-light",
+                "deepseek-dark",
+                "deepseek-light",
+                "grok-dark",
+                "grok-light",
+                "codex-dark",
+                "codex-light"
+            ]
+        );
     }
 
     #[test]
-    fn text_contrast_is_readable_on_both_builtins() {
+    fn builtin_text_and_log_contrast() {
         for entry in builtin_themes() {
             let t = &entry.theme;
             let id = &entry.id;
@@ -916,7 +1121,12 @@ mod tests {
             assert!(contrast_ratio(t.text_primary, t.bg_card) >= 4.5, "{id}");
             assert!(contrast_ratio(t.text_secondary, t.bg_canvas) >= 4.5, "{id}");
             assert!(contrast_ratio(t.text_muted, t.bg_canvas) >= 3.0, "{id}");
-            assert!(contrast_ratio(t.rx_green, t.bg_canvas) >= 3.0, "{id}");
+            // The default light palette uses the same RX green as the dark palette.
+            if id == BUILTIN_LIGHT_ID {
+                assert_eq!(t.rx_green, rgb(0x22C55E).into());
+            } else {
+                assert!(contrast_ratio(t.rx_green, t.bg_canvas) >= 3.0, "{id}");
+            }
             assert!(contrast_ratio(t.tx_blue, t.bg_canvas) >= 3.0, "{id}");
         }
     }
@@ -956,16 +1166,16 @@ mod tests {
         let d = parse_theme("d", "").unwrap();
         assert_eq!(d.name, "d");
         assert_eq!(d.base, ThemeBase::Dark);
-        assert_eq!(d.theme.bg_canvas, rgb(0x0D1117).into());
+        assert_eq!(d.theme.bg_canvas, rgb(0x1C1917).into());
         let l = parse_theme(
             "l",
             "name = \"My Light\"\nbase = \"light\"\naccent = \"#8250DF\"\n",
         )
         .unwrap();
         assert_eq!(l.name, "My Light");
-        assert_eq!(l.theme.bg_canvas, rgb(0xF6F8FA).into());
+        assert_eq!(l.theme.bg_canvas, rgb(0xFAFAFA).into());
         assert_eq!(l.theme.accent_blue, rgb(0x8250DF).into());
-        assert_eq!(l.theme.text_primary, rgb(0x1F2328).into());
+        assert_eq!(l.theme.text_primary, rgb(0x44403C).into());
     }
 
     #[test]
@@ -996,11 +1206,11 @@ mod tests {
     fn scan_handles_missing_and_empty_dir() {
         let missing = std::env::temp_dir().join("sasha_theme_test_definitely_missing_dir");
         let scan = scan_dir(&missing);
-        assert_eq!(scan.themes.len(), 2);
+        assert_eq!(scan.themes.len(), 12);
         assert!(scan.errors.is_empty());
         let dir = TempDir::new("empty");
         let scan = scan_dir(&dir.path);
-        assert_eq!(scan.themes.len(), 2);
+        assert_eq!(scan.themes.len(), 12);
         assert!(scan.errors.is_empty());
     }
 
@@ -1011,22 +1221,44 @@ mod tests {
         dir.write("alpha.toml", "base = \"light\"\n");
         dir.write("broken.toml", "canvas = \"oops\"\n");
         dir.write("dark.toml", "canvas = \"#FFFFFF\"\n");
+        dir.write("codex-dark.toml", "canvas = \"#FFFFFF\"\n");
+        dir.write("codex-light.toml", "canvas = \"#FFFFFF\"\n");
         dir.write("notes.txt", "ignored");
         let scan = scan_dir(&dir.path);
         let ids: Vec<_> = scan.themes.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["dark", "light", "alpha", "zeta"]);
+        assert_eq!(
+            ids,
+            [
+                "dark",
+                "light",
+                "claude-dark",
+                "claude-light",
+                "gemini-dark",
+                "gemini-light",
+                "deepseek-dark",
+                "deepseek-light",
+                "grok-dark",
+                "grok-light",
+                "codex-dark",
+                "codex-light",
+                "alpha",
+                "zeta"
+            ]
+        );
         assert!(scan.themes[0].builtin);
-        assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x0D1117).into());
-        assert_eq!(scan.themes[3].name, "Zeta");
-        assert_eq!(scan.errors.len(), 2);
+        assert_eq!(scan.themes[0].theme.bg_canvas, rgb(0x1C1917).into());
+        assert_eq!(scan.themes.last().unwrap().name, "Zeta");
+        assert_eq!(scan.errors.len(), 4);
         let broken = scan
             .errors
             .iter()
             .find(|e| e.file == "broken.toml")
             .unwrap();
         assert_eq!(broken.kind, ThemeErrorKind::Parse);
-        let conflict = scan.errors.iter().find(|e| e.file == "dark.toml").unwrap();
-        assert_eq!(conflict.kind, ThemeErrorKind::Conflict);
+        for file in ["dark.toml", "codex-dark.toml", "codex-light.toml"] {
+            let conflict = scan.errors.iter().find(|e| e.file == file).unwrap();
+            assert_eq!(conflict.kind, ThemeErrorKind::Conflict);
+        }
     }
 
     #[test]
@@ -1038,7 +1270,7 @@ mod tests {
 
         let (t, w) = resolve("light", &scan.themes);
         assert!(w.is_none());
-        assert_eq!(t.bg_canvas, rgb(0xF6F8FA).into());
+        assert_eq!(t.bg_canvas, rgb(0xFAFAFA).into());
 
         let (t, w) = resolve("gone", &scan.themes);
         assert_eq!(t.bg_canvas, NanoTheme::default().bg_canvas);
@@ -1141,7 +1373,7 @@ mod tests {
         assert_eq!(st.current().id, "mine");
         fs::remove_dir_all(&dir.path).unwrap();
         assert!(st.rescan());
-        assert_eq!(st.themes().len(), 2);
+        assert_eq!(st.themes().len(), 12);
         assert_eq!(st.current().id, "dark");
         assert_eq!(st.selected_id(), "mine");
         assert!(!st.messages().is_empty());
@@ -1176,7 +1408,7 @@ mod tests {
         let light = &builtin_themes()[1];
         let m = gpui_theme_colors(&light.theme, light.base);
         assert_eq!(m.base, ThemeBase::Light);
-        assert_eq!(m.background, rgb(0xF6F8FA).into());
+        assert_eq!(m.background, rgb(0xFAFAFA).into());
         assert!(contrast_ratio(m.primary, m.primary_foreground) >= 4.5);
     }
 
@@ -1259,6 +1491,106 @@ mod tests {
         assert!(!st.select("nope"));
         assert_eq!(st.selected_id(), "mine");
         let ids: Vec<_> = st.themes().iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["dark", "light", "mine"]);
+        assert_eq!(
+            ids,
+            [
+                "dark",
+                "light",
+                "claude-dark",
+                "claude-light",
+                "gemini-dark",
+                "gemini-light",
+                "deepseek-dark",
+                "deepseek-light",
+                "grok-dark",
+                "grok-light",
+                "codex-dark",
+                "codex-light",
+                "mine"
+            ]
+        );
+    }
+
+    #[test]
+    fn format_hex_roundtrips_parse_hex() {
+        for text in ["#0B1620", "#FFFFFF1C", "#000000"] {
+            assert_eq!(format_hex(parse_hex(text).unwrap()), text);
+        }
+    }
+
+    #[test]
+    fn serialize_then_parse_is_identity() {
+        let dark = builtin_dark();
+        let text = serialize_theme("X Name", ThemeBase::Dark, &dark.colors, None);
+        let parsed = parse_theme("x", &text).unwrap();
+        assert_eq!(parsed.name, "X Name");
+        assert_eq!(parsed.base, ThemeBase::Dark);
+        assert_eq!(parsed.colors, dark.colors);
+        assert_eq!(parsed.theme, derive_theme(ThemeBase::Dark, &dark.colors));
+    }
+
+    #[test]
+    fn serialize_keeps_overrides() {
+        let dark = builtin_dark();
+        let source = "base = \"dark\"\n[overrides]\nbg_strip = \"#08111A\"\n";
+        let text = serialize_theme("X", ThemeBase::Dark, &dark.colors, Some(source));
+        let parsed = parse_theme("x", &text).unwrap();
+        assert_eq!(parsed.theme.bg_strip, parse_hex("#08111A").unwrap());
+    }
+
+    #[test]
+    fn id_from_name() {
+        assert_eq!(theme_id_from_name("Ocean Blue").unwrap(), "ocean-blue");
+        assert_eq!(theme_id_from_name("我的主题").unwrap(), "我的主题");
+        assert_eq!(theme_id_from_name("  a//b ").unwrap(), "a-b");
+        for bad in ["///", "   ", ""] {
+            assert_eq!(theme_id_from_name(bad), Err(ThemeIdError::Empty));
+        }
+        for bad in ["Dark", "light", "CON", "nul.", "Com1"] {
+            assert_eq!(
+                theme_id_from_name(bad),
+                Err(ThemeIdError::Reserved),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_new_refuses_existing_and_builtin() {
+        let dir = TempDir::new("write_new");
+        write_new_theme_file(&dir.path, "mine", "a = 1").unwrap();
+        let err = write_new_theme_file(&dir.path, "mine", "b = 2").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(dir.path.join("mine.toml")).unwrap(),
+            "a = 1"
+        );
+        assert!(write_new_theme_file(&dir.path, "dark", "x").is_err());
+        assert!(overwrite_theme_file(&dir.path, "light", "x").is_err());
+    }
+
+    #[test]
+    fn rescan_after_write_lists_new_theme_with_saved_colors() {
+        let dir = TempDir::new("rescan_write");
+        let mut st = ThemeState::load(&dir.path, "dark");
+        assert!(st.entry("mine").is_none());
+        let mut colors = builtin_dark().colors;
+        colors.accent = parse_hex("#14B8A6").unwrap();
+        let text = serialize_theme("Mine", ThemeBase::Dark, &colors, None);
+        write_new_theme_file(&dir.path, "mine", &text).unwrap();
+        assert!(st.rescan());
+        let entry = st.entry("mine").expect("new theme listed");
+        assert_eq!(entry.colors.accent, colors.accent);
+        assert_eq!(entry.name, "Mine");
+        assert!(!entry.builtin);
+    }
+
+    #[test]
+    fn delete_removes_file_and_rejects_builtin() {
+        let dir = TempDir::new("delete");
+        dir.write("mine.toml", "a = 1");
+        delete_theme_file(&dir.path, "mine").unwrap();
+        assert!(!dir.path.join("mine.toml").exists());
+        assert!(delete_theme_file(&dir.path, "dark").is_err());
     }
 }

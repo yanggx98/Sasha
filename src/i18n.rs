@@ -368,3 +368,12 @@ mod tests {
         );
     }
 }
+
+pub fn theme_edit_failed(locale: Locale, err: &str) -> String {
+    rust_i18n::t!(
+        "settings.theme_edit_err_failed",
+        locale = locale.code(),
+        err = err
+    )
+    .into_owned()
+}

@@ -1,0 +1,12 @@
+# Built-in Claude-inspired dark theme: warm charcoal with a clay accent.
+name = "Claude Dark"
+base = "dark"
+
+canvas = "#262624"
+card = "#30302E"
+text = "#FAF9F5"
+accent = "#D97757"
+rx = "#8FBF7F"
+tx = "#78A9D6"
+error = "#E5736A"
+border = "#FAF9F51F"
