@@ -44,7 +44,7 @@ welcome.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.
-- **Themes** — Dark and Light, custom TOML themes with live reload, optional background image.
+- **Themes** — Dark and Light, an in-app color editor, custom TOML themes with live reload, optional background image.
 - **Updates** — checks GitHub Releases and can install new versions in the app.
 - **English and Simplified Chinese** UI.
 

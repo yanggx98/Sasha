@@ -50,3 +50,18 @@ text_muted = "#6B8394"
   the Theme Warnings area with its file and field name; other themes still load. If the
   configured theme is missing or broken, Sasha uses the built-in Dark theme and shows a
   warning, but keeps the configured id, so the theme returns when the file is fixed.
+
+## Editing colors in Settings
+
+**Settings > View > Theme > Edit Colors** opens an editor for the eight base colors
+(`canvas`, `card`, `text`, `accent`, `rx`, `tx`, `error`, `border`). Each row is a swatch
+plus a `#RRGGBB` / `#RRGGBBAA` field; valid values preview live, invalid ones are
+outlined in red and not applied.
+
+- Built-in themes can't be edited: enter a name and **Save As** to create
+  `themes/<name>.toml` (the file name is the lowercased name; reserved names such as
+  `dark`, `light` or `con` and names already in use are refused).
+- Custom themes are saved back to their own file with **Save**, and can be removed with
+  **Delete** (click twice to confirm). Deleting the active theme switches back to Dark.
+- Saving rewrites the file: `[overrides]` are kept, comments are not.
+- Leaving the editor, picking another theme or closing Settings discards unsaved changes.
