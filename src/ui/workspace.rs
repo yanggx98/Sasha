@@ -4315,6 +4315,8 @@ impl Render for SashaApp {
                                     .w_full()
                                     .flex_shrink_0()
                                     .mt(px(if send_collapsed { 0. } else { -12. }))
+                                    // Lifts the card off the status bar's divider.
+                                    .mb(px(8.))
                                     .child(
                                         SendCard::new(
                                             surface_theme,

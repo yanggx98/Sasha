@@ -38,8 +38,8 @@ on that same text, not raw bytes. Changing text/HEX mode reapplies the filter.
 An invalid or overly complex regex shows an error and keeps the complete last
 valid filter active, including for new data. The count shows visible / cached
 entries. `↺` resets the direction and all content options and takes effect
-immediately. While a filter is active, the toolbar has a tinted background. The
-filter remains active when the drawer is collapsed.
+immediately. While a filter is active, the filter button on the toolbar is highlighted
+and shows a small dot. The filter remains active when the drawer is collapsed.
 
 Filters belong to each session and survive tab switches, but are not saved across
 app restarts. Search, selection copying and Save operate on filtered entries.

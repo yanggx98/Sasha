@@ -105,6 +105,9 @@ impl RenderOnce for TabRail {
             .w(TAB_RAIL_WIDTH)
             .h_full()
             .bg(theme.bg_card)
+            // Same divider the script dock draws on its own left edge.
+            .border_l_1()
+            .border_color(theme.border_card)
             .child(
                 v_flex()
                     .id("tab-rail-list")
@@ -135,17 +138,17 @@ impl RenderOnce for TabRail {
                             .items_center()
                             .gap_1p5()
                             .pr_1()
+                            // Every tab is a rounded card with the same inset, so the dot and
+                            // title stay put when the selection moves.
+                            .ml_1p5()
+                            .pl_2()
+                            .rounded(px(8.))
                             .when(tab.is_active, |this| {
-                                this.pl_2()
-                                    .rounded_r(px(6.))
-                                    .bg(theme.bg_canvas)
-                                    .text_color(theme.text_primary)
+                                // Neutral translucent overlay: the rail behind it shows through.
+                                this.bg(theme.bg_hover).text_color(theme.text_primary)
                             })
                             .when(!tab.is_active, |this| {
-                                this.ml_1p5()
-                                    .pl_2()
-                                    .rounded(px(6.))
-                                    .bg(gpui_kit::transparent_black())
+                                this.bg(gpui_kit::transparent_black())
                                     .text_color(theme.text_secondary)
                                     .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
                             })

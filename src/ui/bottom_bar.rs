@@ -282,6 +282,8 @@ impl RenderOnce for BottomBar {
             .w_full()
             .h(px(34.))
             .px_3()
+            .border_t_1()
+            .border_color(self.theme.border_card)
             .items_center()
             .justify_between()
             .child(

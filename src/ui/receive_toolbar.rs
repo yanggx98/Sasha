@@ -226,15 +226,6 @@ impl RenderOnce for ReceiveToolbar {
             .gap_1();
         let locale = self.locale;
         let filter_active = self.filter.as_ref().is_some_and(|(_, active, _)| *active);
-        let background = if filter_active {
-            lerp_color(
-                self.theme.bg_strip,
-                self.theme.accent_blue,
-                self.theme.bg_toggle_active.a,
-            )
-        } else {
-            self.theme.bg_strip
-        };
         let tools = strip
             .child(self.text_tool_button(
                 "rx-tool-hex",
@@ -402,7 +393,7 @@ impl RenderOnce for ReceiveToolbar {
         let drawer = v_flex()
             .id("receive-toolbar-drawer")
             .w_full()
-            .bg(background)
+            .bg(self.theme.bg_strip)
             .border_1()
             .border_color(self.theme.border_card);
         let drawer = if collapsed {
