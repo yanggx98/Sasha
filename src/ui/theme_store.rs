@@ -926,6 +926,11 @@ impl ThemeState {
         true
     }
 
+    /// A loaded theme by id.
+    pub fn entry(&self, id: &str) -> Option<&ThemeEntry> {
+        self.scan.themes.iter().find(|t| t.id == id)
+    }
+
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -1455,6 +1460,22 @@ mod tests {
         );
         assert!(write_new_theme_file(&dir.path, "dark", "x").is_err());
         assert!(overwrite_theme_file(&dir.path, "light", "x").is_err());
+    }
+
+    #[test]
+    fn rescan_after_write_lists_new_theme_with_saved_colors() {
+        let dir = TempDir::new("rescan_write");
+        let mut st = ThemeState::load(&dir.path, "dark");
+        assert!(st.entry("mine").is_none());
+        let mut colors = builtin_dark().colors;
+        colors.accent = parse_hex("#14B8A6").unwrap();
+        let text = serialize_theme("Mine", ThemeBase::Dark, &colors, None);
+        write_new_theme_file(&dir.path, "mine", &text).unwrap();
+        assert!(st.rescan());
+        let entry = st.entry("mine").expect("new theme listed");
+        assert_eq!(entry.colors.accent, colors.accent);
+        assert_eq!(entry.name, "Mine");
+        assert!(!entry.builtin);
     }
 
     #[test]
