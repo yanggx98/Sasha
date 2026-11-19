@@ -4,6 +4,7 @@ pub mod log_filter;
 pub mod quick_command;
 pub mod session;
 pub mod settings;
+pub mod shortcuts;
 pub mod stream_output;
 pub mod timed_send;
 
