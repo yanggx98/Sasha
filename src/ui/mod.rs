@@ -20,6 +20,7 @@ pub mod theme;
 pub mod theme_editor;
 pub mod theme_manager;
 pub mod theme_store;
+pub mod throughput_window;
 pub mod update_manager;
 pub mod workspace;
 

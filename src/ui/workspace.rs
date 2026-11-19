@@ -33,8 +33,9 @@ use crate::model::timed_send::{
 };
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, FlowControl, LogSearchState, LogSelectionModel,
-    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
-    format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
+    ModemSignals, Parity, SAMPLE_INTERVAL_MS, SendPayloadError, SessionState, StopBits,
+    ThroughputSpan, current_timestamp_hms_ms, format_buffer_usage, format_log_buffer_limit,
+    parse_log_buffer_limit_for, theoretical_max_bytes_per_sec,
 };
 use crate::model::{MarkerColor, panel_items};
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
@@ -65,6 +66,7 @@ use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager};
+use crate::ui::throughput_window::{ThroughputSnapshot, ThroughputWindow};
 use crate::ui::update_manager::{UpdateHandle, UpdateManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -536,6 +538,8 @@ pub struct SashaApp {
     last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
     quick_editor_window: Option<AnyWindowHandle>,
+    throughput_window: Option<(AnyWindowHandle, WeakEntity<ThroughputWindow>)>,
+    last_throughput_sample_at: Instant,
     _config_subscription: Subscription,
     picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
@@ -612,6 +616,20 @@ impl SashaApp {
             )
         };
         let initial_tab = SessionTab::new(1, locale, initial_scripts, log_buffer_limit, cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(SAMPLE_INTERVAL_MS))
+                    .await;
+                let keep_going = this.update(cx, |app, cx| {
+                    app.sample_all_throughputs(cx);
+                });
+                if keep_going.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
@@ -625,6 +643,8 @@ impl SashaApp {
             last_locale: locale,
             settings_window: None,
             quick_editor_window: None,
+            throughput_window: None,
+            last_throughput_sample_at: Instant::now(),
             _config_subscription,
             picker_port_presets: Vec::new(),
             picker_input: None,
@@ -791,6 +811,7 @@ impl SashaApp {
         self.dismiss_picker_state();
         TextSelection::clear(window, cx);
         self.active_tab_id = tab_id;
+        self.notify_throughput_window(true, cx);
         cx.notify();
     }
 
@@ -810,6 +831,7 @@ impl SashaApp {
         let tab = SessionTab::new(id, locale, initial_scripts, log_buffer_limit, cx);
         self.tabs.push(tab);
         self.active_tab_id = id;
+        self.notify_throughput_window(true, cx);
         cx.notify();
     }
 
@@ -830,6 +852,7 @@ impl SashaApp {
             let next_idx = idx.min(self.tabs.len() - 1);
             self.active_tab_id = self.tabs[next_idx].id;
             TextSelection::clear(window, cx);
+            self.notify_throughput_window(true, cx);
         }
         cx.notify();
     }
@@ -3161,6 +3184,95 @@ impl SashaApp {
         }
     }
 
+    fn sample_all_throughputs(&mut self, cx: &mut Context<Self>) {
+        self.last_throughput_sample_at = Instant::now();
+        for tab in &mut self.tabs {
+            let rx = tab.state.counters.rx_bytes;
+            let tx = tab.state.counters.tx_bytes;
+            tab.state.throughput.sample(rx, tx);
+        }
+        self.notify_throughput_window(false, cx);
+    }
+
+    fn notify_throughput_window(&mut self, tab_changed: bool, cx: &mut Context<Self>) {
+        let Some((_, weak_view)) = &self.throughput_window else {
+            return;
+        };
+        let Some(view) = weak_view.upgrade() else {
+            self.throughput_window = None;
+            return;
+        };
+        let span = view.read(cx).span();
+        let snapshot = self.active_throughput_snapshot(span);
+        view.update(cx, |view, cx| {
+            view.apply_snapshot(snapshot, tab_changed, cx)
+        });
+    }
+
+    pub fn active_throughput_snapshot(&self, span: ThroughputSpan) -> ThroughputSnapshot {
+        let tab = self.active_tab();
+        let config = tab.state.config.clone();
+        let session_title = if config.port.is_empty() {
+            format!("Session {}", tab.id)
+        } else {
+            config.port.clone()
+        };
+        let theoretical_max = theoretical_max_bytes_per_sec(&config);
+        ThroughputSnapshot {
+            session_title,
+            config,
+            counters: tab.state.counters,
+            samples: tab.state.throughput.window_samples(span),
+            summary: tab.state.throughput.summary(span),
+            theoretical_max,
+            sampled_at: self.last_throughput_sample_at,
+        }
+    }
+
+    pub fn clear_active_throughput(&mut self) {
+        self.active_tab_mut().state.throughput.clear();
+    }
+
+    fn open_throughput(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((handle, _)) = &self.throughput_window
+            && handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+        {
+            return;
+        }
+
+        let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(480.), px(340.))),
+            is_resizable: true,
+            ..TitleBar::window_options()
+        };
+
+        let weak_app = cx.entity().downgrade();
+        let config_store = self.config_store.clone();
+        let initial_snapshot = self.active_throughput_snapshot(ThroughputSpan::default());
+        let mut created_view: Option<WeakEntity<ThroughputWindow>> = None;
+        if let Ok((handle, _)) = open_window(options, cx, |_, cx| {
+            let view = cx.new(|cx| {
+                ThroughputWindow::new(
+                    weak_app.clone(),
+                    config_store.clone(),
+                    initial_snapshot.clone(),
+                    cx,
+                )
+            });
+            created_view = Some(view.downgrade());
+            view
+        }) && let Some(weak_view) = created_view
+        {
+            self.throughput_window = Some((handle, weak_view));
+        }
+    }
+
     fn build_tab_rail(&self, theme: NanoTheme, cx: &mut Context<Self>) -> TabRail {
         let weak = cx.entity().downgrade();
         let on_select_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
@@ -4214,6 +4326,14 @@ impl Render for SashaApp {
                                 on_pick,
                                 on_toggle_connection,
                                 signal_controls,
+                                {
+                                    let weak = cx.entity().downgrade();
+                                    Rc::new(move |window: &mut Window, cx: &mut App| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.open_throughput(window, cx)
+                                        });
+                                    })
+                                },
                             )),
                     )
                     .child(

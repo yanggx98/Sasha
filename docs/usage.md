@@ -74,6 +74,15 @@ Markers are kept in memory for the session only: they are not saved to `config.t
 written to exports or live stream output, and they disappear when the log is cleared or when
 the log buffer limit drops the marked entry.
 
+## Throughput monitor
+
+Click the `RX / TX` counter area on the right side of the bottom status bar to open the
+independent throughput window. It follows the active session tab and plots real-time RX and
+TX byte rates (`4 Hz`, up to 5 minutes of history) alongside current/peak rates, cumulative
+byte totals, and theoretical serial bandwidth utilization. You can toggle the RX or TX curve
+from the top summary cards, switch the time window (`30s` / `1m` / `5m`), hover the chart
+for a crosshair readout, pause the view, or clear recorded history.
+
 ## Live stream output
 
 Click `⇥` in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug `log` output is excluded.

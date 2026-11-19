@@ -18,6 +18,7 @@ use crate::ui::theme::NanoTheme;
 pub type PickParamCallback = Rc<dyn Fn(ActivePickerKind, &mut Window, &mut App)>;
 pub type ToggleConnectionCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 pub type ToggleLineCallback = Rc<dyn Fn(ControlLine, &mut Window, &mut App)>;
+pub type OpenThroughputCallback = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Modem signal controls rendered on the bottom bar's right side.
 #[derive(Clone)]
@@ -50,6 +51,7 @@ pub struct BottomBar {
     on_pick: PickParamCallback,
     on_toggle_connection: ToggleConnectionCallback,
     signal_controls: SignalControls,
+    on_open_throughput: OpenThroughputCallback,
 }
 
 impl BottomBar {
@@ -67,6 +69,7 @@ impl BottomBar {
         on_pick: PickParamCallback,
         on_toggle_connection: ToggleConnectionCallback,
         signal_controls: SignalControls,
+        on_open_throughput: OpenThroughputCallback,
     ) -> Self {
         Self {
             theme,
@@ -81,6 +84,7 @@ impl BottomBar {
             on_pick,
             on_toggle_connection,
             signal_controls,
+            on_open_throughput,
         }
     }
 
@@ -360,8 +364,35 @@ impl RenderOnce for BottomBar {
                         ActivePickerKind::BufferLimit,
                         self.buffer_label.clone(),
                     ))
-                    .child(format!("RX: {} B", self.counters.rx_bytes))
-                    .child(format!("TX: {} B", self.counters.tx_bytes)),
+                    .child({
+                        let theme = self.theme;
+                        let locale = self.locale;
+                        let on_open_throughput = self.on_open_throughput.clone();
+                        h_flex()
+                            .id("bottom-bar-throughput")
+                            .items_center()
+                            .gap_2()
+                            .px_1p5()
+                            .py(px(2.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(tr_shared(locale, "throughput.open_tooltip"))
+                                    .build(window, cx)
+                            })
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                on_open_throughput(window, cx);
+                            })
+                            .child(
+                                Icon::new(LucideIcon::Activity)
+                                    .size(px(12.))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(format!("RX: {} B", self.counters.rx_bytes))
+                            .child(format!("TX: {} B", self.counters.tx_bytes))
+                    }),
             )
     }
 }

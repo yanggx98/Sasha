@@ -173,6 +173,8 @@ pub struct SessionState {
     pub receive: ReceiveViewState,
     pub send: SendDraftState,
     pub counters: SessionCounters,
+    /// Per-session RX/TX byte-rate ring buffer sampled at 4 Hz.
+    pub throughput: super::throughput::ThroughputHistory,
     pub logs: Vec<LogEntry>,
     pub retained_while_paused: Vec<LogEntry>,
     /// User markers on log entries (memory only).
@@ -236,6 +238,7 @@ impl SessionState {
                 collapsed: false,
             },
             counters: SessionCounters { rx_bytes, tx_bytes },
+            throughput: super::throughput::ThroughputHistory::new(rx_bytes, tx_bytes),
             logs: vec![
                 LogEntry::new_simulated(1, "14:26:07.285", LogDirection::Tx, tx_payload),
                 LogEntry::new_simulated(2, "14:26:07.342", LogDirection::Rx, rx_payload_1),
@@ -268,6 +271,7 @@ impl SessionState {
             receive: ReceiveViewState::default(),
             send: SendDraftState::default(),
             counters: SessionCounters::default(),
+            throughput: super::throughput::ThroughputHistory::new(0, 0),
             logs: Vec::new(),
             retained_while_paused: Vec::new(),
             markers: Default::default(),
