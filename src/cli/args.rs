@@ -94,8 +94,13 @@ pub struct MonitorArgs {
 
 #[derive(Args, Debug)]
 pub struct RunArgs {
+    /// Lua script to run
+    pub script: std::path::PathBuf,
     #[command(flatten)]
     pub serial: SerialArgs,
+    /// Stop the script after this many milliseconds
+    #[arg(long)]
+    pub timeout: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
