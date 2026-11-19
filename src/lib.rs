@@ -1,6 +1,7 @@
 rust_i18n::i18n!("locales", fallback = "zh-CN");
 
 pub mod checksum;
+pub mod cli;
 mod i18n;
 pub mod model;
 pub mod scripting;
