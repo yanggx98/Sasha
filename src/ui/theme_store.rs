@@ -41,6 +41,8 @@ pub struct ThemeEntry {
     pub base: ThemeBase,
     pub builtin: bool,
     pub theme: NanoTheme,
+    /// The eight base colors the theme was built from (for the editor).
+    pub colors: BaseColors,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,7 +186,7 @@ pub fn search_highlight_colors(canvas: Hsla) -> (Hsla, Hsla) {
 // ------------------------------------------------------------ derivation
 
 /// The eight base colors a theme file defines.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BaseColors {
     pub canvas: Hsla,
     pub card: Hsla,
@@ -397,6 +399,7 @@ fn parse_with(
         base,
         builtin,
         theme,
+        colors,
     })
 }
 
@@ -453,6 +456,139 @@ pub fn builtin_dark() -> ThemeEntry {
 
 fn is_builtin_id(id: &str) -> bool {
     id == BUILTIN_DARK_ID || id == BUILTIN_LIGHT_ID
+}
+
+// --------------------------------------------------------------- writing
+
+/// `#RRGGBB`, or `#RRGGBBAA` when the color is translucent (uppercase).
+pub fn format_hex(c: Hsla) -> String {
+    let c = Rgba::from(c);
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let (r, g, b, a) = (byte(c.r), byte(c.g), byte(c.b), byte(c.a));
+    if a == 255 {
+        format!("#{r:02X}{g:02X}{b:02X}")
+    } else {
+        format!("#{r:02X}{g:02X}{b:02X}{a:02X}")
+    }
+}
+
+/// Public color validator shared with the editor UI.
+pub fn parse_color(text: &str) -> Result<Hsla, String> {
+    parse_hex(text)
+}
+
+/// Theme file text. The `[overrides]` table of `overrides_from` (an earlier
+/// version of the same file) is carried over when it parses.
+pub fn serialize_theme(
+    name: &str,
+    base: ThemeBase,
+    colors: &BaseColors,
+    overrides_from: Option<&str>,
+) -> String {
+    let base_text = if base.is_dark() { "dark" } else { "light" };
+    let mut out = format!(
+        "name = {}\nbase = \"{base_text}\"\n\n",
+        toml::Value::String(name.to_string())
+    );
+    for (key, value) in [
+        ("canvas", colors.canvas),
+        ("card", colors.card),
+        ("text", colors.text),
+        ("accent", colors.accent),
+        ("rx", colors.rx),
+        ("tx", colors.tx),
+        ("error", colors.error),
+        ("border", colors.border),
+    ] {
+        out.push_str(&format!("{key} = \"{}\"\n", format_hex(value)));
+    }
+    let overrides = overrides_from
+        .and_then(|text| toml::from_str::<toml::Table>(text).ok())
+        .and_then(|mut table| table.remove("overrides"))
+        .filter(|value| value.as_table().is_some_and(|t| !t.is_empty()));
+    if let Some(overrides) = overrides {
+        let mut wrapper = toml::Table::new();
+        wrapper.insert("overrides".to_string(), overrides);
+        if let Ok(text) = toml::to_string(&wrapper) {
+            out.push('\n');
+            out.push_str(&text);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeIdError {
+    /// The name has no usable characters.
+    Empty,
+    /// Built-in id or Windows device name.
+    Reserved,
+}
+
+/// Lowercase file-safe id from a display name: alphanumerics (any script) are
+/// kept, every other run becomes one `-`.
+pub fn theme_id_from_name(name: &str) -> Result<String, ThemeIdError> {
+    let mut id = String::new();
+    let mut pending_dash = false;
+    for ch in name.chars() {
+        if ch.is_alphanumeric() {
+            if pending_dash && !id.is_empty() {
+                id.push('-');
+            }
+            pending_dash = false;
+            id.extend(ch.to_lowercase());
+        } else {
+            pending_dash = true;
+        }
+    }
+    if id.is_empty() {
+        return Err(ThemeIdError::Empty);
+    }
+    let device = matches!(id.as_str(), "con" | "prn" | "aux" | "nul")
+        || ["com", "lpt"].iter().any(|p| {
+            id.strip_prefix(p)
+                .is_some_and(|n| matches!(n, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        });
+    if is_builtin_id(&id) || device {
+        return Err(ThemeIdError::Reserved);
+    }
+    Ok(id)
+}
+
+fn builtin_id_error(id: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("`{id}` is a built-in theme id"),
+    )
+}
+
+/// Creates `<id>.toml`; fails with `AlreadyExists` instead of overwriting.
+pub fn write_new_theme_file(dir: &Path, id: &str, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::create_dir_all(dir)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(format!("{id}.toml")))?;
+    file.write_all(text.as_bytes())
+}
+
+/// Replaces the content of an existing custom theme file.
+pub fn overwrite_theme_file(dir: &Path, id: &str, text: &str) -> std::io::Result<()> {
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::write(dir.join(format!("{id}.toml")), text)
+}
+
+pub fn delete_theme_file(dir: &Path, id: &str) -> std::io::Result<()> {
+    if is_builtin_id(id) {
+        return Err(builtin_id_error(id));
+    }
+    fs::remove_file(dir.join(format!("{id}.toml")))
 }
 
 // ------------------------------------------------------------------ scan
@@ -1261,5 +1397,72 @@ mod tests {
         assert_eq!(st.selected_id(), "mine");
         let ids: Vec<_> = st.themes().iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, ["dark", "light", "mine"]);
+    }
+
+    #[test]
+    fn format_hex_roundtrips_parse_hex() {
+        for text in ["#0B1620", "#FFFFFF1C", "#000000"] {
+            assert_eq!(format_hex(parse_hex(text).unwrap()), text);
+        }
+    }
+
+    #[test]
+    fn serialize_then_parse_is_identity() {
+        let dark = builtin_dark();
+        let text = serialize_theme("X Name", ThemeBase::Dark, &dark.colors, None);
+        let parsed = parse_theme("x", &text).unwrap();
+        assert_eq!(parsed.name, "X Name");
+        assert_eq!(parsed.base, ThemeBase::Dark);
+        assert_eq!(parsed.colors, dark.colors);
+        assert_eq!(parsed.theme, derive_theme(ThemeBase::Dark, &dark.colors));
+    }
+
+    #[test]
+    fn serialize_keeps_overrides() {
+        let dark = builtin_dark();
+        let source = "base = \"dark\"\n[overrides]\nbg_strip = \"#08111A\"\n";
+        let text = serialize_theme("X", ThemeBase::Dark, &dark.colors, Some(source));
+        let parsed = parse_theme("x", &text).unwrap();
+        assert_eq!(parsed.theme.bg_strip, parse_hex("#08111A").unwrap());
+    }
+
+    #[test]
+    fn id_from_name() {
+        assert_eq!(theme_id_from_name("Ocean Blue").unwrap(), "ocean-blue");
+        assert_eq!(theme_id_from_name("我的主题").unwrap(), "我的主题");
+        assert_eq!(theme_id_from_name("  a//b ").unwrap(), "a-b");
+        for bad in ["///", "   ", ""] {
+            assert_eq!(theme_id_from_name(bad), Err(ThemeIdError::Empty));
+        }
+        for bad in ["Dark", "light", "CON", "nul.", "Com1"] {
+            assert_eq!(
+                theme_id_from_name(bad),
+                Err(ThemeIdError::Reserved),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn write_new_refuses_existing_and_builtin() {
+        let dir = TempDir::new("write_new");
+        write_new_theme_file(&dir.path, "mine", "a = 1").unwrap();
+        let err = write_new_theme_file(&dir.path, "mine", "b = 2").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read_to_string(dir.path.join("mine.toml")).unwrap(),
+            "a = 1"
+        );
+        assert!(write_new_theme_file(&dir.path, "dark", "x").is_err());
+        assert!(overwrite_theme_file(&dir.path, "light", "x").is_err());
+    }
+
+    #[test]
+    fn delete_removes_file_and_rejects_builtin() {
+        let dir = TempDir::new("delete");
+        dir.write("mine.toml", "a = 1");
+        delete_theme_file(&dir.path, "mine").unwrap();
+        assert!(!dir.path.join("mine.toml").exists());
+        assert!(delete_theme_file(&dir.path, "dark").is_err());
     }
 }
