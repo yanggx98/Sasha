@@ -15,6 +15,8 @@ use crate::model::{DataBits, FlowControl, ModemSignals, Parity, SerialConfig, St
 
 const READ_TIMEOUT: Duration = Duration::from_millis(50);
 const READ_BUFFER_SIZE: usize = 4096;
+/// A write fails only after the port accepted no byte for this long.
+const WRITE_STALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Minimum interval between modem input line samples.
 const SIGNAL_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
@@ -84,7 +86,9 @@ pub struct SerialConnection {
 }
 
 impl SerialConnection {
-    /// Opens a real serial port using `config` and starts a background reader thread.
+    /// Test helper: opens with the default (zh-CN) locale. Production code uses
+    /// [`Self::open_for`].
+    #[cfg(test)]
     pub fn open(config: &SerialConfig) -> Result<(Self, Receiver<SerialEvent>), String> {
         Self::open_for(config, Locale::ZhCn)
     }
@@ -210,12 +214,51 @@ impl SerialConnection {
     }
 }
 
+/// Like `write_all`, but tolerates the driver's short write timeout.
+///
+/// The port timeout (also used as the Windows write timeout) can make `write`
+/// return `Ok(0)` or `TimedOut` while the output buffer is full, e.g. at low
+/// baud rates or while flow control holds the line. That is back-pressure, not
+/// failure: keep retrying until no byte has been accepted for `stall`.
+fn write_all_retrying(
+    writer: &mut dyn std::io::Write,
+    mut data: &[u8],
+    stall: Duration,
+) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    let mut last_progress = Instant::now();
+    while !data.is_empty() {
+        match writer.write(data) {
+            Ok(0) => {}
+            Ok(n) => {
+                data = &data[n..];
+                last_progress = Instant::now();
+                continue;
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::TimedOut | ErrorKind::Interrupted | ErrorKind::WouldBlock
+                ) => {}
+            Err(err) => return Err(err),
+        }
+        if last_progress.elapsed() >= stall {
+            return Err(std::io::Error::new(
+                ErrorKind::TimedOut,
+                "no bytes accepted by the port (output stalled)",
+            ));
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
+}
+
 fn write_port_bytes(
     port: &mut dyn serialport::SerialPort,
     locale: Locale,
     data: &[u8],
 ) -> Result<(), String> {
-    port.write_all(data)
+    write_all_retrying(port, data, WRITE_STALL_TIMEOUT)
         .map_err(|err| format_io_error(locale, &serial_action_write_failed(locale), &err))?;
     port.flush()
         .map_err(|err| format_io_error(locale, &serial_action_flush_failed(locale), &err))?;
@@ -228,12 +271,14 @@ impl Drop for SerialConnection {
     }
 }
 
-/// Enumerates available host serial ports, sorted stably by port name.
-/// Returns an empty `Vec` if enumeration fails.
+/// Test helper: enumerates ports with the default (zh-CN) locale.
+#[cfg(test)]
 pub fn enumerate_serial_ports() -> Vec<DetectedPort> {
     enumerate_serial_ports_for(Locale::ZhCn)
 }
 
+/// Enumerates available host serial ports, sorted stably by port name.
+/// Returns an empty `Vec` if enumeration fails.
 pub fn enumerate_serial_ports_for(locale: Locale) -> Vec<DetectedPort> {
     let Ok(ports) = serialport::available_ports() else {
         return Vec::new();
@@ -252,6 +297,7 @@ pub fn enumerate_serial_ports_for(locale: Locale) -> Vec<DetectedPort> {
 }
 
 /// Formats a `serialport::SerialPortType` into a human-readable description.
+#[cfg(test)]
 pub fn describe_port_type(port_type: &serialport::SerialPortType) -> String {
     describe_port_type_for(port_type, Locale::ZhCn)
 }
@@ -440,6 +486,74 @@ mod tests {
             .err()
             .expect("1.5 stop bits should be rejected");
         assert!(err.contains("1.5"));
+    }
+
+    /// Accepts at most `chunk` bytes per call and answers the first `stalls` calls
+    /// with `Ok(0)` / `TimedOut`, like a driver whose output buffer is full.
+    struct StallingWriter {
+        stalls: usize,
+        use_timeout_error: bool,
+        chunk: usize,
+        written: Vec<u8>,
+    }
+
+    impl std::io::Write for StallingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.stalls > 0 {
+                self.stalls -= 1;
+                return if self.use_timeout_error {
+                    Err(std::io::ErrorKind::TimedOut.into())
+                } else {
+                    Ok(0)
+                };
+            }
+            let n = buf.len().min(self.chunk);
+            self.written.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn write_retries_through_zero_and_timeout_backpressure() {
+        for use_timeout_error in [false, true] {
+            let mut w = StallingWriter {
+                stalls: 3,
+                use_timeout_error,
+                chunk: 4,
+                written: Vec::new(),
+            };
+            let data: Vec<u8> = (0..32).collect();
+            write_all_retrying(&mut w, &data, Duration::from_secs(5)).unwrap();
+            assert_eq!(w.written, data);
+        }
+    }
+
+    #[test]
+    fn write_fails_after_stall_and_passes_real_errors_through() {
+        let mut stuck = StallingWriter {
+            stalls: usize::MAX,
+            use_timeout_error: false,
+            chunk: 4,
+            written: Vec::new(),
+        };
+        let err = write_all_retrying(&mut stuck, b"abc", Duration::from_millis(30)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+
+        struct Broken;
+        impl std::io::Write for Broken {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let err = write_all_retrying(&mut Broken, b"abc", Duration::from_secs(5)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
     }
 
     #[test]

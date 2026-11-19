@@ -3,6 +3,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::checksum::Checksum;
+
 use super::log::{SendPayloadError, parse_hex_bytes};
 use super::session::SendLineEnding;
 
@@ -22,6 +24,9 @@ pub struct QuickCommand {
     pub hex: bool,
     #[serde(default)]
     pub line_ending: SendLineEnding,
+    /// Checksum appended to the parsed bytes in HEX mode (ignored for text commands).
+    #[serde(default)]
+    pub checksum: Checksum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +70,7 @@ impl QuickCommand {
 
     pub fn payload(&self) -> Result<Vec<u8>, SendPayloadError> {
         if self.hex {
-            return parse_hex_bytes(&self.content);
+            return parse_hex_bytes(&self.content).map(|bytes| self.checksum.append_to(bytes));
         }
         if self.content.is_empty() {
             return Err(SendPayloadError::EmptyInput);
@@ -77,7 +82,11 @@ impl QuickCommand {
 
     pub fn preview(&self) -> String {
         if self.hex {
-            return self.content.clone();
+            return if self.checksum.is_active() {
+                format!("{} +{}", self.content, self.checksum.label())
+            } else {
+                self.content.clone()
+            };
         }
         match self.line_ending {
             SendLineEnding::None => self.content.clone(),
@@ -135,30 +144,6 @@ pub fn command_for_shortcut(commands: &[QuickCommand], digit: usize) -> Option<&
     }
     let order = display_order(commands);
     order.get(digit - 1).and_then(|&idx| commands.get(idx))
-}
-
-pub fn quick_shortcut_digit(
-    control: bool,
-    alt: bool,
-    shift: bool,
-    platform: bool,
-    key: &str,
-) -> Option<usize> {
-    if !alt || control || shift || platform {
-        return None;
-    }
-    match key {
-        "1" => Some(1),
-        "2" => Some(2),
-        "3" => Some(3),
-        "4" => Some(4),
-        "5" => Some(5),
-        "6" => Some(6),
-        "7" => Some(7),
-        "8" => Some(8),
-        "9" => Some(9),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,6 +219,7 @@ pub struct QuickEditorDraft {
     pub content: String,
     pub hex: bool,
     pub line_ending: SendLineEnding,
+    pub checksum: Checksum,
 }
 
 impl QuickEditorDraft {
@@ -245,6 +231,7 @@ impl QuickEditorDraft {
             content: String::new(),
             hex: false,
             line_ending: SendLineEnding::None,
+            checksum: Checksum::None,
         }
     }
 
@@ -256,6 +243,7 @@ impl QuickEditorDraft {
             content: cmd.content.clone(),
             hex: cmd.hex,
             line_ending: cmd.line_ending,
+            checksum: cmd.checksum,
         }
     }
 
@@ -271,6 +259,7 @@ impl QuickEditorDraft {
             content: self.content.clone(),
             hex: self.hex,
             line_ending: self.line_ending,
+            checksum: Default::default(),
         };
         cmd.validate()?;
         Ok(cmd)
@@ -336,6 +325,7 @@ mod tests {
             content: content.to_string(),
             hex: false,
             line_ending: SendLineEnding::None,
+            checksum: Default::default(),
         }
     }
 
@@ -365,6 +355,7 @@ mod tests {
             content: "41 54".to_string(),
             hex: true,
             line_ending: SendLineEnding::CrLf,
+            checksum: Default::default(),
         };
         assert_eq!(cmd.payload(), Ok(vec![0x41, 0x54]));
     }
@@ -378,6 +369,7 @@ mod tests {
             content: "4142".to_string(),
             hex: true,
             line_ending: SendLineEnding::None,
+            checksum: Default::default(),
         };
         assert!(matches!(
             cmd.payload(),
@@ -512,21 +504,6 @@ mod tests {
             }]
         );
     }
-
-    #[test]
-    fn quick_shortcut_digit_requires_alt_only() {
-        assert_eq!(
-            quick_shortcut_digit(false, true, false, false, "3"),
-            Some(3)
-        );
-        assert_eq!(quick_shortcut_digit(true, true, false, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, true, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, true, "3"), None);
-        assert_eq!(quick_shortcut_digit(true, false, false, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, false, "0"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, false, "a"), None);
-    }
-
     #[test]
     fn editor_draft_roundtrip_and_validation() {
         let cmd = make_cmd("c1", "AT", "Init", "AT");
@@ -627,5 +604,42 @@ mod tests {
         assert_eq!(ghost_cmd.id, "custom-id");
         upsert_command(&mut cmds, ghost_cmd).expect("append");
         assert!(cmds.iter().any(|c| c.id == "custom-id"));
+    }
+
+    #[test]
+    fn hex_payload_appends_checksum_and_text_ignores_it() {
+        let mut cmd = make_cmd("1", "read", "", "01 03 00 00 00 0A");
+        cmd.hex = true;
+        cmd.checksum = Checksum::Crc16Modbus;
+        assert_eq!(
+            cmd.payload().unwrap(),
+            vec![0x01, 0x03, 0x00, 0x00, 0x00, 0x0A, 0xC5, 0xCD]
+        );
+        assert_eq!(cmd.preview(), "01 03 00 00 00 0A +CRC16/Modbus");
+
+        cmd.hex = false;
+        cmd.content = "AT".into();
+        assert_eq!(cmd.payload().unwrap(), b"AT".to_vec());
+    }
+
+    #[test]
+    fn checksum_defaults_to_none_when_missing_from_stored_toml() {
+        let cmd: QuickCommand = toml::from_str(
+            "id = \"a\"
+name = \"n\"
+content = \"01\"
+hex = true",
+        )
+        .unwrap();
+        assert_eq!(cmd.checksum, Checksum::None);
+        let round: QuickCommand = toml::from_str(
+            &toml::to_string(&QuickCommand {
+                checksum: Checksum::Crc32,
+                ..cmd
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(round.checksum, Checksum::Crc32);
     }
 }

@@ -21,9 +21,9 @@ use crate::model::log::format_hex_input_with_cursor;
 use crate::model::log::{LogEntry, format_visible_logs};
 use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
 use crate::model::quick_command::{
-    QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
-    visible_rows,
+    QuickCommand, QuickEditorDraft, command_for_shortcut, remove_command, visible_rows,
 };
+use crate::model::shortcuts::{Modifiers, ShortcutAction};
 use crate::model::timed_send::{
     DraftCommit, EnterAction, IconAction, MAX_TIMER_INTERVAL_MS, MIN_TIMER_INTERVAL_MS,
     SendButtonAction, StopCause, TickOutcome, TimedSendState, commit_interval_draft,
@@ -33,15 +33,25 @@ use crate::model::timed_send::{
 };
 use crate::model::{
     ActivePickerKind, ConfigStore, DataBits, FlowControl, LogSearchState, LogSelectionModel,
-    ModemSignals, Parity, SendPayloadError, SessionState, StopBits, current_timestamp_hms_ms,
-    format_buffer_usage, format_log_buffer_limit, parse_log_buffer_limit_for,
+    ModemSignals, Parity, SAMPLE_INTERVAL_MS, SendPayloadError, SessionState, StopBits,
+    ThroughputSpan, current_timestamp_hms_ms, format_buffer_usage, format_log_buffer_limit,
+    parse_log_buffer_limit_for, theoretical_max_bytes_per_sec,
 };
+use crate::model::{MarkerColor, panel_items};
 use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
-use crate::ui::filter_bar::{FilterControl, LogFilterBar};
+use crate::ui::filter_bar::{
+    FILTER_FRAME_RADIUS, FILTER_FRAME_SIDE, FILTER_FRAME_TOP, FILTER_FRAME_TRANSITION_MS,
+    FilterControl, FilterFrameEdge, FilterFrameLabel, FrameTransition, LogFilterBar,
+    animate_content_corners, animate_frame_inset,
+};
 use crate::ui::log_view::{LogView, log_row_height_hint};
+use crate::ui::marker_editor::{
+    MARKER_EDITOR_HEIGHT, MARKER_EDITOR_WIDTH, MarkerEditor, MarkerEditorState,
+};
+use crate::ui::marker_panel::{MarkerPanel, MarkerPanelItem};
 use crate::ui::motion::{TransitionFlag, UiMotionState};
 use crate::ui::parameter_picker::ParameterPickerPopover;
 use crate::ui::quick_command_window::{
@@ -60,6 +70,7 @@ use crate::ui::start_page::{StartPage, StartPageState};
 use crate::ui::tab_rail::{TAB_RAIL_WIDTH, TabItem, TabRail};
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager};
+use crate::ui::throughput_window::{ThroughputSnapshot, ThroughputWindow};
 use crate::ui::update_manager::{UpdateHandle, UpdateManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +96,8 @@ struct SessionTab {
     start_baud_input: Option<Entity<InputState>>,
     _start_baud_sub: Option<Subscription>,
     serial_conn: Option<SerialConnection>,
+    /// True while the port is being opened on a background thread.
+    connecting: bool,
     serial_rx_task: Option<Task<()>>,
     session_service: SessionService,
     send_input: Option<Entity<TextareaState>>,
@@ -107,12 +120,20 @@ struct SessionTab {
     quick_search_input: Option<Entity<InputState>>,
     _quick_search_sub: Option<Subscription>,
     quick_pending_delete: Option<String>,
+    marker_collapsed: bool,
+    marker_pending_clear: bool,
     log_focus: FocusHandle,
     log_list_state: ListState,
     /// `(item count, font size)` last given a uniform row-height hint.
     row_hint_key: Option<(usize, u16)>,
     log_filter: LogFilterState,
     log_projection: LogProjection,
+    /// Whether the filter frame was drawn as on when this tab was last shown.
+    frame_shown: bool,
+    /// Bumped each time the frame switches on or off while this tab is on screen.
+    frame_key: u64,
+    /// When that last happened; the transition plays only for a moment after it.
+    frame_changed_at: Option<Instant>,
     filter_input: Option<Entity<InputState>>,
     filter_input_display: Option<(Locale, bool)>,
     _filter_subscription: Option<Subscription>,
@@ -130,6 +151,8 @@ struct SessionTab {
     script_load_error: Option<SharedString>,
     stream_busy: bool,
     stream_error: Option<SharedString>,
+    /// Error from the last "save log" export, shown until the next attempt.
+    save_log_error: Option<SharedString>,
     stream_poll_task: Option<Task<()>>,
 }
 
@@ -170,6 +193,7 @@ impl SessionTab {
             start_baud_input: None,
             _start_baud_sub: None,
             serial_conn: None,
+            connecting: false,
             serial_rx_task: None,
             session_service: SessionService::new(),
             send_input: None,
@@ -190,11 +214,16 @@ impl SessionTab {
             quick_search_input: None,
             _quick_search_sub: None,
             quick_pending_delete: None,
+            marker_collapsed: false,
+            marker_pending_clear: false,
             log_focus: cx.focus_handle(),
             log_list_state: ListState::new(0, ListAlignment::Top, px(200.)),
             row_hint_key: None,
             log_filter: LogFilterState::default(),
             log_projection: LogProjection::default(),
+            frame_shown: false,
+            frame_key: 0,
+            frame_changed_at: None,
             filter_input: None,
             filter_input_display: None,
             _filter_subscription: None,
@@ -212,6 +241,7 @@ impl SessionTab {
             script_load_error: None,
             stream_busy: false,
             stream_error: None,
+            save_log_error: None,
             stream_poll_task: None,
         }
     }
@@ -282,6 +312,10 @@ impl SessionTab {
     }
 
     fn sync_log_list_state(&mut self, log_font_size: u16) {
+        // Markers die with the entries the buffer limit evicted.
+        self.state
+            .markers
+            .prune_before(self.state.logs.first().map(|entry| entry.id));
         let old_len = self.log_projection.rows.len();
         let old_offset = self.log_list_state.logical_scroll_top();
         let anchor_id = self
@@ -520,12 +554,22 @@ pub struct SashaApp {
     last_locale: Locale,
     settings_window: Option<AnyWindowHandle>,
     quick_editor_window: Option<AnyWindowHandle>,
+    throughput_window: Option<(AnyWindowHandle, WeakEntity<ThroughputWindow>)>,
+    last_throughput_sample_at: Instant,
     _config_subscription: Subscription,
     picker_port_presets: Vec<String>,
     picker_input: Option<Entity<InputState>>,
     _picker_subscription: Option<Subscription>,
     picker_error: Option<SharedString>,
     cached_bg_image: Option<(PathBuf, Option<Arc<Image>>)>,
+    /// The log-marker form, open for at most one entry at a time.
+    marker_editor: Option<MarkerEditorState>,
+    _marker_editor_subscription: Option<Subscription>,
+    /// The tab the filter frame was last drawn for, to tell a filter being switched on or off
+    /// from a switch to another tab.
+    last_frame_tab: Option<u64>,
+    /// The line running around the filter frame's content, created the first time it is needed.
+    filter_frame_edge: Option<Entity<FilterFrameEdge>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -593,6 +637,20 @@ impl SashaApp {
             )
         };
         let initial_tab = SessionTab::new(1, locale, initial_scripts, log_buffer_limit, cx);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(SAMPLE_INTERVAL_MS))
+                    .await;
+                let keep_going = this.update(cx, |app, cx| {
+                    app.sample_all_throughputs(cx);
+                });
+                if keep_going.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             tabs: vec![initial_tab],
             active_tab_id: 1,
@@ -606,12 +664,18 @@ impl SashaApp {
             last_locale: locale,
             settings_window: None,
             quick_editor_window: None,
+            throughput_window: None,
+            last_throughput_sample_at: Instant::now(),
             _config_subscription,
             picker_port_presets: Vec::new(),
             picker_input: None,
             _picker_subscription: None,
             picker_error: None,
             cached_bg_image: None,
+            marker_editor: None,
+            _marker_editor_subscription: None,
+            last_frame_tab: None,
+            filter_frame_edge: None,
         }
     }
 
@@ -753,6 +817,10 @@ impl SashaApp {
 
     fn dismiss_picker_state(&mut self) {
         self.picker_error = None;
+        // Tab switches, new tabs and closed tabs all pass through here; the marker form
+        // belongs to one tab's entry, so it goes too.
+        self.marker_editor = None;
+        self._marker_editor_subscription = None;
         for tab in &mut self.tabs {
             tab.state.active_picker = None;
             tab.quick_pending_delete = None;
@@ -766,6 +834,7 @@ impl SashaApp {
         self.dismiss_picker_state();
         TextSelection::clear(window, cx);
         self.active_tab_id = tab_id;
+        self.notify_throughput_window(true, cx);
         cx.notify();
     }
 
@@ -785,6 +854,7 @@ impl SashaApp {
         let tab = SessionTab::new(id, locale, initial_scripts, log_buffer_limit, cx);
         self.tabs.push(tab);
         self.active_tab_id = id;
+        self.notify_throughput_window(true, cx);
         cx.notify();
     }
 
@@ -805,6 +875,7 @@ impl SashaApp {
             let next_idx = idx.min(self.tabs.len() - 1);
             self.active_tab_id = self.tabs[next_idx].id;
             TextSelection::clear(window, cx);
+            self.notify_throughput_window(true, cx);
         }
         cx.notify();
     }
@@ -821,62 +892,62 @@ impl SashaApp {
         self.select_tab(next_id, window, cx);
     }
 
+    /// The action bound to a key press, with the 1 to 9 digit for the digit families.
+    fn shortcut_for(
+        &self,
+        event: &KeyDownEvent,
+        cx: &App,
+    ) -> Option<(ShortcutAction, Option<usize>)> {
+        let m = &event.keystroke.modifiers;
+        let mods = Modifiers::new(m.control, m.alt, m.shift, m.platform);
+        self.config_store
+            .read(cx)
+            .config()
+            .shortcuts
+            .resolve(&event.keystroke.key, mods)
+    }
+
+    /// Session shortcuts (new, close, next, previous, jump). They work on every page.
     fn handle_tab_shortcut(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let mods = &event.keystroke.modifiers;
-        if !mods.control || mods.alt || mods.platform {
+        let Some((action, digit)) = self.shortcut_for(event, cx) else {
             return false;
-        }
-
-        if event.keystroke.key.eq_ignore_ascii_case("t") && !mods.shift {
-            self.new_tab(window, cx);
-            return true;
-        }
-        if event.keystroke.key.eq_ignore_ascii_case("w") && !mods.shift {
-            let active_id = self.active_tab_id;
-            self.close_tab(active_id, window, cx);
-            return true;
-        }
-        if event.keystroke.key.eq_ignore_ascii_case("tab") {
-            let delta = if mods.shift { -1 } else { 1 };
-            self.cycle_tab(delta, window, cx);
-            return true;
-        }
-        if !mods.shift
-            && let Some(digit) = event.keystroke.key.parse::<usize>().ok()
-            && (1..=9).contains(&digit)
-        {
-            let target_idx = if digit == 9 {
-                self.tabs.len().saturating_sub(1)
-            } else {
-                digit - 1
-            };
-            if let Some(tab) = self.tabs.get(target_idx) {
-                let id = tab.id;
-                self.select_tab(id, window, cx);
+        };
+        match (action, digit) {
+            (ShortcutAction::NewSession, _) => self.new_tab(window, cx),
+            (ShortcutAction::CloseSession, _) => {
+                let active_id = self.active_tab_id;
+                self.close_tab(active_id, window, cx);
             }
-            return true;
+            (ShortcutAction::NextSession, _) => self.cycle_tab(1, window, cx),
+            (ShortcutAction::PrevSession, _) => self.cycle_tab(-1, window, cx),
+            (ShortcutAction::JumpSession, Some(digit)) => {
+                let target_idx = if digit == 9 {
+                    self.tabs.len().saturating_sub(1)
+                } else {
+                    digit - 1
+                };
+                if let Some(tab) = self.tabs.get(target_idx) {
+                    let id = tab.id;
+                    self.select_tab(id, window, cx);
+                }
+            }
+            _ => return false,
         }
-        false
+        true
     }
 
+    /// Sends the quick command bound to the pressed digit, on the workspace page only.
     fn handle_quick_shortcut(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let tab = self.active_tab();
         if tab.page != AppPage::Workspace || tab.state.active_picker.is_some() {
             return false;
         }
-        let mods = &event.keystroke.modifiers;
-        let Some(digit) = quick_shortcut_digit(
-            mods.control,
-            mods.alt,
-            mods.shift,
-            mods.platform,
-            &event.keystroke.key,
-        ) else {
+        let Some((ShortcutAction::QuickSend, Some(digit))) = self.shortcut_for(event, cx) else {
             return false;
         };
         let command_id =
@@ -888,6 +959,142 @@ impl SashaApp {
         } else {
             false
         }
+    }
+
+    /// Opens the marker form for a right-clicked log entry, prefilled when it is marked.
+    fn open_marker_editor(
+        &mut self,
+        entry_id: u64,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = self.active_tab_id;
+        let existing = self
+            .tab_mut(tab_id)
+            .and_then(|tab| tab.state.markers.get(entry_id).cloned());
+        let locale = self.config_store.read(cx).config().locale;
+        let placeholder = tr_shared(locale, "marker.name_placeholder");
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
+        if let Some(marker) = &existing {
+            let name = marker.name.clone();
+            input.update(cx, |state, cx| state.set_value(name, window, cx));
+        }
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            move |this, _input, event: &InputEvent, _window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.confirm_marker(cx);
+                }
+            },
+        );
+        input.read(cx).focus_handle(cx).focus(window, cx);
+
+        let viewport = window.viewport_size();
+        let max_x = (viewport.width - MARKER_EDITOR_WIDTH - px(8.)).max(px(8.));
+        let max_y = (viewport.height - MARKER_EDITOR_HEIGHT - px(8.)).max(px(8.));
+        self.marker_editor = Some(MarkerEditorState {
+            tab_id,
+            entry_id,
+            position: point(
+                position.x.clamp(px(8.), max_x),
+                position.y.clamp(px(8.), max_y),
+            ),
+            color: existing
+                .as_ref()
+                .map(|marker| marker.color)
+                .unwrap_or(MarkerColor::Red),
+            input,
+            existing: existing.is_some(),
+            error: None,
+        });
+        self._marker_editor_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    /// Scrolls the log to a marked entry. Entries hidden by the filter are not scrolled to.
+    pub fn jump_to_log_entry(&mut self, entry_id: u64, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        let Ok(index) = tab
+            .log_projection
+            .rows
+            .binary_search_by_key(&entry_id, |row| row.id)
+        else {
+            return;
+        };
+        // New data would otherwise scroll straight back to the end.
+        if tab.state.receive.auto_scroll {
+            tab.state.toggle_auto_scroll();
+            tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
+        }
+        tab.log_list_state.scroll_to_reveal_item(index);
+        cx.notify();
+    }
+
+    /// Removes one marker from the dock list.
+    fn remove_marker(&mut self, entry_id: u64, cx: &mut Context<Self>) {
+        self.active_tab_mut().state.markers.remove(entry_id);
+        cx.notify();
+    }
+
+    fn clear_markers(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        tab.state.markers.clear();
+        tab.marker_pending_clear = false;
+        cx.notify();
+    }
+
+    fn pick_marker_color(&mut self, color: MarkerColor, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.marker_editor {
+            editor.color = color;
+            cx.notify();
+        }
+    }
+
+    /// Applies the form. An invalid name keeps the form open with the draft.
+    fn confirm_marker(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.marker_editor.as_ref() else {
+            return;
+        };
+        let name = editor.input.read(cx).value().to_string();
+        let (tab_id, entry_id, color) = (editor.tab_id, editor.entry_id, editor.color);
+        let locale = self.config_store.read(cx).config().locale;
+        let Some(tab) = self.tab_mut(tab_id) else {
+            self.close_marker_editor(cx);
+            return;
+        };
+        match tab.state.markers.set(entry_id, &name, color) {
+            Ok(()) => {
+                // A confirmation armed before the list emptied must not reappear for new markers.
+                tab.marker_pending_clear = false;
+                self.close_marker_editor(cx);
+            }
+            Err(err) => {
+                if let Some(editor) = &mut self.marker_editor {
+                    editor.error = Some(tr_shared(locale, err.locale_key()));
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    fn delete_marker(&mut self, cx: &mut Context<Self>) {
+        if let Some((tab_id, entry_id)) = self
+            .marker_editor
+            .as_ref()
+            .map(|editor| (editor.tab_id, editor.entry_id))
+            && let Some(tab) = self.tab_mut(tab_id)
+        {
+            tab.state.markers.remove(entry_id);
+        }
+        self.close_marker_editor(cx);
+    }
+
+    fn close_marker_editor(&mut self, cx: &mut Context<Self>) {
+        self.marker_editor = None;
+        self._marker_editor_subscription = None;
+        cx.notify();
     }
 
     fn ensure_start_manual_port_input(
@@ -1093,15 +1300,53 @@ impl SashaApp {
             self.active_tab_mut().start_page.set_manual_port_value(&raw);
         }
 
+        if self.active_tab().connecting {
+            return;
+        }
         let locale = self.current_locale(cx);
         let config = self.active_tab().start_page.config.clone();
-        match SerialConnection::open_for(&config, locale) {
+        {
+            let tab = self.active_tab_mut();
+            tab.connecting = true;
+            tab.start_page.connecting = true;
+            tab.start_page.connect_error = None;
+        }
+        let open_config = config.clone();
+        // Opening a port can block for seconds on some drivers; keep it off the UI thread.
+        let opening = cx
+            .background_executor()
+            .spawn(async move { SerialConnection::open_for(&open_config, locale) });
+        cx.spawn(async move |this, cx| {
+            let result = opening.await;
+            let _ = this.update(cx, |app, cx| {
+                app.finish_connect_from_start_page(tab_id, config, result, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_connect_from_start_page(
+        &mut self,
+        tab_id: u64,
+        config: crate::model::SerialConfig,
+        result: Result<(SerialConnection, Receiver<SerialEvent>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return; // tab closed while opening; dropping `result` closes the port
+        };
+        tab.connecting = false;
+        tab.start_page.connecting = false;
+        match result {
             Ok((mut conn, rx)) => {
                 let writer = conn
                     .take_writer()
                     .expect("newly opened SerialConnection must have a writer");
                 let log_buffer_limit = self.saved_log_buffer_limit(cx);
-                let tab = self.active_tab_mut();
+                let Some(tab) = self.tab_mut(tab_id) else {
+                    return;
+                };
                 tab.disconnect_real_serial(None);
                 let generation = tab.session_service.attach_writer(writer);
                 tab.state = SessionState::new_real_session(config, true);
@@ -1117,7 +1362,9 @@ impl SashaApp {
                 cx.notify();
             }
             Err(err) => {
-                self.active_tab_mut().start_page.connect_error = Some(err);
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.start_page.connect_error = Some(err);
+                }
                 cx.notify();
             }
         }
@@ -1223,18 +1470,45 @@ impl SashaApp {
 
     fn connect_real_serial(&mut self, cx: &mut Context<Self>) {
         let tab_id = self.active_tab_id;
+        if self.active_tab().connecting {
+            return;
+        }
         let config = {
             let tab = self.active_tab_mut();
             tab.disconnect_real_serial(None);
+            tab.connecting = true;
             tab.state.config.clone()
         };
         let locale = self.current_locale(cx);
-        match SerialConnection::open_for(&config, locale) {
+        // Opening a port can block for seconds on some drivers; keep it off the UI thread.
+        let opening = cx
+            .background_executor()
+            .spawn(async move { SerialConnection::open_for(&config, locale) });
+        cx.spawn(async move |this, cx| {
+            let result = opening.await;
+            let _ = this.update(cx, |app, cx| {
+                app.finish_connect_real_serial(tab_id, result, cx);
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn finish_connect_real_serial(
+        &mut self,
+        tab_id: u64,
+        result: Result<(SerialConnection, Receiver<SerialEvent>), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return; // tab closed while opening; dropping `result` closes the port
+        };
+        tab.connecting = false;
+        match result {
             Ok((mut conn, rx)) => {
                 let writer = conn
                     .take_writer()
                     .expect("newly opened SerialConnection must have a writer");
-                let tab = self.active_tab_mut();
                 let generation = tab.session_service.attach_writer(writer);
                 tab.serial_conn = Some(conn);
                 tab.state.set_connected(true);
@@ -1243,10 +1517,11 @@ impl SashaApp {
                 self.start_serial_rx_loop(tab_id, rx, generation, cx);
             }
             Err(err) => {
-                let tab = self.active_tab_mut();
-                tab.state.set_connected(false);
-                tab.motion.connection.set(false);
-                tab.send_error = Some(err.into());
+                if let Some(tab) = self.tab_mut(tab_id) {
+                    tab.state.set_connected(false);
+                    tab.motion.connection.set(false);
+                    tab.send_error = Some(err.into());
+                }
             }
         }
         cx.notify();
@@ -1336,6 +1611,66 @@ impl SashaApp {
             self.disconnect_real_serial(None, cx);
         } else {
             self.connect_real_serial(cx);
+        }
+    }
+
+    /// Works out how to draw the filter frame for the visible tab: whether it is mounted at all
+    /// and whether it is mid-transition.
+    ///
+    /// A transition plays only when the filter is switched on or off while this tab is on screen;
+    /// arriving at a tab that already has a filter on just shows the frame.
+    fn frame_state(
+        &mut self,
+        tab_id: u64,
+        filter_on: bool,
+        cx: &mut Context<Self>,
+    ) -> (bool, Option<FrameTransition>) {
+        let same_tab = self.last_frame_tab.replace(tab_id) == Some(tab_id);
+        let now = Instant::now();
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return (filter_on, None);
+        };
+        let window = Duration::from_millis(FILTER_FRAME_TRANSITION_MS + 120);
+        if tab.frame_shown != filter_on {
+            tab.frame_shown = filter_on;
+            if same_tab {
+                tab.frame_key += 1;
+                tab.frame_changed_at = Some(now);
+                // Nothing else redraws once a leaving frame has finished, so ask for it.
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(window).await;
+                    let _ = this.update(cx, |_, cx| cx.notify());
+                })
+                .detach();
+            }
+        }
+        let animating = tab
+            .frame_changed_at
+            .is_some_and(|at| now.duration_since(at) < window);
+        let transition = animating.then_some(FrameTransition {
+            key: (tab_id << 32) | (tab.frame_key & 0xFFFF_FFFF),
+            entering: filter_on,
+        });
+        // A leaving frame stays mounted until its transition has run.
+        (filter_on || animating, transition)
+    }
+
+    /// The frame's edge line, kept in step with the theme's accent.
+    fn ensure_filter_frame_edge(
+        &mut self,
+        accent: Hsla,
+        cx: &mut Context<Self>,
+    ) -> Entity<FilterFrameEdge> {
+        match &self.filter_frame_edge {
+            Some(edge) => {
+                edge.update(cx, |edge, cx| edge.set_accent(accent, cx));
+                edge.clone()
+            }
+            None => {
+                let edge = cx.new(|_| FilterFrameEdge::new(accent));
+                self.filter_frame_edge = Some(edge.clone());
+                edge
+            }
         }
     }
 
@@ -1625,6 +1960,15 @@ impl SashaApp {
             tab.log_list_state.scroll_to_end();
         }
         cx.notify();
+    }
+
+    pub fn disable_receive_auto_scroll(&mut self, cx: &mut Context<Self>) {
+        let tab = self.active_tab_mut();
+        if tab.state.receive.auto_scroll {
+            tab.state.toggle_auto_scroll();
+            tab.motion.rx_auto_scroll.set(tab.state.receive.auto_scroll);
+            cx.notify();
+        }
     }
 
     pub fn clear_receive_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1966,12 +2310,23 @@ impl SashaApp {
         };
         let suggested_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let tab_id = tab.id;
         let rx = cx.prompt_for_new_path(&suggested_dir, Some("sasha-log.txt"));
 
-        cx.spawn(async move |_, _| {
-            if let Ok(Ok(Some(path))) = rx.await {
-                let _ = std::fs::write(&path, content_to_save.as_bytes());
-            }
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = rx.await else {
+                return;
+            };
+            let result = cx
+                .background_executor()
+                .spawn(async move { std::fs::write(&path, content_to_save.as_bytes()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(tab_id) {
+                    tab.save_log_error = result.err().map(|err| err.to_string().into());
+                }
+                cx.notify();
+            });
         })
         .detach();
     }
@@ -2923,6 +3278,95 @@ impl SashaApp {
         }
     }
 
+    fn sample_all_throughputs(&mut self, cx: &mut Context<Self>) {
+        self.last_throughput_sample_at = Instant::now();
+        for tab in &mut self.tabs {
+            let rx = tab.state.counters.rx_bytes;
+            let tx = tab.state.counters.tx_bytes;
+            tab.state.throughput.sample(rx, tx);
+        }
+        self.notify_throughput_window(false, cx);
+    }
+
+    fn notify_throughput_window(&mut self, tab_changed: bool, cx: &mut Context<Self>) {
+        let Some((_, weak_view)) = &self.throughput_window else {
+            return;
+        };
+        let Some(view) = weak_view.upgrade() else {
+            self.throughput_window = None;
+            return;
+        };
+        let span = view.read(cx).span();
+        let snapshot = self.active_throughput_snapshot(span);
+        view.update(cx, |view, cx| {
+            view.apply_snapshot(snapshot, tab_changed, cx)
+        });
+    }
+
+    pub fn active_throughput_snapshot(&self, span: ThroughputSpan) -> ThroughputSnapshot {
+        let tab = self.active_tab();
+        let config = tab.state.config.clone();
+        let session_title = if config.port.is_empty() {
+            format!("Session {}", tab.id)
+        } else {
+            config.port.clone()
+        };
+        let theoretical_max = theoretical_max_bytes_per_sec(&config);
+        ThroughputSnapshot {
+            session_title,
+            config,
+            counters: tab.state.counters,
+            samples: tab.state.throughput.window_samples(span),
+            summary: tab.state.throughput.summary(span),
+            theoretical_max,
+            sampled_at: self.last_throughput_sample_at,
+        }
+    }
+
+    pub fn clear_active_throughput(&mut self) {
+        self.active_tab_mut().state.throughput.clear();
+    }
+
+    fn open_throughput(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((handle, _)) = &self.throughput_window
+            && handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+        {
+            return;
+        }
+
+        let bounds = Bounds::centered(None, size(px(640.), px(420.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_min_size: Some(size(px(480.), px(340.))),
+            is_resizable: true,
+            ..TitleBar::window_options()
+        };
+
+        let weak_app = cx.entity().downgrade();
+        let config_store = self.config_store.clone();
+        let initial_snapshot = self.active_throughput_snapshot(ThroughputSpan::default());
+        let mut created_view: Option<WeakEntity<ThroughputWindow>> = None;
+        if let Ok((handle, _)) = open_window(options, cx, |_, cx| {
+            let view = cx.new(|cx| {
+                ThroughputWindow::new(
+                    weak_app.clone(),
+                    config_store.clone(),
+                    initial_snapshot.clone(),
+                    cx,
+                )
+            });
+            created_view = Some(view.downgrade());
+            view
+        }) && let Some(weak_view) = created_view
+        {
+            self.throughput_window = Some((handle, weak_view));
+        }
+    }
+
     fn build_tab_rail(&self, theme: NanoTheme, cx: &mut Context<Self>) -> TabRail {
         let weak = cx.entity().downgrade();
         let on_select_tab = Rc::new(move |tab_id: u64, window: &mut Window, cx: &mut App| {
@@ -2951,6 +3395,13 @@ impl SashaApp {
             on_new_tab,
             on_open_settings,
             self.update_manager.read(cx).has_update(),
+        )
+        .new_shortcut(
+            self.config_store
+                .read(cx)
+                .config()
+                .shortcuts
+                .display(ShortcutAction::NewSession),
         )
     }
 
@@ -3146,6 +3597,11 @@ impl Render for SashaApp {
             tab.log_selection.observe_log_len(log_len);
             tab.sync_log_list_state(log_font_size);
         }
+        let filter_on = self.active_tab().log_filter.is_active();
+        let (frame_mounted, frame_transition) = self.frame_state(active_id, filter_on, cx);
+        // The line sits at the content's final edge, so wait until the content has got there.
+        let frame_edge = (filter_on && frame_transition.is_none())
+            .then(|| self.ensure_filter_frame_edge(surface_theme.accent_blue, cx));
         let send_input = self.ensure_send_input(active_id, window, cx);
         let timer_input = self.ensure_timer_input(active_id, window, cx);
         let timer_draft_pending = {
@@ -3198,11 +3654,167 @@ impl Render for SashaApp {
         let timer_flag = tab.timer_flag;
         let config = tab.state.config.clone();
         let connection = tab.state.connection;
-        let conn_action_label = tab.state.connection_action_label_for(locale);
+        let conn_action_label = if tab.connecting {
+            tr(locale, "status.action_connecting")
+        } else {
+            tab.state.connection_action_label_for(locale)
+        };
         let counters = tab.state.counters;
         let buffer_used = tab.state.log_buffer_used_bytes();
         let active_picker = tab.state.active_picker;
         let picker_overlay = active_picker.zip(self.picker_input.clone());
+        let markers = Rc::new(tab.state.markers.clone());
+        let weak_mark = cx.entity().downgrade();
+        let on_mark = Rc::new(
+            move |entry_id: u64, position: Point<Pixels>, window: &mut Window, cx: &mut App| {
+                let _ = weak_mark.update(cx, |this, cx| {
+                    this.open_marker_editor(entry_id, position, window, cx)
+                });
+            },
+        );
+        let weak_jump = cx.entity().downgrade();
+        let on_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak_jump.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
+        });
+        let weak_disable_auto_scroll = cx.entity().downgrade();
+        let on_disable_auto_scroll = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak_disable_auto_scroll
+                .update(cx, |this, cx| this.disable_receive_auto_scroll(cx));
+        });
+        let marker_items: Vec<MarkerPanelItem> = {
+            let tab = self.active_tab();
+            let visible_ids: Vec<u64> = tab.log_projection.rows.iter().map(|row| row.id).collect();
+            panel_items(&tab.state.markers, &visible_ids)
+                .into_iter()
+                .filter_map(|(entry_id, visible)| {
+                    let marker = tab.state.markers.get(entry_id)?;
+                    let index = tab
+                        .state
+                        .logs
+                        .binary_search_by_key(&entry_id, |entry| entry.id)
+                        .ok()?;
+                    let entry = &tab.state.logs[index];
+                    Some(MarkerPanelItem {
+                        entry_id,
+                        name: marker.name.clone(),
+                        color: marker.color,
+                        label: format!("{} {}", entry.timestamp, entry.direction.tag()),
+                        filtered: !visible,
+                    })
+                })
+                .collect()
+        };
+        let marker_collapsed = self.active_tab().marker_collapsed;
+        // A pending "remove all" confirmation is only shown while there is something to remove.
+        let marker_pending_clear =
+            self.active_tab().marker_pending_clear && !marker_items.is_empty();
+        let weak = cx.entity().downgrade();
+        let on_marker_toggle = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                let tab = this.active_tab_mut();
+                tab.marker_collapsed = !tab.marker_collapsed;
+                cx.notify();
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_expand = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(active_id) {
+                    tab.script_preferred_width = SCRIPT_PANEL_WIDTH;
+                    tab.marker_collapsed = false;
+                    cx.notify();
+                }
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_jump = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.jump_to_log_entry(entry_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_edit = Rc::new(
+            move |entry_id: u64, position: Point<Pixels>, window: &mut Window, cx: &mut App| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.open_marker_editor(entry_id, position, window, cx)
+                });
+            },
+        );
+        let weak = cx.entity().downgrade();
+        let on_marker_remove = Rc::new(move |entry_id: u64, _: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.remove_marker(entry_id, cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_request_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.active_tab_mut().marker_pending_clear = true;
+                cx.notify();
+            });
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_confirm_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.clear_markers(cx));
+        });
+        let weak = cx.entity().downgrade();
+        let on_marker_cancel_clear = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| {
+                this.active_tab_mut().marker_pending_clear = false;
+                cx.notify();
+            });
+        });
+        let marker_panel = MarkerPanel {
+            theme: surface_theme,
+            locale,
+            items: marker_items,
+            collapsed: marker_collapsed,
+            compact: panel_is_compact(panel_width(
+                self.active_tab().script_preferred_width,
+                (window.viewport_size().width - TAB_RAIL_WIDTH).max(px(0.)),
+            )),
+            on_expand_dock: on_marker_expand,
+            pending_clear: marker_pending_clear,
+            on_toggle_section: on_marker_toggle,
+            on_jump: on_marker_jump,
+            on_edit: on_marker_edit,
+            on_delete: on_marker_remove,
+            on_request_clear: on_marker_request_clear,
+            on_confirm_clear: on_marker_confirm_clear,
+            on_cancel_clear: on_marker_cancel_clear,
+        };
+        let marker_overlay = self
+            .marker_editor
+            .as_ref()
+            .filter(|editor| editor.tab_id == active_id)
+            .map(|editor| {
+                let weak = cx.entity().downgrade();
+                let on_pick_color =
+                    Rc::new(move |color: MarkerColor, _: &mut Window, cx: &mut App| {
+                        let _ = weak.update(cx, |this, cx| this.pick_marker_color(color, cx));
+                    });
+                let weak = cx.entity().downgrade();
+                let on_confirm = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.confirm_marker(cx));
+                });
+                let weak = cx.entity().downgrade();
+                let on_cancel = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.close_marker_editor(cx));
+                });
+                let weak = cx.entity().downgrade();
+                let on_delete = Rc::new(move |_: &mut Window, cx: &mut App| {
+                    let _ = weak.update(cx, |this, cx| this.delete_marker(cx));
+                });
+                MarkerEditor {
+                    theme: self.theme,
+                    locale,
+                    position: editor.position,
+                    color: editor.color,
+                    existing: editor.existing,
+                    input: editor.input.clone(),
+                    error: editor.error.clone(),
+                    on_pick_color,
+                    on_confirm,
+                    on_cancel,
+                    on_delete,
+                }
+            });
         let script_items = tab.script_panel_items(locale);
         let main_width = (window.viewport_size().width - TAB_RAIL_WIDTH).max(px(0.));
         let script_panel_width = panel_width(tab.script_preferred_width, main_width);
@@ -3294,11 +3906,23 @@ impl Render for SashaApp {
         };
 
         let quick_search_input = self.ensure_quick_search_input(active_id, window, cx);
-        let (quick_commands, skipped_count) = {
+        let search_keys = self
+            .config_store
+            .read(cx)
+            .config()
+            .shortcuts
+            .display(ShortcutAction::Search);
+        let (quick_commands, skipped_count, quick_send_mods) = {
             let store = self.config_store.read(cx);
             (
                 store.config().quick_commands.clone(),
                 store.skipped_quick_commands(),
+                store
+                    .config()
+                    .shortcuts
+                    .modifiers_for(ShortcutAction::QuickSend)
+                    .map(|mods| mods.display())
+                    .unwrap_or_default(),
             )
         };
         let quick_rows = visible_rows(&quick_commands, &quick_query, &quick_collapsed_groups);
@@ -3380,6 +4004,7 @@ impl Render for SashaApp {
             skipped_notice,
             collapsed: quick_collapsed,
             compact: panel_is_compact(script_panel_width),
+            shortcut_mods: quick_send_mods,
             pending_delete: quick_pending_delete,
             on_send: on_quick_send,
             on_toggle_group: on_quick_toggle_group,
@@ -3467,6 +4092,7 @@ impl Render for SashaApp {
             tr_shared(locale, "stream.start")
         };
         let stream_error = self.active_tab().stream_error.clone();
+        let save_log_error = self.active_tab().save_log_error.clone();
         let weak = cx.entity().downgrade();
         let on_rx_stream = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.toggle_stream_output(cx));
@@ -3563,6 +4189,16 @@ impl Render for SashaApp {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this
+                    .marker_editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.tab_id == this.active_tab_id)
+                    && event.keystroke.key.eq_ignore_ascii_case("escape")
+                {
+                    this.close_marker_editor(cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.handle_tab_shortcut(event, window, cx) {
                     cx.stop_propagation();
                     return;
@@ -3584,11 +4220,10 @@ impl Render for SashaApp {
                     return;
                 }
 
-                let is_search_shortcut = (event.keystroke.modifiers.control
-                    || event.keystroke.modifiers.platform)
-                    && !event.keystroke.modifiers.alt
-                    && !event.keystroke.modifiers.shift
-                    && event.keystroke.key.eq_ignore_ascii_case("f");
+                let is_search_shortcut = matches!(
+                    this.shortcut_for(event, cx),
+                    Some((ShortcutAction::Search, _))
+                );
                 if is_search_shortcut {
                     this.open_search(window, cx);
                     cx.stop_propagation();
@@ -3655,120 +4290,191 @@ impl Render for SashaApp {
                             .flex_1()
                             .min_w_0()
                             .h_full()
-                            .child(
+                            .child(animate_frame_inset(
+                                // Everything above the status bar. While filtering it sits on
+                                // an accent fill whose top edge (the title bar band) carries the
+                                // filter summary; the content on top has four rounded corners,
+                                // so the fill shows through at each. The status bar stays outside
+                                // the frame.
                                 v_flex()
-                                    .id("receive-area")
+                                    .id("workspace-frame")
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
                                     .w_full()
-                                    .child(LogView::new(
-                                        self.theme,
-                                        locale,
-                                        logs,
-                                        receive_state.clone(),
-                                        simulated_notice.into(),
-                                        log_font_size,
-                                        log_focus,
-                                        log_list_state,
-                                        search_matches,
-                                        active_search_match,
-                                    ))
-                                    .when_some(search_input, |this, input| {
-                                        this.child(
-                                            div().absolute().bottom(px(8.)).right(px(16.)).child(
-                                                LogSearchBar::new(
-                                                    self.theme,
+                                    .when(frame_mounted, |this| {
+                                        this.bg(surface_theme.accent_blue)
+                                            .rounded_tl(px(FILTER_FRAME_RADIUS))
+                                            .pt(px(FILTER_FRAME_TOP))
+                                            .px(px(FILTER_FRAME_SIDE))
+                                            .pb(px(FILTER_FRAME_SIDE))
+                                            .children(frame_edge)
+                                            .child(FilterFrameLabel {
+                                                theme: surface_theme,
+                                                locale,
+                                                visible: filter_visible,
+                                                total: filter_total,
+                                            })
+                                    })
+                                    .child(animate_content_corners(
+                                        v_flex()
+                                            .id("workspace-content")
+                                            .flex_1()
+                                            .min_h_0()
+                                            .w_full()
+                                            .when(frame_mounted, |this| {
+                                                this.bg(surface_theme.bg_canvas)
+                                                    .rounded(px(FILTER_FRAME_RADIUS))
+                                            })
+                                            .child(
+                                                v_flex()
+                                                    .id("receive-area")
+                                                    .relative()
+                                                    .flex_1()
+                                                    .min_h_0()
+                                                    .w_full()
+                                                    .child(LogView::new(
+                                                        self.theme,
+                                                        locale,
+                                                        logs,
+                                                        receive_state.clone(),
+                                                        simulated_notice.into(),
+                                                        log_font_size,
+                                                        log_focus,
+                                                        log_list_state,
+                                                        search_matches,
+                                                        active_search_match,
+                                                        markers,
+                                                        on_mark,
+                                                        on_jump,
+                                                        on_disable_auto_scroll,
+                                                    ))
+                                                    .when_some(search_input, |this, input| {
+                                                        this.child(
+                                                            div()
+                                                                .absolute()
+                                                                .bottom(px(8.))
+                                                                .right(px(20.))
+                                                                .child(LogSearchBar::new(
+                                                                    self.theme,
+                                                                    locale,
+                                                                    input,
+                                                                    search_count_label,
+                                                                    search_has_matches,
+                                                                    on_search_prev,
+                                                                    on_search_next,
+                                                                    on_search_close,
+                                                                )),
+                                                        )
+                                                    }),
+                                            )
+                                            .children(stream_error.map(|error| {
+                                                div()
+                                                    .px_4()
+                                                    .text_xs()
+                                                    .text_color(self.theme.text_primary)
+                                                    .child(format!(
+                                                        "{}: {}",
+                                                        tr(locale, "stream.error"),
+                                                        error
+                                                    ))
+                                            }))
+                                            .children(save_log_error.map(|error| {
+                                                div()
+                                                    .px_4()
+                                                    .text_xs()
+                                                    .text_color(self.theme.text_primary)
+                                                    .child(format!(
+                                                        "{}: {}",
+                                                        tr(locale, "stream.save_log_error"),
+                                                        error
+                                                    ))
+                                            }))
+                                            .child(
+                                                ReceiveToolbar::new(
+                                                    surface_theme,
                                                     locale,
-                                                    input,
-                                                    search_count_label,
-                                                    search_has_matches,
-                                                    on_search_prev,
-                                                    on_search_next,
-                                                    on_search_close,
+                                                    receive_state,
+                                                    send_state.send_hex,
+                                                    send_state.line_ending,
+                                                    search_open,
+                                                    motion.rx_hex,
+                                                    motion.rx_timestamp,
+                                                    motion.rx_pause,
+                                                    motion.rx_auto_scroll,
+                                                    motion.tx_send_hex,
+                                                    motion.tx_line_ending,
+                                                    on_rx_hex,
+                                                    on_rx_timestamp,
+                                                    on_rx_pause,
+                                                    on_rx_auto_scroll,
+                                                    on_rx_clear,
+                                                    on_rx_save,
+                                                    on_rx_search,
+                                                    on_tx_send_hex,
+                                                    on_tx_line_ending,
+                                                )
+                                                .search_shortcut(search_keys.clone())
+                                                .send_collapse(
+                                                    send_collapsed,
+                                                    on_tx_collapse.clone(),
+                                                )
+                                                .log_filter(
+                                                    filter_open,
+                                                    filter_active,
+                                                    on_rx_filter,
+                                                )
+                                                .filter_panel(filter_input.map(|input| {
+                                                    LogFilterBar {
+                                                        theme: surface_theme,
+                                                        locale,
+                                                        input,
+                                                        filter: filter_draft,
+                                                        invalid: filter_invalid,
+                                                        pending: filter_pending,
+                                                        on_control: on_filter_control,
+                                                    }
+                                                }))
+                                                .stream_output(
+                                                    stream_active,
+                                                    stream_tooltip,
+                                                    on_rx_stream,
                                                 ),
+                                            )
+                                            // The send card overlaps the strip's lower edge so the strip reads as
+                                            // a drawer tucked underneath it.
+                                            // When collapsed, the toolbar sits on top and the strip hangs below it.
+                                            .child(
+                                                div()
+                                                    .w_full()
+                                                    .flex_shrink_0()
+                                                    .mt(px(if send_collapsed { 0. } else { -12. }))
+                                                    // Lifts the card off the status bar's divider.
+                                                    .mb(px(8.))
+                                                    .child(
+                                                        SendCard::new(
+                                                            surface_theme,
+                                                            locale,
+                                                            send_state,
+                                                            is_connected,
+                                                            is_simulated,
+                                                            motion.tx_display_hex,
+                                                            motion.connection,
+                                                            send_input,
+                                                            send_error,
+                                                            on_tx_display_hex,
+                                                            on_tx_submit,
+                                                        )
+                                                        .timer(timer_controls)
+                                                        .when(send_collapsed, |card| {
+                                                            card.collapsed(on_tx_collapse)
+                                                        }),
+                                                    ),
                                             ),
-                                        )
-                                    }),
-                            )
-                            .children(stream_error.map(|error| {
-                                div()
-                                    .px_4()
-                                    .text_xs()
-                                    .text_color(self.theme.text_primary)
-                                    .child(format!("{}: {}", tr(locale, "stream.error"), error))
-                            }))
-                            .child(
-                                ReceiveToolbar::new(
-                                    surface_theme,
-                                    locale,
-                                    receive_state,
-                                    send_state.send_hex,
-                                    send_state.line_ending,
-                                    search_open,
-                                    motion.rx_hex,
-                                    motion.rx_timestamp,
-                                    motion.rx_pause,
-                                    motion.rx_auto_scroll,
-                                    motion.tx_send_hex,
-                                    motion.tx_line_ending,
-                                    on_rx_hex,
-                                    on_rx_timestamp,
-                                    on_rx_pause,
-                                    on_rx_auto_scroll,
-                                    on_rx_clear,
-                                    on_rx_save,
-                                    on_rx_search,
-                                    on_tx_send_hex,
-                                    on_tx_line_ending,
-                                )
-                                .send_collapse(send_collapsed, on_tx_collapse.clone())
-                                .log_filter(filter_open, filter_active, on_rx_filter)
-                                .filter_panel(filter_input.map(|input| LogFilterBar {
-                                    theme: surface_theme,
-                                    locale,
-                                    input,
-                                    filter: filter_draft,
-                                    invalid: filter_invalid,
-                                    pending: filter_pending,
-                                    visible: filter_visible,
-                                    total: filter_total,
-                                    on_control: on_filter_control,
-                                }))
-                                .stream_output(
-                                    stream_active,
-                                    stream_tooltip,
-                                    on_rx_stream,
-                                ),
-                            )
-                            // The send card overlaps the strip's lower edge so the strip reads as
-                            // a drawer tucked underneath it.
-                            // When collapsed, the toolbar sits on top and the strip hangs below it.
-                            .child(
-                                div()
-                                    .w_full()
-                                    .flex_shrink_0()
-                                    .mt(px(if send_collapsed { 0. } else { -12. }))
-                                    .child(
-                                        SendCard::new(
-                                            surface_theme,
-                                            locale,
-                                            send_state,
-                                            is_connected,
-                                            is_simulated,
-                                            motion.tx_display_hex,
-                                            motion.connection,
-                                            send_input,
-                                            send_error,
-                                            on_tx_display_hex,
-                                            on_tx_submit,
-                                        )
-                                        .timer(timer_controls)
-                                        .when(send_collapsed, |card| {
-                                            card.collapsed(on_tx_collapse)
-                                        }),
-                                    ),
-                            )
+                                        frame_transition,
+                                    )),
+                                frame_transition,
+                            ))
                             .child(BottomBar::new(
                                 self.theme,
                                 locale,
@@ -3786,6 +4492,14 @@ impl Render for SashaApp {
                                 on_pick,
                                 on_toggle_connection,
                                 signal_controls,
+                                {
+                                    let weak = cx.entity().downgrade();
+                                    Rc::new(move |window: &mut Window, cx: &mut App| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.open_throughput(window, cx)
+                                        });
+                                    })
+                                },
                             )),
                     )
                     .child(
@@ -3803,7 +4517,8 @@ impl Render for SashaApp {
                                     .border_l_1()
                                     .border_color(self.theme.border_card)
                                     .child(script_panel)
-                                    .child(quick_send_panel),
+                                    .child(quick_send_panel)
+                                    .child(marker_panel),
                             )
                             .child(
                                 resize_handle("script-resize", Axis::Horizontal)
@@ -3817,6 +4532,7 @@ impl Render for SashaApp {
                     .child(tab_rail),
             )
             .child(self.build_top_bar(script_panel_width))
+            .when_some(marker_overlay, |this, overlay| this.child(overlay))
             .when_some(picker_overlay, |this, (kind, input)| {
                 this.child(
                     div()

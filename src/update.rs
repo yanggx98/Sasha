@@ -37,6 +37,24 @@ pub fn platform_asset_name() -> Option<&'static str> {
     }
 }
 
+/// Asset name of the `sasha-cli` companion program for this platform.
+pub fn platform_cli_asset_name() -> Option<&'static str> {
+    if cfg!(all(windows, target_arch = "x86_64")) {
+        Some("sasha-cli-windows-x86_64.exe")
+    } else {
+        None
+    }
+}
+
+/// Where `sasha-cli` lives relative to the running app executable.
+fn cli_exe_for(exe: &Path) -> PathBuf {
+    exe.with_file_name(if cfg!(windows) {
+        "sasha-cli.exe"
+    } else {
+        "sasha-cli"
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssetInfo {
     pub name: String,
@@ -56,6 +74,8 @@ pub struct ReleaseInfo {
     pub page_url: String,
     /// Installable asset for this platform; `None` means "open the release page".
     pub asset: Option<AssetInfo>,
+    /// The `sasha-cli` companion for this platform, when the release ships a verifiable one.
+    pub cli_asset: Option<AssetInfo>,
 }
 
 #[derive(Debug)]
@@ -136,9 +156,19 @@ pub fn parse_checksum_file(text: &str) -> Option<String> {
 
 /// Picks the highest-versioned non-draft release from the GitHub API response.
 /// Pre-releases are included because this project ships pre-release builds.
+#[cfg(test)]
 pub fn parse_latest_release(
     json: &str,
     asset_name: Option<&str>,
+) -> Result<ReleaseInfo, UpdateError> {
+    parse_latest_release_with_cli(json, asset_name, None)
+}
+
+/// Like [`parse_latest_release`], also looking for the `sasha-cli` companion asset.
+pub fn parse_latest_release_with_cli(
+    json: &str,
+    asset_name: Option<&str>,
+    cli_asset_name: Option<&str>,
 ) -> Result<ReleaseInfo, UpdateError> {
     let raw: Vec<RawRelease> =
         serde_json::from_str(json).map_err(|err| UpdateError::Parse(err.to_string()))?;
@@ -149,33 +179,37 @@ pub fn parse_latest_release(
         .max_by(|(a, _), (b, _)| a.cmp(b))
         .ok_or(UpdateError::NoRelease)?;
 
-    let asset = asset_name.and_then(|wanted| {
-        let found = release.assets.iter().find(|a| a.name == wanted)?;
-        let sha256 = found.digest.as_deref().and_then(normalize_digest);
-        // A sibling `<name>.sha256` asset is the fallback when GitHub published no digest.
-        let checksum_url = release
-            .assets
-            .iter()
-            .find(|a| a.name == format!("{wanted}.sha256"))
-            .map(|a| a.browser_download_url.clone());
-        if sha256.is_none() && checksum_url.is_none() {
-            // Never offer an install that cannot be verified.
-            return None;
-        }
-        Some(AssetInfo {
-            name: found.name.clone(),
-            url: found.browser_download_url.clone(),
-            size: found.size,
-            sha256,
-            checksum_url,
-        })
-    });
+    let asset = asset_name.and_then(|wanted| find_verifiable_asset(&release.assets, wanted));
+    let cli_asset =
+        cli_asset_name.and_then(|wanted| find_verifiable_asset(&release.assets, wanted));
 
     Ok(ReleaseInfo {
         version,
         tag: release.tag_name,
         page_url: release.html_url,
         asset,
+        cli_asset,
+    })
+}
+
+fn find_verifiable_asset(assets: &[RawAsset], wanted: &str) -> Option<AssetInfo> {
+    let found = assets.iter().find(|a| a.name == wanted)?;
+    let sha256 = found.digest.as_deref().and_then(normalize_digest);
+    // A sibling `<name>.sha256` asset is the fallback when GitHub published no digest.
+    let checksum_url = assets
+        .iter()
+        .find(|a| a.name == format!("{wanted}.sha256"))
+        .map(|a| a.browser_download_url.clone());
+    if sha256.is_none() && checksum_url.is_none() {
+        // Never offer an install that cannot be verified.
+        return None;
+    }
+    Some(AssetInfo {
+        name: found.name.clone(),
+        url: found.browser_download_url.clone(),
+        size: found.size,
+        sha256,
+        checksum_url,
     })
 }
 
@@ -201,7 +235,7 @@ pub fn fetch_latest() -> Result<ReleaseInfo, UpdateError> {
         .limit(MAX_API_BYTES)
         .read_to_string()
         .map_err(|err| UpdateError::Network(err.to_string()))?;
-    parse_latest_release(&body, platform_asset_name())
+    parse_latest_release_with_cli(&body, platform_asset_name(), platform_cli_asset_name())
 }
 
 pub fn is_newer(latest: &Version, current: &Version) -> bool {
@@ -218,6 +252,12 @@ pub fn download(asset: &AssetInfo) -> Result<PathBuf, UpdateError> {
     if platform_asset_name().is_none() {
         return Err(UpdateError::Unsupported);
     }
+    let target = sibling_path(&std::env::current_exe()?, NEW_SUFFIX);
+    download_verified(asset, &target).map(|()| target)
+}
+
+/// Downloads `asset` to `target`, checking its checksum; removes `target` on failure.
+fn download_verified(asset: &AssetInfo, target: &Path) -> Result<(), UpdateError> {
     if !is_allowed_download_url(&asset.url) {
         return Err(UpdateError::Verify("unexpected download location".into()));
     }
@@ -227,12 +267,25 @@ pub fn download(asset: &AssetInfo) -> Result<PathBuf, UpdateError> {
         (None, None) => return Err(UpdateError::Verify("no checksum published".into())),
     };
 
-    let target = sibling_path(&std::env::current_exe()?, NEW_SUFFIX);
-    let result = download_to(&asset.url, &target, &expected);
+    let result = download_to(&asset.url, target, &expected);
     if result.is_err() {
-        let _ = fs::remove_file(&target);
+        let _ = fs::remove_file(target);
     }
-    result.map(|()| target)
+    result
+}
+
+/// Updates `sasha-cli` next to the app when it is installed there. A missing companion is
+/// not an error; callers should treat failures as non-fatal for the app update itself.
+pub fn update_cli(asset: &AssetInfo) -> Result<(), UpdateError> {
+    let cli = cli_exe_for(&std::env::current_exe()?);
+    if !cli.exists() {
+        return Ok(());
+    }
+    let new = sibling_path(&cli, NEW_SUFFIX);
+    download_verified(asset, &new)?;
+    swap_files(&cli, &new, &sibling_path(&cli, OLD_SUFFIX)).inspect_err(|_| {
+        let _ = fs::remove_file(&new);
+    })
 }
 
 fn fetch_sidecar_checksum(url: &str) -> Result<String, UpdateError> {
@@ -334,6 +387,9 @@ pub fn cleanup_leftovers() {
     if let Ok(exe) = std::env::current_exe() {
         let _ = fs::remove_file(sibling_path(&exe, OLD_SUFFIX));
         let _ = fs::remove_file(sibling_path(&exe, NEW_SUFFIX));
+        let cli = cli_exe_for(&exe);
+        let _ = fs::remove_file(sibling_path(&cli, OLD_SUFFIX));
+        let _ = fs::remove_file(sibling_path(&cli, NEW_SUFFIX));
     }
 }
 
@@ -469,5 +525,63 @@ mod tests {
         assert!(swap_files(&exe, &new, &old).is_err());
         assert_eq!(fs::read_to_string(&exe).unwrap(), "v1");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    const CLI_ASSET: &str = "sasha-cli-windows-x86_64.exe";
+
+    fn cli_assets(with_sidecar: bool) -> String {
+        let mut extra = format!(
+            r#",{{"name":"{CLI_ASSET}","browser_download_url":"{DOWNLOAD_PREFIX}v0.2.0/{CLI_ASSET}","size":20,"digest":"{DIGEST}"}}"#
+        );
+        if with_sidecar {
+            extra.push_str(&format!(
+                r#",{{"name":"{CLI_ASSET}.sha256","browser_download_url":"{DOWNLOAD_PREFIX}v0.2.0/{CLI_ASSET}.sha256","size":90}}"#
+            ));
+        }
+        extra
+    }
+
+    #[test]
+    fn release_with_cli_asset_exposes_it() {
+        let json = release_json(&cli_assets(false), Some(DIGEST));
+        let release =
+            parse_latest_release_with_cli(&json, Some("sasha-windows-x86_64.exe"), Some(CLI_ASSET))
+                .unwrap();
+        let cli = release.cli_asset.expect("cli asset");
+        assert_eq!(cli.name, CLI_ASSET);
+        assert_eq!(cli.sha256.as_deref(), Some(&DIGEST["sha256:".len()..]));
+        assert_eq!(release.asset.unwrap().name, "sasha-windows-x86_64.exe");
+    }
+
+    #[test]
+    fn release_without_cli_asset_still_installable() {
+        let json = release_json("", Some(DIGEST));
+        let release =
+            parse_latest_release_with_cli(&json, Some("sasha-windows-x86_64.exe"), Some(CLI_ASSET))
+                .unwrap();
+        assert!(release.cli_asset.is_none());
+        assert!(release.asset.is_some());
+    }
+
+    #[test]
+    fn cli_asset_without_checksum_is_ignored() {
+        let extra = format!(
+            r#",{{"name":"{CLI_ASSET}","browser_download_url":"{DOWNLOAD_PREFIX}v0.2.0/{CLI_ASSET}","size":20}}"#
+        );
+        let json = release_json(&extra, Some(DIGEST));
+        let release =
+            parse_latest_release_with_cli(&json, Some("sasha-windows-x86_64.exe"), Some(CLI_ASSET))
+                .unwrap();
+        assert!(release.cli_asset.is_none());
+        assert!(release.asset.is_some());
+    }
+
+    #[test]
+    fn cli_exe_sits_next_to_the_app() {
+        let exe = Path::new("C:/tools/sasha.exe");
+        let cli = cli_exe_for(exe);
+        assert_eq!(cli.parent(), exe.parent());
+        let name = cli.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("sasha-cli"), "name was {name}");
     }
 }

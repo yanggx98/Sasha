@@ -1,13 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::i18n::Locale;
 
 use super::quick_command::{MAX_QUICK_COMMANDS, QuickCommand};
+use super::shortcuts::Shortcuts;
 use super::timed_send::{DEFAULT_TIMER_INTERVAL_MS, clamp_interval_ms};
 
 /// Default configuration file name stored in the application root directory.
@@ -92,6 +93,13 @@ pub struct AppConfig {
     /// Check GitHub Releases for a newer version once at startup.
     #[serde(default = "default_auto_check_updates")]
     pub auto_check_updates: bool,
+    /// Keyboard shortcut bindings, stored as the `[shortcuts]` table.
+    #[serde(
+        default,
+        deserialize_with = "lenient_shortcuts",
+        serialize_with = "serialize_shortcuts"
+    )]
+    pub shortcuts: Shortcuts,
 }
 
 impl Default for AppConfig {
@@ -109,6 +117,7 @@ impl Default for AppConfig {
             quick_commands: Vec::new(),
             timer_interval_ms: DEFAULT_TIMER_INTERVAL_MS,
             auto_check_updates: true,
+            shortcuts: Shortcuts::default(),
         }
     }
 }
@@ -133,6 +142,31 @@ where
         result.push(cmd);
     }
     Ok(result)
+}
+
+/// Reads `[shortcuts]` leniently: anything that is not a table of strings is ignored, and
+/// invalid or clashing entries fall back to their defaults (see `Shortcuts::from_raw`).
+fn lenient_shortcuts<'de, D>(deserializer: D) -> Result<Shortcuts, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = toml::Value::deserialize(deserializer)?;
+    let mut raw = BTreeMap::new();
+    if let toml::Value::Table(table) = value {
+        for (key, value) in table {
+            if let toml::Value::String(text) = value {
+                raw.insert(key, text);
+            }
+        }
+    }
+    Ok(Shortcuts::from_raw(&raw))
+}
+
+fn serialize_shortcuts<S>(shortcuts: &Shortcuts, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    shortcuts.to_raw().serialize(serializer)
 }
 
 fn default_log_buffer_limit() -> u32 {
@@ -371,14 +405,45 @@ impl ConfigStore {
     }
 }
 
-/// Resolves the `config.toml` path in the application root directory.
+/// Resolves the `config.toml` path: beside the executable (portable layout), or
+/// `%APPDATA%\Sasha` when the executable's directory is not writable (for example
+/// under `Program Files`) and no config exists there yet.
 pub fn default_config_path() -> PathBuf {
     let base_dir = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(Path::to_path_buf))
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
-    base_dir.join(CONFIG_FILE_NAME)
+    let fallback_dir = std::env::var_os("APPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|appdata| PathBuf::from(appdata).join("Sasha"));
+    resolve_config_path(&base_dir, fallback_dir)
+}
+
+fn resolve_config_path(base_dir: &Path, fallback_dir: Option<PathBuf>) -> PathBuf {
+    let preferred = base_dir.join(CONFIG_FILE_NAME);
+    if preferred.exists() || dir_is_writable(base_dir) {
+        return preferred;
+    }
+    match fallback_dir {
+        Some(dir) => dir.join(CONFIG_FILE_NAME),
+        None => preferred,
+    }
+}
+
+fn dir_is_writable(dir: &Path) -> bool {
+    let probe = dir.join(format!(".sasha-write-test-{}", std::process::id()));
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(_) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 fn migrate_config(config: &mut AppConfig) {
@@ -469,6 +534,7 @@ fn temp_path_for(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::shortcuts::{Binding, KeyChord, Modifiers, ShortcutAction};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempDir {
@@ -648,6 +714,30 @@ mod tests {
     }
 
     #[test]
+    fn config_path_prefers_writable_exe_dir_and_falls_back_otherwise() {
+        let dir = TempDir::new("cfg-path");
+        let fallback = dir.file("appdata").join("Sasha");
+
+        // Writable base dir: portable layout wins.
+        assert_eq!(
+            resolve_config_path(&dir.path, Some(fallback.clone())),
+            dir.file(CONFIG_FILE_NAME)
+        );
+
+        // Unwritable (here: nonexistent) base dir and no config: use the fallback.
+        let missing = dir.file("missing");
+        assert_eq!(
+            resolve_config_path(&missing, Some(fallback.clone())),
+            fallback.join(CONFIG_FILE_NAME)
+        );
+        // ...unless there is no fallback.
+        assert_eq!(
+            resolve_config_path(&missing, None),
+            missing.join(CONFIG_FILE_NAME)
+        );
+    }
+
+    #[test]
     fn scripts_roundtrip_and_deduplication() {
         let dir = TempDir::new("scripts");
         let cfg_path = dir.file(CONFIG_FILE_NAME);
@@ -741,6 +831,7 @@ mod tests {
             content: " a\r\nb 你好 ".to_string(),
             hex: false,
             line_ending: SendLineEnding::CrLf,
+            checksum: Default::default(),
         };
         store
             .update(|cfg| cfg.quick_commands = vec![cmd.clone()])
@@ -845,5 +936,99 @@ timer_interval_ms = 1
                 .config()
                 .auto_check_updates
         );
+    }
+
+    #[test]
+    fn old_config_without_shortcuts_loads_defaults() {
+        let dir = TempDir::new("shortcuts-old");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(
+            &cfg_path,
+            "version = 1
+locale = \"zh-CN\"
+",
+        )
+        .expect("write old toml");
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().shortcuts, Shortcuts::default());
+        assert!(store.last_load_warning().is_none());
+    }
+
+    #[test]
+    fn custom_shortcuts_round_trip_through_the_config_file() {
+        let dir = TempDir::new("shortcuts-roundtrip");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        let mut store = ConfigStore::load_from_path(cfg_path.clone());
+        store
+            .update(|cfg| {
+                cfg.shortcuts
+                    .set(
+                        ShortcutAction::NewSession,
+                        Binding::Chord(KeyChord::parse("ctrl-n").unwrap()),
+                    )
+                    .unwrap();
+                cfg.shortcuts
+                    .set(
+                        ShortcutAction::QuickSend,
+                        Binding::Mods(Modifiers::parse("ctrl-alt").unwrap()),
+                    )
+                    .unwrap();
+            })
+            .expect("save shortcuts");
+
+        let text = fs::read_to_string(&cfg_path).unwrap();
+        assert!(text.contains("[shortcuts]"), "file was: {text}");
+        assert!(
+            text.contains("new_session = \"ctrl-n\""),
+            "file was: {text}"
+        );
+        assert!(
+            text.contains("quick_send = \"ctrl-alt\""),
+            "file was: {text}"
+        );
+
+        let reloaded = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(reloaded.config().shortcuts, store.config().shortcuts);
+    }
+
+    #[test]
+    fn invalid_shortcuts_fall_back_without_losing_other_settings() {
+        let dir = TempDir::new("shortcuts-invalid");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(
+            &cfg_path,
+            "version = 1
+log_font_size = 17
+
+[shortcuts]
+new_session = \"???\"
+search = 5
+",
+        )
+        .unwrap();
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().log_font_size, 17);
+        assert_eq!(store.config().shortcuts, Shortcuts::default());
+        assert!(store.last_load_warning().is_none());
+    }
+
+    #[test]
+    fn shortcuts_that_is_not_a_table_is_ignored() {
+        let dir = TempDir::new("shortcuts-not-table");
+        let cfg_path = dir.file(CONFIG_FILE_NAME);
+        fs::write(
+            &cfg_path,
+            "version = 1
+log_font_size = 16
+shortcuts = 5
+",
+        )
+        .unwrap();
+
+        let store = ConfigStore::load_from_path(cfg_path);
+        assert_eq!(store.config().log_font_size, 16);
+        assert_eq!(store.config().shortcuts, Shortcuts::default());
     }
 }

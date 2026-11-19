@@ -3,14 +3,21 @@ use std::rc::Rc;
 
 use gpui_kit::base::{TextSelectionHandle, TextSelectionRegistration, TextSelectionRun};
 use gpui_kit::component::h_flex;
-use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{Locale, tr_shared};
-use crate::model::{LogDirection, LogEntry, ReceiveViewState, SearchMatch, selectable_log_line};
+use crate::model::{
+    LogDirection, LogEntry, LogMarkers, MarkerColor, ReceiveViewState, SearchMatch,
+    minimap_fraction, selectable_log_line, visible_marker_positions,
+};
+use crate::ui::log_minimap::{DisableAutoScrollCallback, JumpCallback, LogMinimap, MinimapMarker};
+use crate::ui::marker_editor::marker_color_hsla;
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_store::search_highlight_colors;
+
+/// Called with a log entry id and the window position when a row is right-clicked.
+pub type MarkCallback = Rc<dyn Fn(u64, Point<Pixels>, &mut Window, &mut App)>;
 
 /// Scrollable receive/transmit log area.
 /// Occupies `flex_1` above the floating send card so the card never occludes logs.
@@ -26,6 +33,10 @@ pub struct LogView {
     list_state: ListState,
     search_matches: Rc<Vec<SearchMatch>>,
     active_match: Option<usize>,
+    markers: Rc<LogMarkers>,
+    on_mark: MarkCallback,
+    on_jump: JumpCallback,
+    on_disable_auto_scroll: DisableAutoScrollCallback,
 }
 
 impl LogView {
@@ -41,6 +52,10 @@ impl LogView {
         list_state: ListState,
         search_matches: Rc<Vec<SearchMatch>>,
         active_match: Option<usize>,
+        markers: Rc<LogMarkers>,
+        on_mark: MarkCallback,
+        on_jump: JumpCallback,
+        on_disable_auto_scroll: DisableAutoScrollCallback,
     ) -> Self {
         Self {
             theme,
@@ -53,6 +68,10 @@ impl LogView {
             list_state,
             search_matches,
             active_match,
+            markers,
+            on_mark,
+            on_jump,
+            on_disable_auto_scroll,
         }
     }
 }
@@ -66,105 +85,162 @@ impl RenderOnce for LogView {
         let log_font_size = self.log_font_size;
         let focus = self.focus;
         let list_state = self.list_state;
+        let row_ids: Vec<u64> = self.logs.iter().map(|entry| entry.id).collect();
         let logs = Rc::new(self.logs);
         let simulated_notice = self.simulated_notice;
         let search_matches = self.search_matches;
         let active_match = self.active_match;
+        let markers = self.markers;
+        let on_mark = self.on_mark;
+        let total = row_ids.len();
+        let minimap_markers: Vec<MinimapMarker> = visible_marker_positions(&row_ids, &markers)
+            .into_iter()
+            .map(|(index, entry_id)| {
+                let color = markers
+                    .get(entry_id)
+                    .map(|marker| marker.color)
+                    .unwrap_or(MarkerColor::Red);
+                MinimapMarker {
+                    entry_id,
+                    fraction: minimap_fraction(index, total),
+                    color,
+                }
+            })
+            .collect();
+        let minimap = LogMinimap::new(
+            theme,
+            list_state.clone(),
+            minimap_markers,
+            log_row_height_hint(log_font_size),
+            self.on_jump,
+            self.on_disable_auto_scroll,
+        );
 
-        div()
-            .id("log-scroll-container")
-            .relative()
-            .track_focus(&focus)
-            .tab_stop(false)
+        h_flex()
+            .id("log-area")
             .flex_1()
             .min_h_0()
             .w_full()
-            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                focus.focus(window, cx);
-            })
             .child(
-                list(list_state.clone(), move |index, _, _| {
-                    if let Some(entry) = logs.get(index) {
-                        let tag_color = match entry.direction {
-                            LogDirection::Rx => theme.rx_green,
-                            LogDirection::Tx => theme.tx_blue,
-                            LogDirection::System => theme.text_muted,
-                        };
-                        let line = selectable_log_line(entry, show_timestamp, hex_mode);
-                        let mut highlights = Vec::new();
-                        if let Some(timestamp) = line.timestamp_bytes.clone() {
-                            highlights.push((timestamp, color_highlight(theme.text_muted)));
-                        }
-                        highlights.push((
-                            line.tag_bytes.clone(),
-                            HighlightStyle {
-                                color: Some(tag_color),
-                                font_weight: Some(FontWeight::MEDIUM),
-                                ..Default::default()
-                            },
-                        ));
-                        let simulated = entry.is_simulated;
-                        let start = search_matches.partition_point(|m| m.log_index < index);
-                        let mut normal_search_ranges = Vec::new();
-                        let mut active_search_ranges = Vec::new();
-                        for (offset, m) in search_matches[start..].iter().enumerate() {
-                            if m.log_index != index {
-                                break;
-                            }
-                            if active_match == Some(start + offset) {
-                                active_search_ranges.push(m.byte_range.clone());
-                            } else {
-                                normal_search_ranges.push(m.byte_range.clone());
-                            }
-                        }
+                div()
+                    .id("log-scroll-container")
+                    .relative()
+                    .track_focus(&focus)
+                    .tab_stop(false)
+                    .h_full()
+                    .flex_1()
+                    .min_w_0()
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        focus.focus(window, cx);
+                    })
+                    .child(
+                        list(list_state.clone(), move |index, _, _| {
+                            if let Some(entry) = logs.get(index) {
+                                let tag_color = match entry.direction {
+                                    LogDirection::Rx => theme.rx_green,
+                                    LogDirection::Tx => theme.tx_blue,
+                                    LogDirection::System => theme.text_muted,
+                                };
+                                let line = selectable_log_line(entry, show_timestamp, hex_mode);
+                                let mut highlights = Vec::new();
+                                if let Some(timestamp) = line.timestamp_bytes.clone() {
+                                    highlights.push((timestamp, color_highlight(theme.text_muted)));
+                                }
+                                highlights.push((
+                                    line.tag_bytes.clone(),
+                                    HighlightStyle {
+                                        color: Some(tag_color),
+                                        font_weight: Some(FontWeight::MEDIUM),
+                                        ..Default::default()
+                                    },
+                                ));
+                                let simulated = entry.is_simulated;
+                                let start = search_matches.partition_point(|m| m.log_index < index);
+                                let mut normal_search_ranges = Vec::new();
+                                let mut active_search_ranges = Vec::new();
+                                for (offset, m) in search_matches[start..].iter().enumerate() {
+                                    if m.log_index != index {
+                                        break;
+                                    }
+                                    if active_match == Some(start + offset) {
+                                        active_search_ranges.push(m.byte_range.clone());
+                                    } else {
+                                        normal_search_ranges.push(m.byte_range.clone());
+                                    }
+                                }
 
-                        h_flex()
-                            .w_full()
-                            .items_baseline()
-                            .gap_2()
-                            .pl_3()
-                            .pr_4()
-                            .when(index == 0, |this| this.pt_2())
-                            .pb_1()
-                            .font_family(crate::ui::fonts::MONO_FONT)
-                            .text_size(px(log_font_size as f32))
-                            .text_color(theme.text_primary)
-                            .child(div().flex_1().min_w_0().child(LogLineText::new(
-                                ElementId::named_usize("log-line", entry.id as usize),
-                                line.text,
-                                highlights,
-                                normal_search_ranges,
-                                active_search_ranges,
-                                index as u64,
-                                theme.accent_blue.alpha(0.6),
-                                search_highlight_colors(theme.bg_canvas),
-                            )))
-                            .when(simulated, |this| {
-                                let badge = sim_badge_text.clone();
-                                this.child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .text_xs()
-                                        .text_color(theme.text_muted)
-                                        .child(badge),
-                                )
-                            })
-                            .into_any_element()
-                    } else {
-                        div()
-                            .pl_3()
-                            .pr_4()
-                            .pt_3()
-                            .pb_2()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(format!("* {}", simulated_notice))
-                            .into_any_element()
-                    }
-                })
-                .size_full(),
+                                let marker_color = markers.get(entry.id).map(|marker| marker.color);
+                                let entry_id = entry.id;
+                                let on_mark = on_mark.clone();
+                                let hover_bg = marker_color
+                                    .map(|color| marker_color_hsla(color, 0.30))
+                                    .unwrap_or(theme.bg_hover);
+
+                                h_flex()
+                                    .id(ElementId::named_usize("log-row", entry_id as usize))
+                                    .w_full()
+                                    .items_baseline()
+                                    .gap_2()
+                                    .pl(px(10.))
+                                    .pr_2()
+                                    .when(index == 0, |this| this.pt_2())
+                                    .pb_1()
+                                    // The marker bar sits in the left padding so text never shifts.
+                                    .border_l_2()
+                                    .border_color(
+                                        marker_color
+                                            .map(|color| marker_color_hsla(color, 1.0))
+                                            .unwrap_or_else(gpui_kit::transparent_black),
+                                    )
+                                    .when_some(marker_color, |this, color| {
+                                        this.bg(marker_color_hsla(color, 0.18))
+                                    })
+                                    // Like a button: the row under the pointer lights up, so it
+                                    // is clear which entry a right-click will mark.
+                                    .hover(move |style| style.bg(hover_bg))
+                                    .on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                                        on_mark(entry_id, event.position, window, cx);
+                                    })
+                                    .font_family(crate::ui::fonts::MONO_FONT)
+                                    .text_size(px(log_font_size as f32))
+                                    .text_color(theme.text_primary)
+                                    .child(div().flex_1().min_w_0().child(LogLineText::new(
+                                        ElementId::named_usize("log-line", entry.id as usize),
+                                        line.text,
+                                        highlights,
+                                        normal_search_ranges,
+                                        active_search_ranges,
+                                        index as u64,
+                                        theme.accent_blue.alpha(0.6),
+                                        search_highlight_colors(theme.bg_canvas),
+                                    )))
+                                    .when(simulated, |this| {
+                                        let badge = sim_badge_text.clone();
+                                        this.child(
+                                            div()
+                                                .flex_shrink_0()
+                                                .text_xs()
+                                                .text_color(theme.text_muted)
+                                                .child(badge),
+                                        )
+                                    })
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .pl_3()
+                                    .pr_2()
+                                    .pt_3()
+                                    .pb_2()
+                                    .text_xs()
+                                    .text_color(theme.text_muted)
+                                    .child(format!("* {}", simulated_notice))
+                                    .into_any_element()
+                            }
+                        })
+                        .size_full(),
+                    ),
             )
-            .child(Scrollbar::vertical(&list_state))
+            .child(minimap)
     }
 }
 
@@ -182,6 +258,8 @@ fn color_highlight(color: Hsla) -> HighlightStyle {
 /// so rows above that would otherwise contribute 0 and the scrollbar would
 /// hit the top of its track while earlier logs were still above.
 pub(crate) fn log_row_height_hint(font_size: u16) -> Pixels {
+    // Mirrors GPUI's default line-height factor; keep the literal (not a std constant).
+    #[allow(clippy::approx_constant)]
     let line_height = (font_size as f32 * 1.618_034).round();
     px(line_height + 4.)
 }

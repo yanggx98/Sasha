@@ -18,18 +18,11 @@ compact, native interface.
 
 ## Preview
 
-<table>
-  <tr>
-    <th width="50%">Connect your device</th>
-    <th width="50%">Inspect and send data</th>
-  </tr>
-  <tr>
-    <td><a href="docs/images/sasha-connection.png"><img src="docs/images/sasha-connection.png" alt="Serial port selection and communication settings" width="100%" /></a></td>
-    <td><a href="docs/images/sasha-terminal.png"><img src="docs/images/sasha-terminal.png" alt="Example terminal session showing received and sent data" width="100%" /></a></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/images/sasha-preview.png" alt="Sasha preview: serial port selection and communication settings, and an example terminal session showing received and sent data" width="100%" />
+</p>
 
-Click either screenshot to view it at full size.
+Original screenshots: [Connect your device](docs/images/sasha-connection.png) · [Inspect and send data](docs/images/sasha-terminal.png)
 
 The project is under active development. Windows is the current development and
 validation platform; macOS and Linux builds have not been verified on real hardware.
@@ -41,8 +34,10 @@ welcome.
 - **Multiple sessions** — independent connections, switched from the right sidebar.
 - **Full serial configuration** — port discovery, baud rate, frame format, flow control, DTR/RTS.
 - **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
+- **Log markers** — right-click an entry to mark it with a name and color; it is highlighted, shown on a mini map beside the scrollbar, and listed in the right dock.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
+- **Command line** — `sasha-cli` lists ports, sends data, monitors and runs Lua scripts without a window, with exit codes for automation.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.
 - **Themes** — Built-in dark and light palettes, including ChatGPT, an in-app color editor, custom TOML themes with live reload, and an optional background image.
 - **Updates** — checks GitHub Releases and can install new versions in the app.
@@ -72,7 +67,10 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
 | `Ctrl+1` … `Ctrl+8`, `Ctrl+9` | Jump to session 1–8 / the last session |
 | `Alt+1` … `Alt+9` | Send the matching quick-send command |
+| `Ctrl+F` | Search logs |
 | `Ctrl+C` | Copy selected text |
+
+These are the defaults. Everything except copy can be changed in **Settings → Shortcuts**.
 
 ## Documentation
 
@@ -80,6 +78,7 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
   send, updates, and the `config.toml` preferences.
 - [Themes](docs/themes.md) — built-in and custom themes.
 - [Lua scripting API](docs/lua-scripting-api.md)
+- [Command line](docs/cli.md) — `sasha-cli` for automation.
 - [Contributing](CONTRIBUTING.md)
 
 ## Current boundaries

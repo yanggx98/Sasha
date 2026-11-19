@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use mlua::{Lua, MultiValue, Value};
 
 use crate::session_service::SessionTxError;
 
-use super::runtime::{ScriptAbort, ScriptContext};
+use super::runtime::{ScriptAbort, ScriptContext, deadline_after};
 use super::{DEFAULT_RX_TIMEOUT_MS, ScriptLogLevel};
 
 /// Registers `serial`, `task`, `log`, and global `print` into the Lua VM.
@@ -14,6 +14,7 @@ pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
     register_serial_module(lua, &ctx)?;
     register_task_module(lua, &ctx)?;
     register_log_module(lua, &ctx)?;
+    register_checksum_module(lua)?;
     Ok(())
 }
 
@@ -60,7 +61,7 @@ fn register_serial_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
         }
 
         if timeout_ms > 0 {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            let deadline = deadline_after(Duration::from_millis(timeout_ms));
             while read_ctx
                 .wait_for_rx_chunk(deadline)
                 .map_err(mlua::Error::external)?
@@ -98,7 +99,7 @@ fn register_serial_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
             }
 
             if timeout_ms > 0 {
-                let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                let deadline = deadline_after(Duration::from_millis(timeout_ms));
                 while wait_ctx
                     .wait_for_rx_chunk(deadline)
                     .map_err(mlua::Error::external)?
@@ -156,6 +157,44 @@ fn register_task_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
     task.set("is_cancelled", is_cancelled_fn)?;
 
     lua.globals().set("task", task)?;
+    Ok(())
+}
+
+fn register_checksum_module(lua: &Lua) -> mlua::Result<()> {
+    use crate::checksum;
+
+    let module = lua.create_table()?;
+    type IntChecksumFn = fn(&[u8]) -> i64;
+    let int_fns: [(&str, IntChecksumFn); 6] = [
+        ("sum8", |d| i64::from(checksum::sum8(d))),
+        ("xor8", |d| i64::from(checksum::xor8(d))),
+        ("crc8", |d| i64::from(checksum::crc8(d))),
+        ("crc16_modbus", |d| i64::from(checksum::crc16_modbus(d))),
+        ("crc16_ccitt", |d| i64::from(checksum::crc16_ccitt(d))),
+        ("crc32", |d| i64::from(checksum::crc32(d))),
+    ];
+    for (name, compute) in int_fns {
+        let qualified = format!("checksum.{name}");
+        let f = lua.create_function(move |_, val: Value| {
+            let bytes = expect_bytes_arg(val, &qualified, 1)?;
+            Ok(compute(&bytes))
+        })?;
+        module.set(name, f)?;
+    }
+
+    let append_fn = lua.create_function(|lua, (data, algo): (Value, Value)| {
+        let bytes = expect_bytes_arg(data, "checksum.append", 1)?;
+        let name = expect_utf8_arg(algo, "checksum.append", 2)?;
+        let algo = checksum::Checksum::from_name(&name).ok_or_else(|| {
+            mlua::Error::RuntimeError(format!(
+                "bad argument #2 to 'checksum.append' (unknown algorithm '{name}')"
+            ))
+        })?;
+        lua.create_string(algo.append_to(bytes))
+    })?;
+    module.set("append", append_fn)?;
+
+    lua.globals().set("checksum", module)?;
     Ok(())
 }
 

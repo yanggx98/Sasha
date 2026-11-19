@@ -36,10 +36,14 @@ matches the displayed text; HEX mode matches the displayed space-separated HEX
 text: `AA 55` matches those displayed bytes, while `AA55` does not. Regex operates
 on that same text, not raw bytes. Changing text/HEX mode reapplies the filter.
 An invalid or overly complex regex shows an error and keeps the complete last
-valid filter active, including for new data. The count shows visible / cached
-entries. `↺` resets the direction and all content options and takes effect
-immediately. While a filter is active, the toolbar has a tinted background. The
-filter remains active when the drawer is collapsed.
+valid filter active, including for new data. `↺` resets the direction and all content options and takes effect
+immediately. While a filter is active, an accent-colored frame wraps the main area (not the status bar): its top
+edge (where the title bar sits) shows "Filter mode" with how many entries are filtered out
+and how many are shown, and the content shrinks into the frame (with a short transition of
+about 0.2 s when the filter is switched on or off). A thin line follows the content card's
+outer edge, and a bright segment with a fading tail keeps running around it while the filter
+is on; with the system's "reduce motion" setting on, only the still line is shown. The
+filter button on the toolbar is also highlighted with a small dot. The filter remains active when the drawer is collapsed.
 
 Filters belong to each session and survive tab switches, but are not saved across
 app restarts. Search, selection copying and Save operate on filtered entries.
@@ -49,6 +53,39 @@ affect serial reception, paused data retention, Lua input, or live stream output
 (including its initial buffer snapshot). Lua `print` / `log` output and connection
 errors remain in their separate panels or status messages. Incoming data updates
 the filtered view; automatic scrolling follows only changes to visible entries.
+
+## Log markers
+
+Right-click an entry in the receive log to mark it. A small form asks for a **name** (up to
+32 characters) and one of eight **colors**; **OK** (or `Enter`) marks the whole entry with
+that color, and `Esc` or a click outside closes the form. A marker belongs to one log row, one
+received line or one send, and highlights that whole row. Right-click a marked entry to
+rename it, change its color or remove the marker.
+
+- **Mini map**: a narrow strip along the right edge of the log replaces the traditional
+  scrollbar. It shows a draggable viewport thumb together with the positions of marked
+  entries in the whole visible log. Drag the thumb or click the track to scroll (scrolling
+  away from the bottom switches off auto-scroll so new data does not pull the view back),
+  or click a colored marker block to jump straight to that entry.
+- **Markers section**: the right dock lists every marker of the session below **Quick send**,
+  with its name, color, timestamp and direction. Click a row to scroll to it, use the pencil to
+  edit it or `×` to remove it, and the `×` in the title to remove all markers (with a
+  confirmation). Entries hidden by the log filter stay in the list, greyed out and not
+  clickable, and they are also left off the mini map until the filter is cleared. The section
+  can be collapsed and is hidden when the right dock is narrow.
+
+Markers are kept in memory for the session only: they are not saved to `config.toml`, not
+written to exports or live stream output, and they disappear when the log is cleared or when
+the log buffer limit drops the marked entry.
+
+## Throughput monitor
+
+Click the `RX / TX` counter area on the right side of the bottom status bar to open the
+independent throughput window. It follows the active session tab and plots real-time RX and
+TX byte rates (`4 Hz`, up to 5 minutes of history) alongside current/peak rates, cumulative
+byte totals, and theoretical serial bandwidth utilization. You can toggle the RX or TX curve
+from the top summary cards, switch the time window (`30s` / `1m` / `5m`), hover the chart
+for a crosshair readout, pause the view, or clear recorded history.
 
 ## Live stream output
 
@@ -63,7 +100,7 @@ New or empty files receive one UTF-8 BOM to help Windows editors recognize their
 Writes run in the background and flush application buffers after each record. Pausing, clearing, memory trimming, switching tabs and disconnecting do not stop capture. Stopping drains queued records in the background; closing a session waits for them to drain, and normal app exit drains them within the framework shutdown window. File errors or a full writer queue stop capture and display an error above the toolbar.
 ## Quick send
 
-The **Quick send** section sits in the right dock below **Scripts**. Each saved command stores `id`, `name`, optional `group`, `content`, `hex`, and `line_ending` (`"none"`, `"crlf"`, or `"lf"`, ignored when `hex = true`). Click any command to send it directly using its own HEX/line-ending settings without modifying the send card draft, or press `Alt+1` … `Alt+9` in the workspace to send the first 9 commands in display order (across groups, regardless of search filter or collapsed groups). Commands are shared across sessions and persisted in `config.toml`:
+The **Quick send** section sits in the right dock below **Scripts**. Each saved command stores `id`, `name`, optional `group`, `content`, `hex`, and `line_ending` (`"none"`, `"crlf"`, or `"lf"`, ignored when `hex = true`), and `checksum` (`"none"` by default, or `"sum8"`, `"xor8"`, `"crc8"`, `"crc16_modbus"`, `"crc16_ccitt"`, `"crc32"`; appended to the parsed bytes only when `hex = true`; CRC-16/Modbus is sent low byte first, other multi-byte checksums high byte first). Click any command to send it directly using its own HEX/line-ending settings without modifying the send card draft, or press `Alt+1` … `Alt+9` (the modifier is configurable, see [Keyboard shortcuts](#keyboard-shortcuts)) in the workspace to send the first 9 commands in display order (across groups, regardless of search filter or collapsed groups). Commands are shared across sessions and persisted in `config.toml`:
 
 ```toml
 [[quick_commands]]
@@ -133,3 +170,49 @@ The log font size presets are 12, 13, 14, and 15 logical pixels.
 Session drafts and connection states are not restored from this file.
 If a malformed TOML file is detected, Sasha attempts to back it up as
 `config.toml.bak` and falls back to defaults.
+
+## Keyboard shortcuts
+
+**Settings → Shortcuts** lists the shortcuts you can change. Click **Change** on a row and
+press the new keys (`Esc` cancels); **Default** restores one row and **Reset all** restores
+every row. Changes apply immediately and are saved in `config.toml`.
+
+| Action | Default | What you can change |
+| --- | --- | --- |
+| New session | `Ctrl+T` | The whole key |
+| Close session | `Ctrl+W` | The whole key |
+| Next session | `Ctrl+Tab` | The whole key |
+| Previous session | `Ctrl+Shift+Tab` | The whole key |
+| Open log search | `Ctrl+F` | The whole key |
+| Jump to session 1–9 | `Ctrl+1` … `Ctrl+9` | The modifier keys only |
+| Send quick command 1–9 | `Alt+1` … `Alt+9` | The modifier keys only |
+
+For the two 1–9 rows, press the modifier keys together with any digit, for example
+`Ctrl+Alt+1`; only the modifiers are kept. `Ctrl+9` jumps to the last session. Keys used
+by editing and the system are reserved and refused: `Enter`, `Esc`, `F3`, `Alt+F4`, and
+`Ctrl`/`Cmd` with `A`, `C`, `V`, `X`, `Z` or `Y`.
+
+Rules: a shortcut needs `Ctrl`, `Alt` or `Cmd` (Shift alone is not enough), and two actions
+cannot share a key. A key that is already taken is refused and the message names the action
+using it. A single key also cannot be `Ctrl+1` … `Ctrl+9` while the jump modifiers are `Ctrl`.
+
+```toml
+[shortcuts]
+new_session = "ctrl-n"
+close_session = "ctrl-w"
+next_session = "ctrl-tab"
+prev_session = "ctrl-shift-tab"
+search = "ctrl-f"
+jump_session = "ctrl"
+quick_send = "ctrl-alt"
+```
+
+Values are lower-case and joined with `-`; the last part of a single key is the key name
+(`t`, `tab`, `f3`), and the 1–9 rows hold only modifiers (`ctrl`, `alt`, `shift`, `cmd`).
+A missing, invalid, reserved or clashing entry keeps its default. If a default then collides
+with one of your custom keys, those custom entries go back to their defaults as well; the rest
+is kept. Other settings are not affected.
+
+## Command line
+
+For automation without a window, see [Command line](cli.md) (`sasha-cli`).

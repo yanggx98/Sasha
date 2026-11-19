@@ -44,6 +44,8 @@ pub struct ReceiveToolbar {
     filter_panel: Option<LogFilterBar>,
     /// `(collapsed, callback)`: fold/unfold toggle for the send card, shown at the right end.
     send_collapse: Option<(bool, ToolbarActionCallback)>,
+    /// Key combination appended to the search tooltip, e.g. `Ctrl+F`.
+    search_shortcut: Option<SharedString>,
 }
 
 impl ReceiveToolbar {
@@ -97,11 +99,17 @@ impl ReceiveToolbar {
             filter: None,
             filter_panel: None,
             send_collapse: None,
+            search_shortcut: None,
         }
     }
 
     pub fn send_collapse(mut self, collapsed: bool, callback: ToolbarActionCallback) -> Self {
         self.send_collapse = Some((collapsed, callback));
+        self
+    }
+
+    pub fn search_shortcut(mut self, keys: impl Into<SharedString>) -> Self {
+        self.search_shortcut = Some(keys.into());
         self
     }
 
@@ -218,15 +226,6 @@ impl RenderOnce for ReceiveToolbar {
             .gap_1();
         let locale = self.locale;
         let filter_active = self.filter.as_ref().is_some_and(|(_, active, _)| *active);
-        let background = if filter_active {
-            lerp_color(
-                self.theme.bg_strip,
-                self.theme.accent_blue,
-                self.theme.bg_toggle_active.a,
-            )
-        } else {
-            self.theme.bg_strip
-        };
         let tools = strip
             .child(self.text_tool_button(
                 "rx-tool-hex",
@@ -293,7 +292,12 @@ impl RenderOnce for ReceiveToolbar {
             .child(self.icon_tool_button(
                 "rx-tool-search",
                 LucideIcon::Search,
-                tr_shared(locale, "tooltip.rx_search"),
+                match &self.search_shortcut {
+                    Some(keys) => {
+                        format!("{} ({keys})", tr_shared(locale, "tooltip.rx_search")).into()
+                    }
+                    None => tr_shared(locale, "tooltip.rx_search"),
+                },
                 if self.search_open {
                     Some(TransitionFlag {
                         active: true,
@@ -389,7 +393,7 @@ impl RenderOnce for ReceiveToolbar {
         let drawer = v_flex()
             .id("receive-toolbar-drawer")
             .w_full()
-            .bg(background)
+            .bg(self.theme.bg_strip)
             .border_1()
             .border_color(self.theme.border_card);
         let drawer = if collapsed {

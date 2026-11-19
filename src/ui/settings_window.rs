@@ -14,6 +14,9 @@ use crate::model::ConfigStore;
 use crate::model::settings::{
     DEFAULT_BACKGROUND_OPACITY, LOG_FONT_SIZE_PRESETS, StreamOutputScope,
 };
+use crate::model::shortcuts::{
+    Binding, Modifiers, ShortcutAction, ShortcutError, Shortcuts, binding_from_recording,
+};
 use crate::ui::theme::NanoTheme;
 use crate::ui::theme_editor::{FIELDS, ThemeEditor};
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager, ThemeSaveError, ThemeSelectError};
@@ -24,6 +27,26 @@ use crate::ui::workspace::image_format_for_path;
 const HEADER_HEIGHT: Pixels = px(38.);
 const APP_AUTHOR: &str = "yanggx98";
 const GITHUB_URL: &str = "https://github.com/yanggx98/Sasha";
+
+/// Stable element id for a shortcut row's button, e.g. `shortcut-change-new-session`.
+fn shortcut_button_id(action: ShortcutAction, kind: &str) -> &'static str {
+    match (kind, action) {
+        ("change", ShortcutAction::NewSession) => "shortcut-change-new-session",
+        ("change", ShortcutAction::CloseSession) => "shortcut-change-close-session",
+        ("change", ShortcutAction::NextSession) => "shortcut-change-next-session",
+        ("change", ShortcutAction::PrevSession) => "shortcut-change-prev-session",
+        ("change", ShortcutAction::Search) => "shortcut-change-search",
+        ("change", ShortcutAction::JumpSession) => "shortcut-change-jump-session",
+        ("change", ShortcutAction::QuickSend) => "shortcut-change-quick-send",
+        (_, ShortcutAction::NewSession) => "shortcut-reset-new-session",
+        (_, ShortcutAction::CloseSession) => "shortcut-reset-close-session",
+        (_, ShortcutAction::NextSession) => "shortcut-reset-next-session",
+        (_, ShortcutAction::PrevSession) => "shortcut-reset-prev-session",
+        (_, ShortcutAction::Search) => "shortcut-reset-search",
+        (_, ShortcutAction::JumpSession) => "shortcut-reset-jump-session",
+        (_, ShortcutAction::QuickSend) => "shortcut-reset-quick-send",
+    }
+}
 
 fn theme_save_error_text(locale: Locale, err: &ThemeSaveError) -> String {
     match err {
@@ -54,16 +77,18 @@ fn app_icon() -> Arc<Image> {
 pub enum SettingsTab {
     General,
     View,
+    Shortcuts,
     About,
 }
 
 impl SettingsTab {
-    const ALL: [Self; 3] = [Self::General, Self::View, Self::About];
+    const ALL: [Self; 4] = [Self::General, Self::View, Self::Shortcuts, Self::About];
 
     fn id(self) -> &'static str {
         match self {
             Self::General => "settings-tab-general",
             Self::View => "settings-tab-view",
+            Self::Shortcuts => "settings-tab-shortcuts",
             Self::About => "settings-tab-about",
         }
     }
@@ -72,6 +97,7 @@ impl SettingsTab {
         match self {
             Self::General => tr_shared(locale, "settings.tab_general"),
             Self::View => tr_shared(locale, "settings.tab_view"),
+            Self::Shortcuts => tr_shared(locale, "settings.tab_shortcuts"),
             Self::About => tr_shared(locale, "settings.tab_about"),
         }
     }
@@ -80,6 +106,7 @@ impl SettingsTab {
         match self {
             Self::General => tr_shared(locale, "settings.tab_general_sub"),
             Self::View => tr_shared(locale, "settings.tab_view_sub"),
+            Self::Shortcuts => tr_shared(locale, "settings.tab_shortcuts_sub"),
             Self::About => tr_shared(locale, "settings.tab_about_sub"),
         }
     }
@@ -88,6 +115,7 @@ impl SettingsTab {
         match self {
             Self::General => LucideIcon::Settings,
             Self::View => LucideIcon::Eye,
+            Self::Shortcuts => LucideIcon::Keyboard,
             Self::About => LucideIcon::Info,
         }
     }
@@ -109,6 +137,9 @@ pub struct SettingsWindow {
     config_store: Entity<ConfigStore>,
     active_tab: SettingsTab,
     save_error: Option<String>,
+    /// The shortcut row currently waiting for a key press.
+    recording: Option<ShortcutAction>,
+    shortcut_error: Option<SharedString>,
     bg_opacity_slider: Entity<SliderState>,
     _slider_subscription: Subscription,
     _config_subscription: Subscription,
@@ -164,6 +195,8 @@ impl SettingsWindow {
             config_store,
             active_tab: SettingsTab::General,
             save_error: None,
+            recording: None,
+            shortcut_error: None,
             bg_opacity_slider,
             _slider_subscription: slider_subscription,
             _config_subscription: subscription,
@@ -173,8 +206,127 @@ impl SettingsWindow {
     fn select_tab(&mut self, tab: SettingsTab, cx: &mut Context<Self>) {
         if self.active_tab != tab {
             self.active_tab = tab;
+            self.recording = None;
+            self.shortcut_error = None;
             cx.notify();
         }
+    }
+
+    fn start_recording(&mut self, action: ShortcutAction, cx: &mut Context<Self>) {
+        self.recording = Some(action);
+        self.shortcut_error = None;
+        cx.notify();
+    }
+
+    fn cancel_recording(&mut self, cx: &mut Context<Self>) {
+        self.recording = None;
+        cx.notify();
+    }
+
+    fn shortcut_action_name(locale: Locale, action: ShortcutAction) -> SharedString {
+        tr_shared(
+            locale,
+            match action {
+                ShortcutAction::NewSession => "shortcuts.new_session",
+                ShortcutAction::CloseSession => "shortcuts.close_session",
+                ShortcutAction::NextSession => "shortcuts.next_session",
+                ShortcutAction::PrevSession => "shortcuts.prev_session",
+                ShortcutAction::Search => "shortcuts.search",
+                ShortcutAction::JumpSession => "shortcuts.jump_session",
+                ShortcutAction::QuickSend => "shortcuts.quick_send",
+            },
+        )
+    }
+
+    fn shortcut_error_text(
+        locale: Locale,
+        action: ShortcutAction,
+        err: ShortcutError,
+    ) -> SharedString {
+        match err {
+            ShortcutError::NeedsModifier => tr_shared(locale, "shortcuts.err_needs_modifier"),
+            ShortcutError::Reserved => tr_shared(locale, "shortcuts.err_reserved"),
+            ShortcutError::InvalidKey if action.is_digit_family() => {
+                tr_shared(locale, "shortcuts.err_digit_family")
+            }
+            ShortcutError::InvalidKey | ShortcutError::WrongBindingKind => {
+                tr_shared(locale, "shortcuts.err_invalid_key")
+            }
+            ShortcutError::Conflict(other) => {
+                i18n::shortcut_conflict(locale, &Self::shortcut_action_name(locale, other)).into()
+            }
+        }
+    }
+
+    /// Takes over key presses while a shortcut row is recording. Returns whether the press
+    /// was consumed.
+    fn handle_recording_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(action) = self.recording else {
+            return false;
+        };
+        let m = &event.keystroke.modifiers;
+        let mods = Modifiers::new(m.control, m.alt, m.shift, m.platform);
+        if event.keystroke.key.eq_ignore_ascii_case("escape") && mods == Modifiers::default() {
+            self.cancel_recording(cx);
+            return true;
+        }
+        match binding_from_recording(action, &event.keystroke.key, mods) {
+            Ok(binding) => self.apply_binding(action, binding, cx),
+            Err(err) => {
+                let locale = self.current_locale(cx);
+                self.shortcut_error = Some(Self::shortcut_error_text(locale, action, err));
+                cx.notify();
+            }
+        }
+        true
+    }
+
+    fn apply_binding(&mut self, action: ShortcutAction, binding: Binding, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let mut next = self.config_store.read(cx).config().shortcuts.clone();
+        match next.set(action, binding) {
+            Ok(()) => {
+                self.save_shortcuts(next, cx);
+                self.recording = None;
+                self.shortcut_error = None;
+            }
+            Err(err) => {
+                self.shortcut_error = Some(Self::shortcut_error_text(locale, action, err));
+            }
+        }
+        cx.notify();
+    }
+
+    fn reset_shortcut(&mut self, action: ShortcutAction, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let mut next = self.config_store.read(cx).config().shortcuts.clone();
+        self.recording = None;
+        match next.reset(action) {
+            Ok(()) => {
+                self.save_shortcuts(next, cx);
+                self.shortcut_error = None;
+            }
+            Err(err) => {
+                self.shortcut_error = Some(Self::shortcut_error_text(locale, action, err));
+            }
+        }
+        cx.notify();
+    }
+
+    fn reset_all_shortcuts(&mut self, cx: &mut Context<Self>) {
+        self.recording = None;
+        self.shortcut_error = None;
+        self.save_shortcuts(Shortcuts::default(), cx);
+        cx.notify();
+    }
+
+    fn save_shortcuts(&mut self, shortcuts: Shortcuts, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.shortcuts = shortcuts);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
     }
 
     fn current_locale(&self, cx: &App) -> Locale {
@@ -957,6 +1109,112 @@ impl SettingsWindow {
             ))
     }
 
+    fn render_shortcuts_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let locale = self.current_locale(cx);
+        let theme = self.theme;
+        let shortcuts = self.config_store.read(cx).config().shortcuts.clone();
+        let defaults = Shortcuts::default();
+
+        let rows: Vec<AnyElement> = ShortcutAction::ALL
+            .into_iter()
+            .map(|action| {
+                let recording = self.recording == Some(action);
+                let keys: SharedString = if recording {
+                    tr_shared(locale, "shortcuts.recording")
+                } else {
+                    shortcuts.display(action).into()
+                };
+                let key_box = div()
+                    .px_2p5()
+                    .py_1()
+                    .rounded(px(6.))
+                    .bg(theme.bg_card)
+                    .text_xs()
+                    .font_family(crate::ui::fonts::MONO_FONT)
+                    .text_color(if recording {
+                        theme.accent_blue_hover
+                    } else {
+                        theme.text_primary
+                    })
+                    .child(keys);
+                let change_label = if recording {
+                    tr_shared(locale, "shortcuts.cancel")
+                } else {
+                    tr_shared(locale, "shortcuts.change")
+                };
+                let change = self.flat_action_button(
+                    shortcut_button_id(action, "change"),
+                    change_label,
+                    move |this, _, cx| {
+                        if recording {
+                            this.cancel_recording(cx);
+                        } else {
+                            this.start_recording(action, cx);
+                        }
+                    },
+                    cx,
+                );
+                let is_default = shortcuts.binding(action) == defaults.binding(action);
+                let reset = (!is_default).then(|| {
+                    self.flat_action_button(
+                        shortcut_button_id(action, "reset"),
+                        tr_shared(locale, "shortcuts.reset"),
+                        move |this, _, cx| this.reset_shortcut(action, cx),
+                        cx,
+                    )
+                });
+                let description = if action.is_digit_family() {
+                    tr_shared(locale, "shortcuts.desc_family")
+                } else {
+                    tr_shared(locale, "shortcuts.desc_single")
+                };
+                let control = h_flex()
+                    .gap_2()
+                    .items_center()
+                    .child(key_box)
+                    .child(change)
+                    .children(reset)
+                    .into_any_element();
+                self.render_setting_row(
+                    Self::shortcut_action_name(locale, action),
+                    description,
+                    control,
+                )
+            })
+            .collect();
+
+        let reset_all = self.flat_action_button(
+            "shortcut-reset-all",
+            tr_shared(locale, "shortcuts.reset_all_btn"),
+            |this, _, cx| this.reset_all_shortcuts(cx),
+            cx,
+        );
+
+        v_flex()
+            .w_full()
+            .child(self.render_section_header(SettingsTab::Shortcuts, locale))
+            .when_some(self.shortcut_error.clone(), |this, err| {
+                this.child(
+                    div()
+                        .w_full()
+                        .mt_3()
+                        .px_3()
+                        .py_2()
+                        .rounded(px(6.))
+                        .bg(theme.error_bg)
+                        .text_xs()
+                        .text_color(theme.error_text)
+                        .child(err),
+                )
+            })
+            .children(rows)
+            .child(self.render_setting_row(
+                tr_shared(locale, "shortcuts.reset_all_title"),
+                tr_shared(locale, "shortcuts.reset_all_desc"),
+                reset_all,
+            ))
+    }
+
     fn render_view_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.current_locale(cx);
         let (current_size, bg_image, bg_opacity) = {
@@ -1424,12 +1682,17 @@ impl Render for SettingsWindow {
                     }
                 }),
             )
-            .on_key_down(|event: &KeyDownEvent, window, cx| {
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                // While a shortcut row records, every key press (Esc included) is its own.
+                if this.handle_recording_key(event, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.key.eq_ignore_ascii_case("escape") {
                     cx.stop_propagation();
                     window.remove_window();
                 }
-            })
+            }))
             // Recessed Windows Terminal-style tab strip extending to the top edge.
             .child(
                 div()
@@ -1466,6 +1729,7 @@ impl Render for SettingsWindow {
                     .child(match self.active_tab {
                         SettingsTab::General => self.render_general_tab(cx).into_any_element(),
                         SettingsTab::View => self.render_view_tab(cx).into_any_element(),
+                        SettingsTab::Shortcuts => self.render_shortcuts_tab(cx).into_any_element(),
                         SettingsTab::About => self.render_about_tab(cx).into_any_element(),
                     }),
             )

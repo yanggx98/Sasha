@@ -5,6 +5,7 @@ use gpui_kit::component::{Icon, TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::checksum::Checksum;
 use crate::i18n::{Locale, quick_save_failed, tr_shared};
 use crate::model::quick_command::{
     QuickCommand, QuickCommandError, QuickEditorDraft, move_command, upsert_command,
@@ -243,6 +244,7 @@ impl Render for QuickCommandWindow {
         let editing = self.draft.editing_id.is_some();
         let hex = self.draft.hex;
         let line_ending = self.draft.line_ending;
+        let checksum = self.draft.checksum;
         let title = if editing {
             tr_shared(locale, "quick.editor_title_edit")
         } else {
@@ -477,6 +479,44 @@ impl Render for QuickCommandWindow {
                                     1,
                                 ))
                             }),
+                    )
+                    .child(
+                        v_flex()
+                            .items_start()
+                            .gap_1p5()
+                            .child(Self::field_label(
+                                theme,
+                                tr_shared(locale, "quick.editor_checksum"),
+                            ))
+                            .child(Self::segmented(theme).children(
+                                Checksum::ALL.into_iter().enumerate().map(|(idx, algo)| {
+                                    let label: SharedString = if algo == Checksum::None {
+                                        tr_shared(locale, "flow.none")
+                                    } else {
+                                        algo.label().into()
+                                    };
+                                    let ids = [
+                                        "quick-cs-none",
+                                        "quick-cs-sum8",
+                                        "quick-cs-xor8",
+                                        "quick-cs-crc8",
+                                        "quick-cs-crc16-modbus",
+                                        "quick-cs-crc16-ccitt",
+                                        "quick-cs-crc32",
+                                    ];
+                                    Self::segment(theme, ids[idx], label, checksum == algo, hex)
+                                        .on_mouse_down(
+                                            MouseButton::Left,
+                                            cx.listener(move |this, _, _, cx| {
+                                                cx.stop_propagation();
+                                                if this.draft.hex {
+                                                    this.draft.checksum = algo;
+                                                    cx.notify();
+                                                }
+                                            }),
+                                        )
+                                }),
+                            )),
                     )
                     .when_some(self.error.clone(), |this, err| {
                         this.child(div().text_xs().text_color(theme.error_text).child(err))

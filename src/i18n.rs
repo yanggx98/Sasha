@@ -45,12 +45,20 @@ pub fn tr_shared(locale: Locale, key: &'static str) -> SharedString {
     tr(locale, key).into()
 }
 
-pub fn filter_count_label(locale: Locale, visible: usize, total: usize) -> SharedString {
+/// Text of the banner shown while a log filter is on: `hidden` entries are filtered out
+/// of `total` cached ones, leaving `visible`.
+pub fn filter_banner_label(
+    locale: Locale,
+    visible: usize,
+    total: usize,
+    hidden: usize,
+) -> SharedString {
     rust_i18n::t!(
-        "filter.count",
+        "filter.banner",
         locale = locale.code(),
         visible = visible,
-        total = total
+        total = total,
+        hidden = hidden
     )
     .into_owned()
     .into()
@@ -93,8 +101,8 @@ pub fn quick_skipped(locale: Locale, count: usize) -> String {
     rust_i18n::t!("quick.skipped", locale = locale.code(), count = count).into_owned()
 }
 
-pub fn quick_shortcut_hint(locale: Locale, digit: usize) -> String {
-    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), digit = digit).into_owned()
+pub fn quick_shortcut_hint(locale: Locale, keys: &str) -> String {
+    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), keys = keys).into_owned()
 }
 
 pub fn quick_save_failed(locale: Locale, err: &str) -> String {
@@ -117,6 +125,24 @@ pub fn signal_write_failed(locale: Locale, line: &str, detail: &str) -> String {
         locale = locale.code(),
         line = line,
         detail = detail
+    )
+    .into_owned()
+}
+
+pub fn marker_clear_confirm(locale: Locale, count: usize) -> String {
+    rust_i18n::t!(
+        "marker.clear_confirm",
+        locale = locale.code(),
+        count = count
+    )
+    .into_owned()
+}
+
+pub fn shortcut_conflict(locale: Locale, action: &str) -> String {
+    rust_i18n::t!(
+        "shortcuts.err_conflict",
+        locale = locale.code(),
+        action = action
     )
     .into_owned()
 }
@@ -320,6 +346,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn quick_shortcut_hint_uses_the_given_keys() {
+        assert_eq!(
+            quick_shortcut_hint(Locale::EnUs, "Ctrl+Alt+3"),
+            "Ctrl+Alt+3 to send"
+        );
+        assert!(quick_shortcut_hint(Locale::ZhCn, "Alt+1").contains("Alt+1"));
+    }
+
+    #[test]
     fn locales_resolve_distinct_non_empty_strings_from_toml() {
         let zh_title = tr(Locale::ZhCn, "start.title");
         let en_title = tr(Locale::EnUs, "start.title");
@@ -337,12 +372,12 @@ mod tests {
     #[test]
     fn dynamic_helpers_format_for_each_locale() {
         assert_eq!(
-            filter_count_label(Locale::ZhCn, 12, 50).as_str(),
-            "显示 12 条，共缓存 50 条"
+            filter_banner_label(Locale::ZhCn, 12, 50, 38).as_str(),
+            "过滤模式 · 已过滤 38 条 · 显示 12 / 50 条"
         );
         assert_eq!(
-            filter_count_label(Locale::EnUs, 12, 50).as_str(),
-            "Showing 12 of 50 cached entries"
+            filter_banner_label(Locale::EnUs, 12, 50, 38).as_str(),
+            "Filter mode · 38 filtered out · showing 12 of 50"
         );
         assert_eq!(picker_apply_value(Locale::ZhCn, "9600"), "应用输入值: 9600");
         assert_eq!(

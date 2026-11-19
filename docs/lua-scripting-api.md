@@ -66,6 +66,16 @@
 
 ---
 
+### 1.4 `checksum` 模块
+| 函数签名 | 说明 | 返回值 |
+| --- | --- | --- |
+| `checksum.sum8(data)` / `checksum.xor8(data)` / `checksum.crc8(data)` | 8 位累加和 / 异或 / CRC-8（poly 0x07） | 整数 |
+| `checksum.crc16_modbus(data)` / `checksum.crc16_ccitt(data)` | CRC-16/Modbus（init 0xFFFF，反射 0xA001）/ CRC-16/CCITT-FALSE（poly 0x1021） | 整数 |
+| `checksum.crc32(data)` | CRC-32（zlib/Ethernet） | 整数 |
+| `checksum.append(data, algo)` | 返回 `data` 加上校验字节的新字符串；`algo` 为上述函数名（如 `"crc16_modbus"`）。CRC-16/Modbus 低字节在前，其余多字节校验高字节在前 | 字符串；`algo` 未知抛出错误 |
+
+`data` 必须是字符串（可含 `\0` 与二进制字节），否则抛出参数错误。
+
 ## 2. 错误语义与实例生命周期
 
 脚本实例状态分为：`Running`（运行中）、`Stopping`（停止中）、`Completed`（已完成）、`Stopped { reason }`（已停止：`User` 或 `Disconnected`）、`Failed { error }`（失败）。

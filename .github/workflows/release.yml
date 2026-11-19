@@ -71,10 +71,13 @@ jobs:
             # The bare .exe is what the in-app updater installs (and what older
             # versions look for); the zip is the convenient manual download.
             cp target/release/sasha.exe "dist/${{ matrix.asset }}"
-            powershell -NoProfile -Command "Compress-Archive -Path target/release/sasha.exe -DestinationPath dist/sasha-windows-x86_64.zip"
+            # The command-line companion is published on its own too, so the updater
+            # can refresh it next to the app.
+            cp target/release/sasha-cli.exe dist/sasha-cli-windows-x86_64.exe
+            powershell -NoProfile -Command "Compress-Archive -Path target/release/sasha.exe,target/release/sasha-cli.exe -DestinationPath dist/sasha-windows-x86_64.zip"
           else
             # tar keeps the executable bit, which a raw download would lose.
-            tar -czf "dist/${{ matrix.asset }}" -C target/release sasha
+            tar -czf "dist/${{ matrix.asset }}" -C target/release sasha sasha-cli
           fi
           cd dist
           for f in *; do
@@ -111,6 +114,7 @@ jobs:
           ls -l dist
           # Windows is mandatory; never publish without it.
           test -f dist/sasha-windows-x86_64.exe
+          test -f dist/sasha-cli-windows-x86_64.exe
           args=(release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" --generate-notes)
           case "$GITHUB_REF_NAME" in *-*) args+=(--prerelease) ;; esac

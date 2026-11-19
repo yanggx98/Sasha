@@ -26,6 +26,8 @@ pub struct QuickSendPanel {
     pub skipped_notice: Option<SharedString>,
     pub collapsed: bool,
     pub compact: bool,
+    /// Configured modifiers of the quick-send keys, e.g. `Alt`; the digit is appended.
+    pub shortcut_mods: String,
     pub pending_delete: Option<String>,
     pub on_send: QuickIdCallback,
     pub on_toggle_group: QuickIdCallback,
@@ -216,9 +218,11 @@ impl RenderOnce for QuickSendPanel {
                     let name: SharedString = cmd.name.clone().into();
                     let preview = cmd.preview();
                     let tooltip: SharedString = match shortcut {
-                        Some(digit) => {
-                            format!("{preview}\n{}", quick_shortcut_hint(locale, *digit)).into()
-                        }
+                        Some(digit) => format!(
+                            "{preview}\n{}",
+                            quick_shortcut_hint(locale, &format!("{}+{digit}", self.shortcut_mods))
+                        )
+                        .into(),
                         None => preview.into(),
                     };
                     let on_send = self.on_send.clone();
@@ -251,7 +255,7 @@ impl RenderOnce for QuickSendPanel {
                                         .px_1()
                                         .text_xs()
                                         .text_color(theme.text_muted)
-                                        .child(format!("Alt+{digit}")),
+                                        .child(format!("{}+{digit}", self.shortcut_mods)),
                                 )
                             })
                             .child(self.action_icon(
@@ -285,7 +289,10 @@ impl RenderOnce for QuickSendPanel {
             .w_full()
             .min_w_0()
             .min_h_0()
-            .when(!self.collapsed, |this| this.flex_1())
+            // Content height, capped at half the dock; the command list scrolls inside.
+            .when(!self.collapsed, |this| {
+                this.flex_shrink(1.).max_h(relative(0.5))
+            })
             .when(self.collapsed, |this| this.flex_none())
             .bg(theme.bg_canvas)
             .border_t_1()
@@ -298,7 +305,9 @@ impl RenderOnce for QuickSendPanel {
                     .items_center()
                     .px_3()
                     .gap_1()
-                    .border_b_1()
+                    // Collapsed, the next section's top border is already the divider; a second
+                    // line here would stack into one thick line.
+                    .when(!self.collapsed, |this| this.border_b_1())
                     .border_color(theme.border_card)
                     .child(self.action_icon(
                         "quick-section-toggle",

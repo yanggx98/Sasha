@@ -30,6 +30,8 @@ pub struct StartPageState {
     pub baud_dropdown_open: bool,
     pub baud_error: Option<String>,
     pub connect_error: Option<String>,
+    /// True while the port is being opened in the background.
+    pub connecting: bool,
 }
 
 impl StartPageState {
@@ -56,6 +58,7 @@ impl StartPageState {
             baud_dropdown_open: false,
             baud_error: None,
             connect_error: None,
+            connecting: false,
         }
     }
 
@@ -823,16 +826,26 @@ impl RenderOnce for StartPage {
                     .justify_center()
                     .rounded(px(8.))
                     .bg(theme.accent_blue)
-                    .hover(|s| s.bg(theme.accent_blue_hover))
-                    .cursor_pointer()
                     .text_sm()
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(contrast_foreground(theme.accent_blue))
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        cx.stop_propagation();
-                        on_connect(window, cx);
+                    .when(state.connecting, |this| this.opacity(0.6))
+                    .when(!state.connecting, |this| {
+                        this.hover(|s| s.bg(theme.accent_blue_hover))
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                on_connect(window, cx);
+                            })
                     })
-                    .child(tr(locale, "start.connect_btn")),
+                    .child(tr(
+                        locale,
+                        if state.connecting {
+                            "start.connecting"
+                        } else {
+                            "start.connect_btn"
+                        },
+                    )),
             );
 
         div()

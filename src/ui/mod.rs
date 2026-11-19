@@ -1,7 +1,10 @@
 pub mod bottom_bar;
 pub mod filter_bar;
 pub mod fonts;
+pub mod log_minimap;
 pub mod log_view;
+pub mod marker_editor;
+pub mod marker_panel;
 pub mod motion;
 pub mod parameter_picker;
 pub mod quick_command_window;
@@ -17,6 +20,7 @@ pub mod theme;
 pub mod theme_editor;
 pub mod theme_manager;
 pub mod theme_store;
+pub mod throughput_window;
 pub mod update_manager;
 pub mod workspace;
 

@@ -186,11 +186,17 @@ impl RxSubscriberQueue {
     }
 
     fn is_closed(&self) -> bool {
-        self.inner.lock().unwrap().closed
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .closed
     }
 
     fn push_bytes(&self, bytes: &[u8]) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.closed || guard.overflowed || guard.disconnected.is_some() {
             return;
         }
@@ -209,7 +215,10 @@ impl RxSubscriberQueue {
     }
 
     fn mark_disconnected(&self, reason: Option<String>) {
-        let mut guard = self.inner.lock().unwrap();
+        let mut guard = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if guard.disconnected.is_none() {
             guard.disconnected = Some(reason);
             self.condvar.notify_all();
@@ -235,25 +244,41 @@ impl RxSubscriber {
 
     /// Attempts to pop one raw RX chunk without blocking.
     pub fn try_recv(&self) -> Result<Vec<u8>, RxRecvError> {
-        let mut guard = self.queue.inner.lock().unwrap();
+        let mut guard = self
+            .queue
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         Self::pop_locked(&mut guard).ok_or(RxRecvError::Empty)?
     }
 
     /// Blocks until a raw RX chunk arrives, the session disconnects, or the buffer overflows.
     pub fn recv(&self) -> Result<Vec<u8>, RxRecvError> {
-        let mut guard = self.queue.inner.lock().unwrap();
+        let mut guard = self
+            .queue
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(res) = Self::pop_locked(&mut guard) {
                 return res;
             }
-            guard = self.queue.condvar.wait(guard).unwrap();
+            guard = self
+                .queue
+                .condvar
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
     }
 
     /// Blocks up to `timeout` waiting for a raw RX chunk, disconnect, or overflow.
     pub fn recv_timeout(&self, timeout: Duration) -> Result<Vec<u8>, RxRecvError> {
         let deadline = Instant::now() + timeout;
-        let mut guard = self.queue.inner.lock().unwrap();
+        let mut guard = self
+            .queue
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if let Some(res) = Self::pop_locked(&mut guard) {
                 return res;
@@ -266,7 +291,7 @@ impl RxSubscriber {
                 .queue
                 .condvar
                 .wait_timeout(guard, deadline - now)
-                .unwrap();
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard = next_guard;
             if wait_res.timed_out()
                 && let Some(res) = Self::pop_locked(&mut guard)
@@ -296,7 +321,11 @@ impl RxSubscriber {
 
 impl Drop for RxSubscriber {
     fn drop(&mut self) {
-        let mut guard = self.queue.inner.lock().unwrap();
+        let mut guard = self
+            .queue
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         guard.closed = true;
         guard.chunks.clear();
         guard.queued_bytes = 0;
@@ -321,7 +350,10 @@ struct SessionServiceInner {
 impl Drop for SessionServiceInner {
     fn drop(&mut self) {
         let writer_thread = {
-            let mut state = self.state.lock().unwrap();
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.connected = false;
             state.tx_sender.take();
             for sub in state.rx_subscribers.drain(..) {
@@ -368,11 +400,19 @@ impl SessionService {
     }
 
     pub fn generation(&self) -> u64 {
-        self.inner.state.lock().unwrap().generation
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .generation
     }
 
     pub fn is_connected(&self) -> bool {
-        self.inner.state.lock().unwrap().connected
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .connected
     }
 
     /// Attaches a new [`PortWriter`], incrementing `connection_generation` and spawning
@@ -381,7 +421,11 @@ impl SessionService {
         self.disconnect(None);
 
         let (tx_sender, tx_rx) = mpsc::sync_channel(MAX_TX_QUEUE_DEPTH);
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.generation += 1;
         let generation = state.generation;
         state.connected = true;
@@ -401,7 +445,11 @@ impl SessionService {
     /// and waiting for the writer thread to release the port handle.
     pub fn disconnect(&self, reason: Option<String>) {
         let writer_thread = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.connected {
                 return;
             }
@@ -447,7 +495,11 @@ impl SessionService {
         }
 
         let sender = {
-            let state = self.inner.state.lock().unwrap();
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.connected {
                 return Err(SessionTxError::Disconnected);
             }
@@ -485,7 +537,11 @@ impl SessionService {
         level: bool,
     ) -> Result<Receiver<Result<(), SessionTxError>>, SessionTxError> {
         let sender = {
-            let state = self.inner.state.lock().unwrap();
+            let state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.connected {
                 return Err(SessionTxError::Disconnected);
             }
@@ -552,7 +608,11 @@ impl SessionService {
         max_chunks: usize,
         max_bytes: usize,
     ) -> Result<RxSubscriber, RxSubscribeError> {
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.connected {
             return Err(RxSubscribeError::Disconnected);
         }
@@ -573,7 +633,11 @@ impl SessionService {
             return;
         }
         let subscribers: Vec<Arc<RxSubscriberQueue>> = {
-            let mut state = self.inner.state.lock().unwrap();
+            let mut state = self
+                .inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if !state.connected || state.generation != generation {
                 return;
             }
@@ -588,14 +652,22 @@ impl SessionService {
     /// Registers a lifecycle listener notified on connection disconnect.
     pub fn subscribe_disconnect(&self) -> Receiver<DisconnectEvent> {
         let (tx, rx) = mpsc::channel();
-        let mut state = self.inner.state.lock().unwrap();
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.disconnect_listeners.push(tx);
         rx
     }
 
     /// Drains all completed TX events since the last call (each successful write appears once).
     pub fn drain_tx_completed(&self) -> Vec<TxCompletedEvent> {
-        let mut completed = self.inner.tx_completed.lock().unwrap();
+        let mut completed = self
+            .inner
+            .tx_completed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         completed.drain(..).collect()
     }
 }
@@ -615,7 +687,10 @@ fn run_writer_loop<W: PortWriter>(
                 reply_tx,
             } => {
                 let is_current = {
-                    let state = inner.state.lock().unwrap();
+                    let state = inner
+                        .state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     state.connected
                         && state.generation == writer_generation
                         && generation == writer_generation
@@ -634,7 +709,10 @@ fn run_writer_loop<W: PortWriter>(
             WriterCommand::Tx(cmd) => cmd,
         };
         let is_current = {
-            let state = inner.state.lock().unwrap();
+            let state = inner
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.connected
                 && state.generation == writer_generation
                 && cmd.generation == writer_generation
@@ -656,7 +734,10 @@ fn run_writer_loop<W: PortWriter>(
         match writer.write_all_and_flush(&cmd.bytes) {
             Ok(()) => {
                 {
-                    let mut completed = inner.tx_completed.lock().unwrap();
+                    let mut completed = inner
+                        .tx_completed
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     completed.push_back(TxCompletedEvent {
                         generation: cmd.generation,
                         bytes: cmd.bytes,

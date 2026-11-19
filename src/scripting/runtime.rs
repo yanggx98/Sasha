@@ -13,13 +13,33 @@ use crate::session_service::{RxRecvError, RxSubscriber, SessionService};
 
 use super::api::register_api;
 use super::{
-    LUA_MEMORY_LIMIT_BYTES, SCRIPT_LOG_MAX_LINES, SCRIPT_RX_BUFFER_MAX_BYTES, ScriptEvent,
-    ScriptLogEntry, ScriptLogLevel, ScriptStatus, StopReason,
+    LUA_MEMORY_LIMIT_BYTES, SCRIPT_EVENT_QUEUE_MAX, SCRIPT_LOG_MAX_LINES,
+    SCRIPT_RX_BUFFER_MAX_BYTES, ScriptEvent, ScriptLogEntry, ScriptLogLevel, ScriptStatus,
+    StopReason,
 };
 
 const INSTRUCTION_HOOK_INTERVAL: u32 = 1_000;
 const RX_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SLEEP_DISCONNECT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// `Instant::now() + duration` that saturates instead of panicking on overflow
+/// (e.g. a script passing `1e18` milliseconds).
+pub(crate) fn deadline_after(duration: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(duration)
+        .or_else(|| now.checked_add(Duration::from_secs(60 * 60 * 24 * 365)))
+        .unwrap_or(now)
+}
+
+/// Lua prelude: re-raises a pending abort after `pcall`/`xpcall`/`coroutine.resume`
+/// so scripts cannot swallow cancellation or disconnect.
+const ABORT_GUARD_LUA: &str = r#"
+local raw_pcall, raw_xpcall, raw_resume, check = pcall, xpcall, coroutine.resume, ...
+local function guard(...) check() return ... end
+pcall = function(f, ...) return guard(raw_pcall(f, ...)) end
+xpcall = function(f, h, ...) return guard(raw_xpcall(f, h, ...)) end
+coroutine.resume = function(co, ...) return guard(raw_resume(co, ...)) end
+"#;
 
 /// Internal abort sentinel used to unwind Lua execution cleanly on cancellation,
 /// session disconnect, or RX buffer overflow.
@@ -57,7 +77,10 @@ impl CancellableSleeper {
     }
 
     pub(crate) fn wake(&self) {
-        let mut guard = self.woken.lock().unwrap();
+        let mut guard = self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = true;
         self.condvar.notify_all();
     }
@@ -70,8 +93,11 @@ impl CancellableSleeper {
         session_service: &SessionService,
         generation: u64,
     ) -> Result<(), ScriptAbort> {
-        let deadline = Instant::now() + duration;
-        let mut guard = self.woken.lock().unwrap();
+        let deadline = deadline_after(duration);
+        let mut guard = self
+            .woken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if cancel_token.load(Ordering::Acquire) {
                 return Err(ScriptAbort::Cancelled);
@@ -85,7 +111,10 @@ impl CancellableSleeper {
             }
             *guard = false;
             let wait = (deadline - now).min(SLEEP_DISCONNECT_POLL_INTERVAL);
-            let (next_guard, _) = self.condvar.wait_timeout(guard, wait).unwrap();
+            let (next_guard, _) = self
+                .condvar
+                .wait_timeout(guard, wait)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard = next_guard;
         }
     }
@@ -181,13 +210,29 @@ impl ScriptContext {
             message,
         };
         {
-            let mut logs = self.shared.logs.lock().unwrap();
+            let mut logs = self
+                .shared
+                .logs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if logs.len() >= SCRIPT_LOG_MAX_LINES {
                 logs.pop_front();
             }
             logs.push_back(entry.clone());
         }
-        let mut events = self.events.lock().unwrap();
+        let mut events = self
+            .events
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if events.len() >= SCRIPT_EVENT_QUEUE_MAX {
+            // Shed the oldest log line; lifecycle events are never dropped.
+            if let Some(pos) = events
+                .iter()
+                .position(|ev| matches!(ev, ScriptEvent::Log(_)))
+            {
+                events.remove(pos);
+            }
+        }
         events.push_back(ScriptEvent::Log(entry));
     }
 
@@ -270,10 +315,15 @@ pub(crate) fn run_script_instance(
     };
 
     {
-        let mut status = shared.status.lock().unwrap();
+        let mut status = shared
+            .status
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *status = final_status.clone();
     }
-    let mut queue = events.lock().unwrap();
+    let mut queue = events
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     queue.push_back(ScriptEvent::StatusChanged {
         run_id: shared.run_id,
         status: final_status,
@@ -312,6 +362,7 @@ fn execute_lua(
         rx_buffer: Rc::new(RefCell::new(RxBuffer::new(SCRIPT_RX_BUFFER_MAX_BYTES))),
         events: Arc::clone(events),
     };
+    let abort_ctx = ctx.clone();
     register_api(&lua, ctx)?;
 
     // Disable dynamic code loading from globals.
@@ -320,12 +371,22 @@ fn execute_lua(
     globals.set("loadfile", Value::Nil)?;
     globals.set("load", Value::Nil)?;
 
+    let check_abort =
+        lua.create_function(move |_, ()| abort_ctx.check_abort().map_err(mlua::Error::external))?;
+    lua.load(ABORT_GUARD_LUA)
+        .set_name("=abort_guard")
+        .call::<()>(check_abort)?;
+
     let chunk_name = shared.path.to_string_lossy().into_owned();
     lua.load(source).set_name(&chunk_name).exec()
 }
 
 fn resolve_stop_reason(shared: &InstanceShared, session_service: &SessionService) -> StopReason {
-    if let Some(reason) = *shared.stop_reason.lock().unwrap() {
+    if let Some(reason) = *shared
+        .stop_reason
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    {
         return reason;
     }
     if !session_service.is_connected() || session_service.generation() != shared.generation {
