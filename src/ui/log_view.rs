@@ -298,9 +298,8 @@ impl LogView {
             .flex_shrink_0()
             .h_full()
             .w(MINIMAP_WIDTH)
-            .bg(theme.bg_strip)
-            .border_l_1()
-            .border_color(theme.border_card)
+            // No background or border of its own: it reads as an extension of the scrollbar
+            // gutter, leaving the dock's divider as the only line on this side.
             .when(total > 0 && visible_rows > 0, |this| {
                 this.child(
                     div()
