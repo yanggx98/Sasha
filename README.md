@@ -18,18 +18,11 @@ compact, native interface.
 
 ## Preview
 
-<table>
-  <tr>
-    <th width="50%">Connect your device</th>
-    <th width="50%">Inspect and send data</th>
-  </tr>
-  <tr>
-    <td><a href="docs/images/sasha-connection.png"><img src="docs/images/sasha-connection.png" alt="Serial port selection and communication settings" width="100%" /></a></td>
-    <td><a href="docs/images/sasha-terminal.png"><img src="docs/images/sasha-terminal.png" alt="Example terminal session showing received and sent data" width="100%" /></a></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="docs/images/sasha-preview.png" alt="Sasha preview: serial port selection and communication settings, and an example terminal session showing received and sent data" width="100%" />
+</p>
 
-Click either screenshot to view it at full size.
+Original screenshots: [Connect your device](docs/images/sasha-connection.png) · [Inspect and send data](docs/images/sasha-terminal.png)
 
 The project is under active development. Windows is the current development and
 validation platform; macOS and Linux builds have not been verified on real hardware.
