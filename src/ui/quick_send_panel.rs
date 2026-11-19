@@ -289,7 +289,10 @@ impl RenderOnce for QuickSendPanel {
             .w_full()
             .min_w_0()
             .min_h_0()
-            .when(!self.collapsed, |this| this.flex_1())
+            // Content height, capped at half the dock; the command list scrolls inside.
+            .when(!self.collapsed, |this| {
+                this.flex_shrink(1.).max_h(relative(0.5))
+            })
             .when(self.collapsed, |this| this.flex_none())
             .bg(theme.bg_canvas)
             .border_t_1()

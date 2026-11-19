@@ -161,8 +161,12 @@ impl RenderOnce for LogView {
                                 let marker_color = markers.get(entry.id).map(|marker| marker.color);
                                 let entry_id = entry.id;
                                 let on_mark = on_mark.clone();
+                                let hover_bg = marker_color
+                                    .map(|color| marker_color_hsla(color, 0.30))
+                                    .unwrap_or(theme.bg_hover);
 
                                 h_flex()
+                                    .id(ElementId::named_usize("log-row", entry_id as usize))
                                     .w_full()
                                     .items_baseline()
                                     .gap_2()
@@ -180,6 +184,9 @@ impl RenderOnce for LogView {
                                     .when_some(marker_color, |this, color| {
                                         this.bg(marker_color_hsla(color, 0.18))
                                     })
+                                    // Like a button: the row under the pointer lights up, so it
+                                    // is clear which entry a right-click will mark.
+                                    .hover(move |style| style.bg(hover_bg))
                                     .on_mouse_down(MouseButton::Right, move |event, window, cx| {
                                         on_mark(entry_id, event.position, window, cx);
                                     })

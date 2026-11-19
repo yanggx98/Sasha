@@ -273,6 +273,7 @@ restart = "Restart Now"
 failed = "Update failed: %{detail}"
 
 [scripts]
+empty = "No scripts yet. Click + to add one."
 expand = "Expand scripts"
 not_running = "Not running"
 title = "Scripts"
@@ -314,6 +315,7 @@ high = "High"
 low = "Low"
 
 [quick]
+empty = "No quick commands yet. Click + to add one."
 title = "Quick send"
 search_placeholder = "Search commands..."
 new = "New command"

@@ -199,8 +199,11 @@ impl RenderOnce for MarkerPanel {
             .w_full()
             .min_w_0()
             .min_h_0()
-            .flex_none()
-            .when(!self.collapsed, |this| this.max_h(relative(0.4)))
+            // Directly below the quick-send section; shrinks (list scrolls) when space is short.
+            .when(!self.collapsed, |this| {
+                this.flex_shrink(1.).max_h(relative(0.4))
+            })
+            .when(self.collapsed, |this| this.flex_none())
             .bg(theme.bg_canvas)
             .border_t_1()
             .border_color(theme.border_card)

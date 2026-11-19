@@ -115,7 +115,7 @@ impl SettingsTab {
         match self {
             Self::General => LucideIcon::Settings,
             Self::View => LucideIcon::Eye,
-            Self::Shortcuts => LucideIcon::Settings,
+            Self::Shortcuts => LucideIcon::Keyboard,
             Self::About => LucideIcon::Info,
         }
     }
