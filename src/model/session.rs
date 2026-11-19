@@ -175,6 +175,8 @@ pub struct SessionState {
     pub counters: SessionCounters,
     pub logs: Vec<LogEntry>,
     pub retained_while_paused: Vec<LogEntry>,
+    /// User markers on log entries (memory only).
+    pub markers: super::log_marker::LogMarkers,
     /// Maximum receive-log payload kept, in bytes. Oldest rows are dropped past this cap.
     pub log_buffer_limit: usize,
     #[allow(dead_code)]
@@ -240,6 +242,7 @@ impl SessionState {
                 LogEntry::new_simulated(3, "14:26:07.343", LogDirection::Rx, rx_payload_2),
             ],
             retained_while_paused: Vec::new(),
+            markers: Default::default(),
             log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT as usize,
             active_picker: None,
             next_log_id: 4,
@@ -267,6 +270,7 @@ impl SessionState {
             counters: SessionCounters::default(),
             logs: Vec::new(),
             retained_while_paused: Vec::new(),
+            markers: Default::default(),
             log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT as usize,
             active_picker: None,
             next_log_id: 1,
@@ -408,6 +412,7 @@ impl SessionState {
     /// Clears visible logs without resetting RX/TX byte counters.
     pub fn clear_receive_logs(&mut self) {
         self.logs.clear();
+        self.markers.clear();
         self.rx_line_open = false;
     }
 
@@ -611,6 +616,21 @@ impl SessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_receive_logs_clears_markers() {
+        let mut state = SessionState::new_simulated_demo();
+        state.clear_receive_logs();
+        state.record_tx_bytes(b"AT", "12:00:00.000");
+        let id = state.logs.last().expect("a log entry").id;
+        state
+            .markers
+            .set(id, "first", crate::model::log_marker::MarkerColor::Red)
+            .unwrap();
+        assert_eq!(state.markers.len(), 1);
+        state.clear_receive_logs();
+        assert!(state.markers.is_empty());
+    }
 
     #[test]
     fn simulated_demo_is_clearly_labelled() {
