@@ -77,6 +77,11 @@ impl LogFilterState {
         }
     }
 
+    /// The draft differs from the filter in effect (not applied yet, or invalid).
+    pub fn has_pending(&self) -> bool {
+        self.draft != self.applied
+    }
+
     pub fn is_active(&self) -> bool {
         self.applied.is_active()
     }
@@ -416,6 +421,22 @@ mod tests {
         let change = view.sync(&logs, &filter, false);
         assert!(change.removed);
         assert_eq!(change.prefix, 0);
+    }
+
+    #[test]
+    fn drafts_stay_pending_until_applied() {
+        let mut filter = LogFilterState::default();
+        assert!(!filter.has_pending());
+        filter.draft.query = "OK".into();
+        assert!(filter.has_pending());
+        assert!(!filter.is_active());
+        filter.apply();
+        assert!(!filter.has_pending());
+        assert!(filter.is_active());
+        filter.draft.query = "[".into();
+        filter.draft.regex = true;
+        filter.apply();
+        assert!(filter.invalid && filter.has_pending());
     }
     #[test]
     fn filtering_isolated_from_pause_retention_counters_and_other_sessions() {

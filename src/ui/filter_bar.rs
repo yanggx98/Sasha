@@ -16,6 +16,7 @@ pub enum FilterControl {
     Regex,
     Exclude,
     Reset,
+    Apply,
 }
 
 pub type FilterCallback = Rc<dyn Fn(FilterControl, &mut Window, &mut App)>;
@@ -27,6 +28,8 @@ pub struct LogFilterBar {
     pub input: Entity<InputState>,
     pub filter: LogFilter,
     pub invalid: bool,
+    /// The draft differs from the filter in effect.
+    pub pending: bool,
     pub visible: usize,
     pub total: usize,
     pub on_control: FilterCallback,
@@ -166,6 +169,13 @@ impl RenderOnce for LogFilterBar {
                 "filter.reset_tooltip",
                 false,
                 FilterControl::Reset,
+            ))
+            .child(self.button(
+                "filter-apply",
+                "filter.apply_label",
+                "filter.apply_tooltip",
+                self.pending,
+                FilterControl::Apply,
             ));
 
         // Content of the toolbar's expanding drawer; the toolbar owns its

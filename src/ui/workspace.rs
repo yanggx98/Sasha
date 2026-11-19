@@ -74,9 +74,6 @@ struct ScriptEntryState {
     status: Option<ScriptStatus>,
 }
 
-/// Typing in the log filter applies after this long without further input.
-const FILTER_INPUT_DEBOUNCE: Duration = Duration::from_millis(150);
-
 struct SessionTab {
     id: u64,
     page: AppPage,
@@ -119,9 +116,6 @@ struct SessionTab {
     filter_input: Option<Entity<InputState>>,
     filter_input_display: Option<(Locale, bool)>,
     _filter_subscription: Option<Subscription>,
-    /// Pending debounced `apply()` for typing in the filter input; replacing or
-    /// dropping it cancels the previous timer.
-    filter_apply_task: Option<Task<()>>,
     last_notice: bool,
     last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
@@ -204,7 +198,6 @@ impl SessionTab {
             filter_input: None,
             filter_input_display: None,
             _filter_subscription: None,
-            filter_apply_task: None,
             last_notice: false,
             last_display_flags: (true, false),
             log_selection,
@@ -1688,31 +1681,21 @@ impl SashaApp {
             &input,
             window,
             move |this, input, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    let query = input.read(cx).value().to_string();
-                    if let Some(tab) = this.tab_mut(tab_id) {
-                        if tab.log_filter.draft.query == query {
-                            return;
+                match event {
+                    // Typing only edits the draft; the filter is applied
+                    // explicitly (Enter or the Apply button).
+                    InputEvent::Change => {
+                        let query = input.read(cx).value().to_string();
+                        if let Some(tab) = this.tab_mut(tab_id) {
+                            if tab.log_filter.draft.query == query {
+                                return;
+                            }
+                            tab.log_filter.draft.query = query;
                         }
-                        tab.log_filter.draft.query = query;
-                        tab.log_selection.set_selected_text("");
-                        // Rebuilding the visible rows scans every cached entry, so
-                        // wait until typing pauses. Buttons apply immediately.
-                        tab.filter_apply_task = Some(cx.spawn(async move |this, cx| {
-                            cx.background_executor().timer(FILTER_INPUT_DEBOUNCE).await;
-                            let _ = this.update(cx, |this, cx| {
-                                if let Some(tab) = this.tab_mut(tab_id) {
-                                    tab.filter_apply_task = None;
-                                    tab.log_filter.apply();
-                                    cx.notify();
-                                }
-                            });
-                        }));
-                        if this.active_tab_id == tab_id {
-                            TextSelection::clear(window, cx);
-                        }
+                        cx.notify();
                     }
-                    cx.notify();
+                    InputEvent::PressEnter { .. } => this.apply_log_filter(tab_id, window, cx),
+                    _ => {}
                 }
             },
         );
@@ -1742,23 +1725,41 @@ impl SashaApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let tab_id = self.active_tab_id;
         let tab = self.active_tab_mut();
         let draft = &mut tab.log_filter.draft;
+        // Edits stay in the draft until applied; only Apply and Reset take effect.
         match control {
             FilterControl::CycleDirection => draft.direction = draft.direction.next(),
             FilterControl::CaseSensitive => draft.case_sensitive = !draft.case_sensitive,
             FilterControl::Regex => draft.regex = !draft.regex,
             FilterControl::Exclude => draft.exclude = !draft.exclude,
             FilterControl::Reset => *draft = LogFilter::default(),
+            FilterControl::Apply => {}
         }
-        tab.log_filter.apply();
-        tab.log_selection.set_selected_text("");
-        let input = tab.filter_input.clone();
-        TextSelection::clear(window, cx);
-        if matches!(control, FilterControl::Reset) {
-            if let Some(input) = input {
-                input.update(cx, |state, cx| state.set_value("", window, cx));
+        match control {
+            FilterControl::Apply => self.apply_log_filter(tab_id, window, cx),
+            FilterControl::Reset => {
+                let input = self.active_tab().filter_input.clone();
+                self.apply_log_filter(tab_id, window, cx);
+                if let Some(input) = input {
+                    input.update(cx, |state, cx| state.set_value("", window, cx));
+                }
             }
+            _ => cx.notify(),
+        }
+    }
+
+    /// Make the draft the filter in effect (an invalid draft keeps the last
+    /// valid filter and only sets the error flag).
+    fn apply_log_filter(&mut self, tab_id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let is_active_tab = self.active_tab_id == tab_id;
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.log_filter.apply();
+            tab.log_selection.set_selected_text("");
+        }
+        if is_active_tab {
+            TextSelection::clear(window, cx);
         }
         cx.notify();
     }
@@ -3151,6 +3152,7 @@ impl Render for SashaApp {
         let filter_active = tab.log_filter.is_active();
         let filter_draft = tab.log_filter.draft.clone();
         let filter_invalid = tab.log_filter.invalid;
+        let filter_pending = tab.log_filter.has_pending();
         let filter_total = tab.state.logs.len();
         let filter_visible = tab.log_projection.rows.len();
         let search_matches = if search_open {
@@ -3706,6 +3708,7 @@ impl Render for SashaApp {
                                     input,
                                     filter: filter_draft,
                                     invalid: filter_invalid,
+                                    pending: filter_pending,
                                     visible: filter_visible,
                                     total: filter_total,
                                     on_control: on_filter_control,

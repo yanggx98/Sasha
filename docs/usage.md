@@ -21,7 +21,9 @@ requires valid UTF-8.
 Use the filter icon next to Search in the receive toolbar to show or hide the
 filter drawer. It expands upward inside the same bordered toolbar surface.
 Click the direction button to cycle through **All → RX → TX → All**.
-It starts at **All**. Enter a keyword to filter payloads as you type.
+It starts at **All**. Edits to the direction, keyword and the options below stay
+in a draft until you click **Apply** or press Enter in the keyword box; **Apply**
+is highlighted while the draft differs from the active filter.
 `Aa` enables case sensitivity, `.*` enables regular expressions, and `≠` excludes
 matching payloads (for example, heartbeat messages). These switches start off.
 The keyword is a single literal string unless regex is enabled; an empty keyword
@@ -35,10 +37,9 @@ text: `AA 55` matches those displayed bytes, while `AA55` does not. Regex operat
 on that same text, not raw bytes. Changing text/HEX mode reapplies the filter.
 An invalid or overly complex regex shows an error and keeps the complete last
 valid filter active, including for new data. The count shows visible / cached
-entries. `↺` resets the direction and all content options. While a filter is
-active, the toolbar has a tinted background and a border surrounds the log,
-send area, serial status bar, and scripts and quick send dock. The filter remains
-active when the drawer is collapsed.
+entries. `↺` resets the direction and all content options and takes effect
+immediately. While a filter is active, the toolbar has a tinted background. The
+filter remains active when the drawer is collapsed.
 
 Filters belong to each session and survive tab switches, but are not saved across
 app restarts. Search, selection copying and Save operate on filtered entries.
