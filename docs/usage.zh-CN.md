@@ -112,3 +112,6 @@ theme = "dark"                # 内置 id 或 themes/ 中的文件名
 
 语言支持 `en-US` 和 `zh-CN`，默认为 `zh-CN`。日志字号预设为 12、13、14、15 逻辑像素。此文件不恢复会话草稿和连接状态。如果 TOML 格式损坏，Sasha 会尝试备份为 `config.toml.bak`，并回退到默认配置。
 
+## 命令行
+
+需要无界面自动化时，参见[命令行](cli.zh-CN.md)（`sasha-cli`）。

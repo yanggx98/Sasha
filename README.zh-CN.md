@@ -37,6 +37,7 @@ Sasha 是一款使用 Rust 和 GPUI 编写的开源桌面串口调试工具，�
 - **接收查看**：文本/HEX、时间戳、搜索、RX/TX 与关键词过滤（大小写、正则、排除）、暂停、复制、导出。
 - **灵活发送**：UTF-8 文本或 HEX 字节，另有快捷发送与定时发送。
 - **Lua 脚本**：内置 Lua 5.4，自动化串口流程，无需另行安装。
+- **命令行**：`sasha-cli` 可无界面列出串口、发送数据、监听、运行 Lua 脚本，带退出码，适合自动化。
 - **实时流输出**：把会话的全部 RX/TX 日志实时追加到文件。
 - **主题**：内置多套深色与浅色配色（包括 ChatGPT），提供配色编辑器，支持自定义 TOML 主题热更新和可选背景图。
 - **版本更新**：检查 GitHub Releases，可在应用内安装新版本。
@@ -72,6 +73,7 @@ cargo run --locked            # 或：cargo build --release --locked  ->  target
 - [使用指南](docs/usage.zh-CN.md)：HEX 控制、实时流输出、快捷发送、定时发送、版本更新及 `config.toml` 偏好设置。
 - [主题](docs/themes.zh-CN.md)：内置与自定义主题。
 - [Lua 脚本 API](docs/lua-scripting-api.md)
+- [命令行](docs/cli.zh-CN.md)：面向自动化的 `sasha-cli`。
 - [参与贡献](CONTRIBUTING.md)（英文）
 
 ## 当前边界

@@ -156,6 +156,7 @@ pub fn parse_checksum_file(text: &str) -> Option<String> {
 
 /// Picks the highest-versioned non-draft release from the GitHub API response.
 /// Pre-releases are included because this project ships pre-release builds.
+#[cfg(test)]
 pub fn parse_latest_release(
     json: &str,
     asset_name: Option<&str>,

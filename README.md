@@ -43,6 +43,7 @@ welcome.
 - **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
+- **Command line** — `sasha-cli` lists ports, sends data, monitors and runs Lua scripts without a window, with exit codes for automation.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.
 - **Themes** — Built-in dark and light palettes, including ChatGPT, an in-app color editor, custom TOML themes with live reload, and an optional background image.
 - **Updates** — checks GitHub Releases and can install new versions in the app.
@@ -80,6 +81,7 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
   send, updates, and the `config.toml` preferences.
 - [Themes](docs/themes.md) — built-in and custom themes.
 - [Lua scripting API](docs/lua-scripting-api.md)
+- [Command line](docs/cli.md) — `sasha-cli` for automation.
 - [Contributing](CONTRIBUTING.md)
 
 ## Current boundaries

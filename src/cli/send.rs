@@ -25,7 +25,7 @@ pub fn parse_hex_arg(input: &str) -> Result<Vec<u8>, CliError> {
     if digits.is_empty() {
         return Err(CliError::usage("--hex must contain at least one byte"));
     }
-    if digits.len() % 2 != 0 || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !digits.len().is_multiple_of(2) || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(CliError::usage(
             "--hex must be hex byte pairs such as \"AA BB 01\" or \"AABB01\"",
         ));

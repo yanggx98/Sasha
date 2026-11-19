@@ -133,3 +133,7 @@ The log font size presets are 12, 13, 14, and 15 logical pixels.
 Session drafts and connection states are not restored from this file.
 If a malformed TOML file is detected, Sasha attempts to back it up as
 `config.toml.bak` and falls back to defaults.
+
+## Command line
+
+For automation without a window, see [Command line](cli.md) (`sasha-cli`).
