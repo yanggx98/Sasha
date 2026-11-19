@@ -146,30 +146,6 @@ pub fn command_for_shortcut(commands: &[QuickCommand], digit: usize) -> Option<&
     order.get(digit - 1).and_then(|&idx| commands.get(idx))
 }
 
-pub fn quick_shortcut_digit(
-    control: bool,
-    alt: bool,
-    shift: bool,
-    platform: bool,
-    key: &str,
-) -> Option<usize> {
-    if !alt || control || shift || platform {
-        return None;
-    }
-    match key {
-        "1" => Some(1),
-        "2" => Some(2),
-        "3" => Some(3),
-        "4" => Some(4),
-        "5" => Some(5),
-        "6" => Some(6),
-        "7" => Some(7),
-        "8" => Some(8),
-        "9" => Some(9),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuickRow {
     Group {
@@ -528,21 +504,6 @@ mod tests {
             }]
         );
     }
-
-    #[test]
-    fn quick_shortcut_digit_requires_alt_only() {
-        assert_eq!(
-            quick_shortcut_digit(false, true, false, false, "3"),
-            Some(3)
-        );
-        assert_eq!(quick_shortcut_digit(true, true, false, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, true, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, true, "3"), None);
-        assert_eq!(quick_shortcut_digit(true, false, false, false, "3"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, false, "0"), None);
-        assert_eq!(quick_shortcut_digit(false, true, false, false, "a"), None);
-    }
-
     #[test]
     fn editor_draft_roundtrip_and_validation() {
         let cmd = make_cmd("c1", "AT", "Init", "AT");

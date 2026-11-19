@@ -93,8 +93,8 @@ pub fn quick_skipped(locale: Locale, count: usize) -> String {
     rust_i18n::t!("quick.skipped", locale = locale.code(), count = count).into_owned()
 }
 
-pub fn quick_shortcut_hint(locale: Locale, digit: usize) -> String {
-    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), digit = digit).into_owned()
+pub fn quick_shortcut_hint(locale: Locale, keys: &str) -> String {
+    rust_i18n::t!("quick.shortcut_hint", locale = locale.code(), keys = keys).into_owned()
 }
 
 pub fn quick_save_failed(locale: Locale, err: &str) -> String {
@@ -317,6 +317,15 @@ pub fn theme_message(locale: Locale, message: &ThemeMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn quick_shortcut_hint_uses_the_given_keys() {
+        assert_eq!(
+            quick_shortcut_hint(Locale::EnUs, "Ctrl+Alt+3"),
+            "Ctrl+Alt+3 to send"
+        );
+        assert!(quick_shortcut_hint(Locale::ZhCn, "Alt+1").contains("Alt+1"));
+    }
+
     use super::*;
 
     #[test]

@@ -21,9 +21,9 @@ use crate::model::log::format_hex_input_with_cursor;
 use crate::model::log::{LogEntry, format_visible_logs};
 use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
 use crate::model::quick_command::{
-    QuickCommand, QuickEditorDraft, command_for_shortcut, quick_shortcut_digit, remove_command,
-    visible_rows,
+    QuickCommand, QuickEditorDraft, command_for_shortcut, remove_command, visible_rows,
 };
+use crate::model::shortcuts::{Modifiers, ShortcutAction};
 use crate::model::timed_send::{
     DraftCommit, EnterAction, IconAction, MAX_TIMER_INTERVAL_MS, MIN_TIMER_INTERVAL_MS,
     SendButtonAction, StopCause, TickOutcome, TimedSendState, commit_interval_draft,
@@ -824,62 +824,62 @@ impl SashaApp {
         self.select_tab(next_id, window, cx);
     }
 
+    /// The action bound to a key press, with the 1 to 9 digit for the digit families.
+    fn shortcut_for(
+        &self,
+        event: &KeyDownEvent,
+        cx: &App,
+    ) -> Option<(ShortcutAction, Option<usize>)> {
+        let m = &event.keystroke.modifiers;
+        let mods = Modifiers::new(m.control, m.alt, m.shift, m.platform);
+        self.config_store
+            .read(cx)
+            .config()
+            .shortcuts
+            .resolve(&event.keystroke.key, mods)
+    }
+
+    /// Session shortcuts (new, close, next, previous, jump). They work on every page.
     fn handle_tab_shortcut(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let mods = &event.keystroke.modifiers;
-        if !mods.control || mods.alt || mods.platform {
+        let Some((action, digit)) = self.shortcut_for(event, cx) else {
             return false;
-        }
-
-        if event.keystroke.key.eq_ignore_ascii_case("t") && !mods.shift {
-            self.new_tab(window, cx);
-            return true;
-        }
-        if event.keystroke.key.eq_ignore_ascii_case("w") && !mods.shift {
-            let active_id = self.active_tab_id;
-            self.close_tab(active_id, window, cx);
-            return true;
-        }
-        if event.keystroke.key.eq_ignore_ascii_case("tab") {
-            let delta = if mods.shift { -1 } else { 1 };
-            self.cycle_tab(delta, window, cx);
-            return true;
-        }
-        if !mods.shift
-            && let Some(digit) = event.keystroke.key.parse::<usize>().ok()
-            && (1..=9).contains(&digit)
-        {
-            let target_idx = if digit == 9 {
-                self.tabs.len().saturating_sub(1)
-            } else {
-                digit - 1
-            };
-            if let Some(tab) = self.tabs.get(target_idx) {
-                let id = tab.id;
-                self.select_tab(id, window, cx);
+        };
+        match (action, digit) {
+            (ShortcutAction::NewSession, _) => self.new_tab(window, cx),
+            (ShortcutAction::CloseSession, _) => {
+                let active_id = self.active_tab_id;
+                self.close_tab(active_id, window, cx);
             }
-            return true;
+            (ShortcutAction::NextSession, _) => self.cycle_tab(1, window, cx),
+            (ShortcutAction::PrevSession, _) => self.cycle_tab(-1, window, cx),
+            (ShortcutAction::JumpSession, Some(digit)) => {
+                let target_idx = if digit == 9 {
+                    self.tabs.len().saturating_sub(1)
+                } else {
+                    digit - 1
+                };
+                if let Some(tab) = self.tabs.get(target_idx) {
+                    let id = tab.id;
+                    self.select_tab(id, window, cx);
+                }
+            }
+            _ => return false,
         }
-        false
+        true
     }
 
+    /// Sends the quick command bound to the pressed digit, on the workspace page only.
     fn handle_quick_shortcut(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         let tab = self.active_tab();
         if tab.page != AppPage::Workspace || tab.state.active_picker.is_some() {
             return false;
         }
-        let mods = &event.keystroke.modifiers;
-        let Some(digit) = quick_shortcut_digit(
-            mods.control,
-            mods.alt,
-            mods.shift,
-            mods.platform,
-            &event.keystroke.key,
-        ) else {
+        let Some((ShortcutAction::QuickSend, Some(digit))) = self.shortcut_for(event, cx) else {
             return false;
         };
         let command_id =
@@ -3023,6 +3023,13 @@ impl SashaApp {
             on_open_settings,
             self.update_manager.read(cx).has_update(),
         )
+        .new_shortcut(
+            self.config_store
+                .read(cx)
+                .config()
+                .shortcuts
+                .display(ShortcutAction::NewSession),
+        )
     }
 
     fn build_top_bar(&self, script_width: Pixels) -> impl IntoElement {
@@ -3369,11 +3376,23 @@ impl Render for SashaApp {
         };
 
         let quick_search_input = self.ensure_quick_search_input(active_id, window, cx);
-        let (quick_commands, skipped_count) = {
+        let search_keys = self
+            .config_store
+            .read(cx)
+            .config()
+            .shortcuts
+            .display(ShortcutAction::Search);
+        let (quick_commands, skipped_count, quick_send_mods) = {
             let store = self.config_store.read(cx);
             (
                 store.config().quick_commands.clone(),
                 store.skipped_quick_commands(),
+                store
+                    .config()
+                    .shortcuts
+                    .modifiers_for(ShortcutAction::QuickSend)
+                    .map(|mods| mods.display())
+                    .unwrap_or_default(),
             )
         };
         let quick_rows = visible_rows(&quick_commands, &quick_query, &quick_collapsed_groups);
@@ -3455,6 +3474,7 @@ impl Render for SashaApp {
             skipped_notice,
             collapsed: quick_collapsed,
             compact: panel_is_compact(script_panel_width),
+            shortcut_mods: quick_send_mods,
             pending_delete: quick_pending_delete,
             on_send: on_quick_send,
             on_toggle_group: on_quick_toggle_group,
@@ -3659,11 +3679,10 @@ impl Render for SashaApp {
                     return;
                 }
 
-                let is_search_shortcut = (event.keystroke.modifiers.control
-                    || event.keystroke.modifiers.platform)
-                    && !event.keystroke.modifiers.alt
-                    && !event.keystroke.modifiers.shift
-                    && event.keystroke.key.eq_ignore_ascii_case("f");
+                let is_search_shortcut = matches!(
+                    this.shortcut_for(event, cx),
+                    Some((ShortcutAction::Search, _))
+                );
                 if is_search_shortcut {
                     this.open_search(window, cx);
                     cx.stop_propagation();
@@ -3797,6 +3816,7 @@ impl Render for SashaApp {
                                     on_tx_send_hex,
                                     on_tx_line_ending,
                                 )
+                                .search_shortcut(search_keys.clone())
                                 .send_collapse(send_collapsed, on_tx_collapse.clone())
                                 .log_filter(filter_open, filter_active, on_rx_filter)
                                 .filter_panel(filter_input.map(|input| LogFilterBar {

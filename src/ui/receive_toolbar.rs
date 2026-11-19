@@ -44,6 +44,8 @@ pub struct ReceiveToolbar {
     filter_panel: Option<LogFilterBar>,
     /// `(collapsed, callback)`: fold/unfold toggle for the send card, shown at the right end.
     send_collapse: Option<(bool, ToolbarActionCallback)>,
+    /// Key combination appended to the search tooltip, e.g. `Ctrl+F`.
+    search_shortcut: Option<SharedString>,
 }
 
 impl ReceiveToolbar {
@@ -97,11 +99,17 @@ impl ReceiveToolbar {
             filter: None,
             filter_panel: None,
             send_collapse: None,
+            search_shortcut: None,
         }
     }
 
     pub fn send_collapse(mut self, collapsed: bool, callback: ToolbarActionCallback) -> Self {
         self.send_collapse = Some((collapsed, callback));
+        self
+    }
+
+    pub fn search_shortcut(mut self, keys: impl Into<SharedString>) -> Self {
+        self.search_shortcut = Some(keys.into());
         self
     }
 
@@ -293,7 +301,12 @@ impl RenderOnce for ReceiveToolbar {
             .child(self.icon_tool_button(
                 "rx-tool-search",
                 LucideIcon::Search,
-                tr_shared(locale, "tooltip.rx_search"),
+                match &self.search_shortcut {
+                    Some(keys) => {
+                        format!("{} ({keys})", tr_shared(locale, "tooltip.rx_search")).into()
+                    }
+                    None => tr_shared(locale, "tooltip.rx_search"),
+                },
                 if self.search_open {
                     Some(TransitionFlag {
                         active: true,

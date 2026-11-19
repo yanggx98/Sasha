@@ -26,6 +26,8 @@ pub struct QuickSendPanel {
     pub skipped_notice: Option<SharedString>,
     pub collapsed: bool,
     pub compact: bool,
+    /// Configured modifiers of the quick-send keys, e.g. `Alt`; the digit is appended.
+    pub shortcut_mods: String,
     pub pending_delete: Option<String>,
     pub on_send: QuickIdCallback,
     pub on_toggle_group: QuickIdCallback,
@@ -216,9 +218,11 @@ impl RenderOnce for QuickSendPanel {
                     let name: SharedString = cmd.name.clone().into();
                     let preview = cmd.preview();
                     let tooltip: SharedString = match shortcut {
-                        Some(digit) => {
-                            format!("{preview}\n{}", quick_shortcut_hint(locale, *digit)).into()
-                        }
+                        Some(digit) => format!(
+                            "{preview}\n{}",
+                            quick_shortcut_hint(locale, &format!("{}+{digit}", self.shortcut_mods))
+                        )
+                        .into(),
                         None => preview.into(),
                     };
                     let on_send = self.on_send.clone();
@@ -251,7 +255,7 @@ impl RenderOnce for QuickSendPanel {
                                         .px_1()
                                         .text_xs()
                                         .text_color(theme.text_muted)
-                                        .child(format!("Alt+{digit}")),
+                                        .child(format!("{}+{digit}", self.shortcut_mods)),
                                 )
                             })
                             .child(self.action_icon(

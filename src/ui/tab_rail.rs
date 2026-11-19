@@ -39,6 +39,8 @@ pub struct TabRail {
     on_new_tab: TabNewCallback,
     on_open_settings: SettingsOpenCallback,
     update_available: bool,
+    /// Key combination appended to the new-tab tooltip, e.g. `Ctrl+T`.
+    new_shortcut: Option<SharedString>,
 }
 
 impl TabRail {
@@ -61,13 +63,22 @@ impl TabRail {
             on_new_tab,
             on_open_settings,
             update_available,
+            new_shortcut: None,
         }
+    }
+
+    pub fn new_shortcut(mut self, keys: impl Into<SharedString>) -> Self {
+        self.new_shortcut = Some(keys.into());
+        self
     }
 }
 
 impl RenderOnce for TabRail {
     fn render(self, _: &mut Window, _: &mut App) -> impl IntoElement {
-        let new_tooltip = tr_shared(self.locale, "tab.new_tooltip");
+        let new_tooltip: SharedString = match &self.new_shortcut {
+            Some(keys) => format!("{} ({keys})", tr_shared(self.locale, "tab.new_tooltip")).into(),
+            None => tr_shared(self.locale, "tab.new_tooltip"),
+        };
         let new_label = tr_shared(self.locale, "tab.new_label");
         let update_available = self.update_available;
         let settings_tooltip: SharedString = if update_available {
