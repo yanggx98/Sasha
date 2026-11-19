@@ -41,6 +41,7 @@ welcome.
 - **Multiple sessions** — independent connections, switched from the right sidebar.
 - **Full serial configuration** — port discovery, baud rate, frame format, flow control, DTR/RTS.
 - **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
+- **Log markers** — right-click an entry to mark it with a name and color; it is highlighted, shown on a mini map beside the scrollbar, and listed in the right dock.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
 - **Command line** — `sasha-cli` lists ports, sends data, monitors and runs Lua scripts without a window, with exit codes for automation.

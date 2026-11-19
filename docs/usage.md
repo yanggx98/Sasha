@@ -50,6 +50,28 @@ affect serial reception, paused data retention, Lua input, or live stream output
 errors remain in their separate panels or status messages. Incoming data updates
 the filtered view; automatic scrolling follows only changes to visible entries.
 
+## Log markers
+
+Right-click an entry in the receive log to mark it. A small form asks for a **name** (up to
+32 characters) and one of eight **colors**; **OK** (or `Enter`) marks the whole entry with
+that color, and `Esc` or a click outside closes the form. An entry is one received or sent
+event, so a marker highlights everything that event produced. Right-click a marked entry to
+rename it, change its color or remove the marker.
+
+- **Mini map**: a narrow strip to the right of the log scrollbar shows where the marked
+  entries are in the whole visible log, plus a frame for the part on screen. Click a block to
+  scroll to that entry; auto-scroll is switched off so new data does not pull the view away.
+- **Markers section**: the right dock lists every marker of the session below **Quick send**,
+  with its name, color, timestamp and direction. Click a row to scroll to it, use the pencil to
+  edit it or `×` to remove it, and the `×` in the title to remove all markers (with a
+  confirmation). Entries hidden by the log filter stay in the list, greyed out and not
+  clickable, and they are also left off the mini map until the filter is cleared. The section
+  can be collapsed and is hidden when the right dock is narrow.
+
+Markers are kept in memory for the session only: they are not saved to `config.toml`, not
+written to exports or live stream output, and they disappear when the log is cleared or when
+the log buffer limit drops the marked entry.
+
 ## Live stream output
 
 Click `⇥` in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug `log` output is excluded.
