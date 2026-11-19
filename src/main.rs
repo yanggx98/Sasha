@@ -20,6 +20,7 @@ fn main() {
     update::cleanup_leftovers();
     application().with_assets(assets::AllAssets).run(|cx| {
         init(cx);
+        ui::fonts::register(cx);
         let config_store = cx.new(|_| ConfigStore::load_default());
         // Applies the configured theme (default: built-in dark) to the global gpui
         // `Theme`, including the native-red window-close danger colors.

@@ -28,13 +28,13 @@ Sasha 是一款使用 Rust 和 GPUI 编写的开源桌面串口调试工具，�
 
 点击截图可查看原图。
 
-项目正在持续开发。目前以 Windows 为开发和验证平台，尚未验证 macOS 与 Linux 构建。
+项目正在持续开发。目前以 Windows 为开发和验证平台，macOS 与 Linux 尚未在真机上验证。CI 会在 macOS 和 Ubuntu 上编译并运行测试，欢迎有 Mac / Linux 的用户反馈使用情况。
 
 ## 功能
 
 - **多会话管理**：多个独立连接，通过右侧栏切换。
 - **完整串口配置**：端口发现、波特率、帧格式、流控及 DTR/RTS。
-- **接收查看**：文本/HEX、时间戳、搜索、暂停、复制、导出。
+- **接收查看**：文本/HEX、时间戳、搜索、RX/TX 与关键词过滤（大小写、正则、排除）、暂停、复制、导出。
 - **灵活发送**：UTF-8 文本或 HEX 字节，另有快捷发送与定时发送。
 - **Lua 脚本**：内置 Lua 5.4，自动化串口流程，无需另行安装。
 - **实时流输出**：把会话的全部 RX/TX 日志实时追加到文件。
@@ -79,10 +79,11 @@ cargo run --locked            # 或：cargo build --release --locked  ->  target
 - 可见日志最多保留最近 **2,000 条记录**。导出保存当前可见历史及其显示格式，并非完整的原始数据抓取。
 - 暂停只冻结日志显示，不会停止串口连接。
 - 真实串口连接支持 1 或 2 个停止位，后端会拒绝 1.5 个停止位。
+- 仅内置拉丁字符等宽字体，中文等其他文字使用系统回退字体。Linux 上若中文显示为方块，请安装 CJK 字体（如 `fonts-noto-cjk`）。
 
 ## 致谢
 
-基于 [GPUI-KIT](https://github.com/longbridge/gpui-kit) 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建。开发过程中使用的 AI 工具有：DeepSeek、Grok、ChatGPT、Gemini、Claude。
+基于 [GPUI-KIT](https://github.com/longbridge/gpui-kit) 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建。内置等宽字体为 [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono)（SIL OFL 1.1，见 `assets/fonts/OFL-JetBrainsMono.txt`）。开发过程中使用的 AI 工具有：DeepSeek、Grok、ChatGPT、Gemini、Claude。
 
 ## 参与贡献与反馈
 

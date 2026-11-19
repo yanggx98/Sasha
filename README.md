@@ -32,13 +32,15 @@ compact, native interface.
 Click either screenshot to view it at full size.
 
 The project is under active development. Windows is the current development and
-validation platform; macOS and Linux builds have not been verified.
+validation platform; macOS and Linux builds have not been verified on real hardware.
+CI compiles and tests on macOS and Ubuntu, and feedback from macOS and Linux users is
+welcome.
 
 ## Features
 
 - **Multiple sessions** — independent connections, switched from the right sidebar.
 - **Full serial configuration** — port discovery, baud rate, frame format, flow control, DTR/RTS.
-- **Receive inspection** — text or HEX, timestamps, search, pause, copy, export.
+- **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
 - **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.
@@ -86,11 +88,14 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
   visible history in its current display format, not a full raw capture.
 - Pausing freezes log display, not the serial connection.
 - Real serial connections support one or two stop bits; 1.5 is rejected by the backend.
+- Only a Latin monospace font is bundled; other scripts such as Chinese use system fallback fonts. On Linux, install a CJK font (e.g. `fonts-noto-cjk`) if they show as boxes.
 
 ## Acknowledgements
 
 Built on [GPUI-KIT](https://github.com/longbridge/gpui-kit) and
-[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). AI tools used
+[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui). The bundled monospace
+font is [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) (SIL OFL 1.1, see
+`assets/fonts/OFL-JetBrainsMono.txt`). AI tools used
 during development include DeepSeek, Grok, ChatGPT, Gemini, and Claude.
 
 ## Contributing and feedback

@@ -16,6 +16,40 @@ HEX input uses space-separated byte pairs, such as `0A FF 1B`.
 Text mode can append no line ending, CRLF (`\r\n`), or LF (`\n`); HEX mode sends the
 parsed bytes without appending a text line ending. Converting HEX back to text
 requires valid UTF-8.
+## Log filtering
+
+Use the filter icon next to Search in the receive toolbar to show or hide the
+filter drawer. It expands upward inside the same bordered toolbar surface.
+Click the direction button to cycle through **All → RX → TX → All**.
+It starts at **All**. Edits to the direction, keyword and the options below stay
+in a draft until you click **Apply** or press Enter in the keyword box; **Apply**
+is highlighted while the draft differs from the active filter.
+`Aa` enables case sensitivity, `.*` enables regular expressions, and `≠` excludes
+matching payloads (for example, heartbeat messages). These switches start off.
+The keyword is a single literal string unless regex is enabled; an empty keyword
+does not restrict content, even when exclusion is enabled. Direction and content
+conditions must both pass. Matching uses whole retained log entries, without
+joining adjacent entries or splitting visual wraps.
+
+Only payloads are matched, excluding timestamps and direction tags. Text mode
+matches the displayed text; HEX mode matches the displayed space-separated HEX
+text: `AA 55` matches those displayed bytes, while `AA55` does not. Regex operates
+on that same text, not raw bytes. Changing text/HEX mode reapplies the filter.
+An invalid or overly complex regex shows an error and keeps the complete last
+valid filter active, including for new data. The count shows visible / cached
+entries. `↺` resets the direction and all content options and takes effect
+immediately. While a filter is active, the toolbar has a tinted background. The
+filter remains active when the drawer is collapsed.
+
+Filters belong to each session and survive tab switches, but are not saved across
+app restarts. Search, selection copying and Save operate on filtered entries.
+Clear removes **all** displayed-cache entries, including those hidden by the
+filter, while keeping the filter settings and byte counters. Filtering does not
+affect serial reception, paused data retention, Lua input, or live stream output
+(including its initial buffer snapshot). Lua `print` / `log` output and connection
+errors remain in their separate panels or status messages. Incoming data updates
+the filtered view; automatic scrolling follows only changes to visible entries.
+
 ## Live stream output
 
 Click `⇥` in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug `log` output is excluded.
