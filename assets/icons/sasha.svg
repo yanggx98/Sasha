@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#EEF1F6"/>
+    </linearGradient>
+    <linearGradient id="tx" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#D02A93"/><stop offset="1" stop-color="#EC3F9E"/>
+    </linearGradient>
+    <linearGradient id="rx" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#1F67DB"/><stop offset="1" stop-color="#3B8BF5"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <rect x="9" y="9" width="238" height="238" rx="55" fill="none" stroke="#0B1530" stroke-opacity=".12" stroke-width="2"/>
+  <g fill="none" stroke-width="24" stroke-linejoin="round">
+    <path d="M128 128H80V76H148" stroke="url(#tx)"/>
+    <path d="M128 128H176V180H108" stroke="url(#rx)"/>
+  </g>
+  <polygon points="146,48 146,104 196,76" fill="#EC3F9E" stroke="#EC3F9E" stroke-width="4" stroke-linejoin="round"/>
+  <polygon points="110,152 110,208 60,180" fill="#3B8BF5" stroke="#3B8BF5" stroke-width="4" stroke-linejoin="round"/>
+</svg>
