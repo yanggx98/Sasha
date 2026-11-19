@@ -36,10 +36,39 @@ pub struct PortsArgs {
     pub json: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LineEndingArg {
+    None,
+    Crlf,
+    Lf,
+}
+
 #[derive(Args, Debug)]
+#[command(group(clap::ArgGroup::new("payload").required(true).args(["text", "hex"])))]
 pub struct SendArgs {
     #[command(flatten)]
     pub serial: SerialArgs,
+    /// Send this text (UTF-8)
+    #[arg(long)]
+    pub text: Option<String>,
+    /// Send these bytes, as hex pairs ("AA BB 01" or "AABB01")
+    #[arg(long)]
+    pub hex: Option<String>,
+    /// Line ending appended to --text
+    #[arg(long, value_enum, default_value_t = LineEndingArg::None)]
+    pub line_ending: LineEndingArg,
+    /// Append a checksum to --hex: sum8, xor8, crc8, crc16_modbus, crc16_ccitt, crc32
+    #[arg(long)]
+    pub checksum: Option<String>,
+    /// Wait for a response matching this regex after sending
+    #[arg(long)]
+    pub expect: Option<String>,
+    /// How long to wait for --expect, in milliseconds
+    #[arg(long, default_value_t = 1000, requires = "expect")]
+    pub timeout: u64,
+    /// Print the result as JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]

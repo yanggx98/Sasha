@@ -2,6 +2,9 @@
 
 pub mod args;
 pub mod exit;
+pub mod matcher;
+pub mod send;
+pub mod session;
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -40,6 +43,7 @@ where
             let _ = out.write_all(format_ports(&detected, ports.json).as_bytes());
             exit::CliExit::Ok
         }
+        args::Command::Send(send) => send::run_send(send, out, err),
         _ => {
             let _ = writeln!(err, "error: this command is not implemented yet");
             exit::CliExit::Failure
