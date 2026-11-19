@@ -63,7 +63,7 @@ New or empty files receive one UTF-8 BOM to help Windows editors recognize their
 Writes run in the background and flush application buffers after each record. Pausing, clearing, memory trimming, switching tabs and disconnecting do not stop capture. Stopping drains queued records in the background; closing a session waits for them to drain, and normal app exit drains them within the framework shutdown window. File errors or a full writer queue stop capture and display an error above the toolbar.
 ## Quick send
 
-The **Quick send** section sits in the right dock below **Scripts**. Each saved command stores `id`, `name`, optional `group`, `content`, `hex`, and `line_ending` (`"none"`, `"crlf"`, or `"lf"`, ignored when `hex = true`), and `checksum` (`"none"` by default, or `"sum8"`, `"xor8"`, `"crc8"`, `"crc16_modbus"`, `"crc16_ccitt"`, `"crc32"`; appended to the parsed bytes only when `hex = true`; CRC-16/Modbus is sent low byte first, other multi-byte checksums high byte first). Click any command to send it directly using its own HEX/line-ending settings without modifying the send card draft, or press `Alt+1` … `Alt+9` in the workspace to send the first 9 commands in display order (across groups, regardless of search filter or collapsed groups). Commands are shared across sessions and persisted in `config.toml`:
+The **Quick send** section sits in the right dock below **Scripts**. Each saved command stores `id`, `name`, optional `group`, `content`, `hex`, and `line_ending` (`"none"`, `"crlf"`, or `"lf"`, ignored when `hex = true`), and `checksum` (`"none"` by default, or `"sum8"`, `"xor8"`, `"crc8"`, `"crc16_modbus"`, `"crc16_ccitt"`, `"crc32"`; appended to the parsed bytes only when `hex = true`; CRC-16/Modbus is sent low byte first, other multi-byte checksums high byte first). Click any command to send it directly using its own HEX/line-ending settings without modifying the send card draft, or press `Alt+1` … `Alt+9` (the modifier is configurable, see [Keyboard shortcuts](#keyboard-shortcuts)) in the workspace to send the first 9 commands in display order (across groups, regardless of search filter or collapsed groups). Commands are shared across sessions and persisted in `config.toml`:
 
 ```toml
 [[quick_commands]]
@@ -133,6 +133,46 @@ The log font size presets are 12, 13, 14, and 15 logical pixels.
 Session drafts and connection states are not restored from this file.
 If a malformed TOML file is detected, Sasha attempts to back it up as
 `config.toml.bak` and falls back to defaults.
+
+## Keyboard shortcuts
+
+**Settings → Shortcuts** lists the shortcuts you can change. Click **Change** on a row and
+press the new keys (`Esc` cancels); **Default** restores one row and **Reset all** restores
+every row. Changes apply immediately and are saved in `config.toml`.
+
+| Action | Default | What you can change |
+| --- | --- | --- |
+| New session | `Ctrl+T` | The whole key |
+| Close session | `Ctrl+W` | The whole key |
+| Next session | `Ctrl+Tab` | The whole key |
+| Previous session | `Ctrl+Shift+Tab` | The whole key |
+| Open log search | `Ctrl+F` (`Cmd+F` on macOS) | The whole key |
+| Jump to session 1–9 | `Ctrl+1` … `Ctrl+9` | The modifier keys only |
+| Send quick command 1–9 | `Alt+1` … `Alt+9` | The modifier keys only |
+
+For the two 1–9 rows, press the modifier keys together with any digit, for example
+`Ctrl+Alt+1`; only the modifiers are kept. `Ctrl+9` jumps to the last session. Copy
+(`Ctrl+C`), `F3`, `Esc` and `Enter` are fixed.
+
+Rules: a shortcut needs `Ctrl`, `Alt` or `Cmd` (Shift alone is not enough), and two actions
+cannot share a key. A key that is already taken is refused and the message names the action
+using it. A single key also cannot be `Ctrl+1` … `Ctrl+9` while the jump modifiers are `Ctrl`.
+
+```toml
+[shortcuts]
+new_session = "ctrl-n"
+close_session = "ctrl-w"
+next_session = "ctrl-tab"
+prev_session = "ctrl-shift-tab"
+search = "ctrl-f"
+jump_session = "ctrl"
+quick_send = "ctrl-alt"
+```
+
+Values are lower-case and joined with `-`; the last part of a single key is the key name
+(`t`, `tab`, `f3`), and the 1–9 rows hold only modifiers (`ctrl`, `alt`, `shift`, `cmd`).
+A missing, invalid or clashing entry keeps its default; if the file as a whole cannot be
+made consistent, all shortcuts fall back to the defaults. Other settings are not affected.
 
 ## Command line
 

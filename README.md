@@ -73,7 +73,10 @@ cargo run --locked            # or: cargo build --release --locked  ->  target/r
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous session |
 | `Ctrl+1` … `Ctrl+8`, `Ctrl+9` | Jump to session 1–8 / the last session |
 | `Alt+1` … `Alt+9` | Send the matching quick-send command |
+| `Ctrl+F` | Search logs |
 | `Ctrl+C` | Copy selected text |
+
+These are the defaults. Everything except copy can be changed in **Settings → Shortcuts**.
 
 ## Documentation
 

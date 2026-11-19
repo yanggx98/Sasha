@@ -54,7 +54,7 @@ HEX 使用空格分隔的两位字节，例如 `0A FF 1B`。文本模式可选�
 
 ## 快捷发送
 
-**快捷发送**区块位于右侧栏**脚本**区块下方。每条命令保存 `id`、`name`、可选 `group`、`content`、`hex` 与 `line_ending`（`"none"` / `"crlf"` / `"lf"`，开启 `hex = true` 时忽略））与 `checksum`（默认 `"none"`，可选 `"sum8"` / `"xor8"` / `"crc8"` / `"crc16_modbus"` / `"crc16_ccitt"` / `"crc32"`；仅在 `hex = true` 时把校验字节追加到解析后的字节之后；CRC-16/Modbus 低字节在前，其余多字节校验高字节在前）。点击命令会按其自带的 HEX 与换行符设置直接发送，不会改动发送卡输入框和底栏状态；在工作区按 `Alt+1` … `Alt+9` 可发送展示顺序中的前 9 条命令（跨分组计数，不受搜索过滤或折叠影响）。命令在所有会话间共享，并持久化在 `config.toml` 中：
+**快捷发送**区块位于右侧栏**脚本**区块下方。每条命令保存 `id`、`name`、可选 `group`、`content`、`hex` 与 `line_ending`（`"none"` / `"crlf"` / `"lf"`，开启 `hex = true` 时忽略））与 `checksum`（默认 `"none"`，可选 `"sum8"` / `"xor8"` / `"crc8"` / `"crc16_modbus"` / `"crc16_ccitt"` / `"crc32"`；仅在 `hex = true` 时把校验字节追加到解析后的字节之后；CRC-16/Modbus 低字节在前，其余多字节校验高字节在前）。点击命令会按其自带的 HEX 与换行符设置直接发送，不会改动发送卡输入框和底栏状态；在工作区按 `Alt+1` … `Alt+9`（修饰键可在[快捷键](#快捷键)中修改）可发送展示顺序中的前 9 条命令（跨分组计数，不受搜索过滤或折叠影响）。命令在所有会话间共享，并持久化在 `config.toml` 中：
 
 ```toml
 [[quick_commands]]
@@ -111,6 +111,42 @@ theme = "dark"                # 内置 id 或 themes/ 中的文件名
 ```
 
 语言支持 `en-US` 和 `zh-CN`，默认为 `zh-CN`。日志字号预设为 12、13、14、15 逻辑像素。此文件不恢复会话草稿和连接状态。如果 TOML 格式损坏，Sasha 会尝试备份为 `config.toml.bak`，并回退到默认配置。
+
+## 快捷键
+
+**设置 → 快捷键** 列出了可以修改的快捷键。点击某一行的**修改**，再按下新的组合键（`Esc` 取消）；
+**默认**恢复这一行，**全部恢复**恢复所有行。修改立即生效，并保存在 `config.toml` 中。
+
+| 动作 | 默认键位 | 可修改内容 |
+| --- | --- | --- |
+| 新建会话 | `Ctrl+T` | 整个键 |
+| 关闭会话 | `Ctrl+W` | 整个键 |
+| 下一个会话 | `Ctrl+Tab` | 整个键 |
+| 上一个会话 | `Ctrl+Shift+Tab` | 整个键 |
+| 打开日志搜索 | `Ctrl+F`（macOS 为 `Cmd+F`） | 整个键 |
+| 跳转到第 1–9 个会话 | `Ctrl+1` … `Ctrl+9` | 仅修饰键 |
+| 发送第 1–9 条快捷命令 | `Alt+1` … `Alt+9` | 仅修饰键 |
+
+两个 1–9 的行，请按下修饰键加任意一个数字，例如 `Ctrl+Alt+1`，只保留修饰键。`Ctrl+9` 跳转到最后一个会话。
+复制（`Ctrl+C`）、`F3`、`Esc`、`Enter` 固定不变。
+
+规则：快捷键必须带 `Ctrl`、`Alt` 或 `Cmd`（只有 Shift 不行），两个动作不能用同一个键。键位已被占用时会拒绝，
+并在提示里写出占用它的动作。跳转会话的修饰键是 `Ctrl` 时，单个键也不能设为 `Ctrl+1` … `Ctrl+9`。
+
+```toml
+[shortcuts]
+new_session = "ctrl-n"
+close_session = "ctrl-w"
+next_session = "ctrl-tab"
+prev_session = "ctrl-shift-tab"
+search = "ctrl-f"
+jump_session = "ctrl"
+quick_send = "ctrl-alt"
+```
+
+取值用小写并以 `-` 连接；单个键最后一段是键名（`t`、`tab`、`f3`），两个 1–9 的行只写修饰键
+（`ctrl`、`alt`、`shift`、`cmd`）。缺失、无效或冲突的项保持默认值；如果整体无法保持一致，全部快捷键回到默认。
+其他设置不受影响。
 
 ## 命令行
 

@@ -66,7 +66,10 @@ cargo run --locked            # 或：cargo build --release --locked  ->  target
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | 下一个 / 上一个会话 |
 | `Ctrl+1` … `Ctrl+8`、`Ctrl+9` | 切换到第 1–8 个 / 最后一个会话 |
 | `Alt+1` … `Alt+9` | 发送对应的快捷指令 |
+| `Ctrl+F` | 搜索日志 |
 | `Ctrl+C` | 复制选中文字 |
+
+以上为默认键位，除复制外都可以在**设置 → 快捷键**中修改。
 
 ## 文档
 
