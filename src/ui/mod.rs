@@ -2,6 +2,7 @@ pub mod bottom_bar;
 pub mod filter_bar;
 pub mod fonts;
 pub mod log_minimap;
+pub mod log_pointer;
 pub mod log_view;
 pub mod marker_editor;
 pub mod marker_panel;

@@ -353,6 +353,16 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn set_log_wrap(&mut self, wrap: crate::model::LogWrap, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.log_wrap = wrap);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
     /// A color row changed: preview the draft when every row is valid.
     pub(crate) fn theme_editor_changed(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = &mut self.theme_editor else {
@@ -1217,10 +1227,11 @@ impl SettingsWindow {
 
     fn render_view_tab(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let locale = self.current_locale(cx);
-        let (current_size, bg_image, bg_opacity) = {
+        let (current_size, current_wrap, bg_image, bg_opacity) = {
             let cfg = self.config_store.read(cx).config();
             (
                 cfg.log_font_size,
+                cfg.log_wrap,
                 cfg.background_image.clone(),
                 cfg.background_opacity,
             )
@@ -1268,6 +1279,55 @@ impl SettingsWindow {
                     )
                     .child(format!("{preset}px"))
             }))
+            .into_any_element();
+
+        let wrap_picker = h_flex()
+            .p_0p5()
+            .rounded(px(6.))
+            .bg(theme.bg_card)
+            .gap_0p5()
+            .children(
+                [
+                    (
+                        "settings-log-wrap-anywhere",
+                        crate::model::LogWrap::Anywhere,
+                        "settings.log_wrap_anywhere",
+                    ),
+                    (
+                        "settings-log-wrap-words",
+                        crate::model::LogWrap::Words,
+                        "settings.log_wrap_words",
+                    ),
+                ]
+                .into_iter()
+                .map(|(id, wrap, label_key)| {
+                    let is_selected = current_wrap == wrap;
+                    div()
+                        .id(id)
+                        .px_2p5()
+                        .py_1()
+                        .rounded(px(4.))
+                        .text_xs()
+                        .cursor_pointer()
+                        .when(is_selected, |this| {
+                            this.bg(theme.bg_toggle_active)
+                                .text_color(theme.accent_blue_hover)
+                                .font_weight(FontWeight::MEDIUM)
+                        })
+                        .when(!is_selected, |this| {
+                            this.text_color(theme.text_secondary)
+                                .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                        })
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.set_log_wrap(wrap, cx);
+                            }),
+                        )
+                        .child(tr_shared(locale, label_key))
+                }),
+            )
             .into_any_element();
 
         let (theme_infos, theme_selected, theme_current, theme_dir, theme_messages) = {
@@ -1506,6 +1566,11 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.font_size_title"),
                 tr_shared(locale, "settings.font_size_desc"),
                 font_size_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.log_wrap_title"),
+                tr_shared(locale, "settings.log_wrap_desc"),
+                wrap_picker,
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.theme_title"),
