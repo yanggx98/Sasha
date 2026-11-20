@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
-use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::input::{InputEvent, InputState, MoveDown, MoveUp, TextareaState};
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -2598,6 +2598,59 @@ impl SashaApp {
         cx.notify();
     }
 
+    /// Terminal-style recall for the send box: Up on the first line shows an older
+    /// sent draft, Down on the last line a newer one. Returns whether the key was
+    /// used; otherwise the textarea moves its cursor as usual.
+    fn recall_send_history(
+        &mut self,
+        older: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(input) = self.active_tab().send_input.clone() else {
+            return false;
+        };
+        if self.active_tab().state.send.collapsed || !input.focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let (value, line, has_selection) = {
+            let state = input.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+                !state.selected_range().is_empty(),
+            )
+        };
+        let last_line = value.matches('\n').count();
+        if has_selection || line != if older { 0 } else { last_line } {
+            return false;
+        }
+        let history = &mut self.active_tab_mut().state.send.history;
+        let Some(text) = (if older {
+            history.older(&value)
+        } else {
+            history.newer()
+        }) else {
+            return false;
+        };
+
+        let end_line = text.matches('\n').count();
+        let end_col = text
+            .rsplit('\n')
+            .next()
+            .map_or(0, |l| l.encode_utf16().count());
+        input.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+            state.set_cursor_position(
+                gpui_kit::component::input::Position::new(end_line as u32, end_col as u32),
+                window,
+                cx,
+            );
+        });
+        cx.notify();
+        true
+    }
+
     pub fn toggle_send_display_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let send_input = self.active_tab().send_input.clone();
         if let Some(input) = &send_input {
@@ -2960,8 +3013,10 @@ impl SashaApp {
                 .submit_send_with_timestamp(current_timestamp_hms_ms());
             match res {
                 Ok(_) => {
-                    self.active_tab_mut()
-                        .set_send_error(SendErrorSlot::SendCard, None);
+                    let tab = self.active_tab_mut();
+                    let text = tab.state.send.text.clone();
+                    tab.state.send.history.push(&text);
+                    tab.set_send_error(SendErrorSlot::SendCard, None);
                 }
                 Err(err) => {
                     let msg = send_payload_error_text(locale, true, &err);
@@ -2975,6 +3030,9 @@ impl SashaApp {
 
         match self.active_tab().state.prepare_send_bytes() {
             Ok(bytes) => {
+                let tab = self.active_tab_mut();
+                let text = tab.state.send.text.clone();
+                tab.state.send.history.push(&text);
                 self.enqueue_real_tx(self.active_tab_id, bytes, SendErrorSlot::SendCard, cx);
             }
             Err(err) => {
@@ -4451,6 +4509,26 @@ impl Render for SashaApp {
                                                     .mt(px(if send_collapsed { 0. } else { -12. }))
                                                     // Lifts the card off the status bar's divider.
                                                     .mb(px(8.))
+                                                    // Capture runs before the textarea's own Up/Down
+                                                    // cursor movement, so history recall can claim them.
+                                                    .capture_action(cx.listener(
+                                                        |this, _: &MoveUp, window, cx| {
+                                                            if this.recall_send_history(
+                                                                true, window, cx,
+                                                            ) {
+                                                                cx.stop_propagation();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .capture_action(cx.listener(
+                                                        |this, _: &MoveDown, window, cx| {
+                                                            if this.recall_send_history(
+                                                                false, window, cx,
+                                                            ) {
+                                                                cx.stop_propagation();
+                                                            }
+                                                        },
+                                                    ))
                                                     .child(
                                                         SendCard::new(
                                                             surface_theme,

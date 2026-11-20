@@ -27,6 +27,15 @@ the displayed text, so search, filtering, copy and save see plain text. Styles
 apply within one log entry and do not carry over to the next. HEX mode always
 shows the raw bytes, including `1B`.
 
+## Send history
+
+Press `Up` in the send box (with the cursor on its first line) to bring back the
+previous draft you sent, and keep pressing to go further back. `Down` on the last
+line walks forward again, and going past the newest entry restores what you were
+typing. Consecutive duplicates and blank drafts are not recorded. History is kept
+per session (up to 100 entries) and is not saved to disk. Only sends from the send
+box are recorded, not Quick send commands or timed sends.
+
 ## Log filtering
 
 Use the filter icon next to Search in the receive toolbar to show or hide the

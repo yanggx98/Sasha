@@ -4,6 +4,7 @@ pub mod log;
 pub mod log_filter;
 pub mod log_marker;
 pub mod quick_command;
+pub mod send_history;
 pub mod session;
 pub mod settings;
 pub mod shortcuts;
