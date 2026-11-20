@@ -1,3 +1,4 @@
+pub mod ansi;
 pub mod config;
 pub mod log;
 pub mod log_filter;

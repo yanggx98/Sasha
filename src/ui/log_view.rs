@@ -7,6 +7,7 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::i18n::{Locale, tr_shared};
+use crate::model::ansi::{AnsiColor, AnsiStyle, indexed_rgb};
 use crate::model::{
     LogDirection, LogEntry, LogMarkers, MarkerColor, ReceiveViewState, SearchMatch,
     minimap_fraction, selectable_log_line, visible_marker_positions,
@@ -154,6 +155,9 @@ impl RenderOnce for LogView {
                                         ..Default::default()
                                     },
                                 ));
+                                for (range, style) in &line.payload_styles {
+                                    highlights.push((range.clone(), ansi_highlight(style, &theme)));
+                                }
                                 let simulated = entry.is_simulated;
                                 let start = search_matches.partition_point(|m| m.log_index < index);
                                 let mut normal_search_ranges = Vec::new();
@@ -247,6 +251,91 @@ impl RenderOnce for LogView {
 fn color_highlight(color: Hsla) -> HighlightStyle {
     HighlightStyle {
         color: Some(color),
+        ..Default::default()
+    }
+}
+
+/// xterm-style 16 colors for dark and light canvases.
+const ANSI_DARK: [(u8, u8, u8); 16] = [
+    (0x3b, 0x3b, 0x3b),
+    (0xe0, 0x5a, 0x5a),
+    (0x5f, 0xc2, 0x6a),
+    (0xe0, 0xc0, 0x5a),
+    (0x5a, 0x8f, 0xe8),
+    (0xc0, 0x6a, 0xd8),
+    (0x4f, 0xc4, 0xcf),
+    (0xd0, 0xd0, 0xd0),
+    (0x7a, 0x7a, 0x7a),
+    (0xff, 0x7b, 0x7b),
+    (0x7d, 0xe0, 0x8a),
+    (0xff, 0xdc, 0x7a),
+    (0x7a, 0xae, 0xff),
+    (0xe0, 0x8a, 0xf0),
+    (0x7a, 0xe0, 0xe8),
+    (0xff, 0xff, 0xff),
+];
+
+const ANSI_LIGHT: [(u8, u8, u8); 16] = [
+    (0x20, 0x20, 0x20),
+    (0xc6, 0x28, 0x28),
+    (0x1e, 0x8a, 0x2e),
+    (0x9a, 0x6b, 0x00),
+    (0x1c, 0x5f, 0xd0),
+    (0x93, 0x2a, 0xb0),
+    (0x0b, 0x87, 0x96),
+    (0x80, 0x80, 0x80),
+    (0x55, 0x55, 0x55),
+    (0xe0, 0x40, 0x40),
+    (0x2a, 0xa8, 0x3e),
+    (0xb8, 0x82, 0x00),
+    (0x3a, 0x78, 0xe8),
+    (0xb0, 0x44, 0xd0),
+    (0x1a, 0xa5, 0xb5),
+    (0xb0, 0xb0, 0xb0),
+];
+
+fn ansi_color(color: AnsiColor, palette: &[(u8, u8, u8); 16]) -> Hsla {
+    let (r, g, b) = match color {
+        AnsiColor::Indexed(index) => indexed_rgb(index, palette),
+        AnsiColor::Rgb(r, g, b) => (r, g, b),
+    };
+    rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32).into()
+}
+
+/// Converts an ANSI style into a text highlight, using a palette that suits the theme.
+fn ansi_highlight(style: &AnsiStyle, theme: &NanoTheme) -> HighlightStyle {
+    let palette = if theme.bg_canvas.l < 0.5 {
+        &ANSI_DARK
+    } else {
+        &ANSI_LIGHT
+    };
+    let mut fg = style.fg.map(|c| ansi_color(c, palette));
+    let mut bg = style.bg.map(|c| ansi_color(c, palette));
+    if style.inverse {
+        let (new_fg, new_bg) = (
+            bg.unwrap_or(theme.bg_canvas.opacity(1.0)),
+            fg.unwrap_or(theme.text_primary),
+        );
+        fg = Some(new_fg);
+        bg = Some(new_bg);
+    }
+    if style.dim {
+        fg = Some(fg.unwrap_or(theme.text_primary).alpha(0.6));
+    }
+    HighlightStyle {
+        color: fg,
+        background_color: bg,
+        font_weight: style.bold.then_some(FontWeight::BOLD),
+        font_style: style.italic.then_some(FontStyle::Italic),
+        underline: style.underline.then(|| UnderlineStyle {
+            thickness: px(1.),
+            color: fg,
+            wavy: false,
+        }),
+        strikethrough: style.strikethrough.then(|| StrikethroughStyle {
+            thickness: px(1.),
+            color: fg,
+        }),
         ..Default::default()
     }
 }

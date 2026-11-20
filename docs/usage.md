@@ -16,6 +16,17 @@ HEX input uses space-separated byte pairs, such as `0A FF 1B`.
 Text mode can append no line ending, CRLF (`\r\n`), or LF (`\n`); HEX mode sends the
 parsed bytes without appending a text line ending. Converting HEX back to text
 requires valid UTF-8.
+
+## ANSI colors
+
+In text mode, received ANSI escape sequences are rendered instead of shown as
+garbage: SGR colors (16, 256 and 24-bit), bold, dim, italic, underline,
+strikethrough and inverse are applied, and all other escape sequences (cursor
+movement, screen clearing, titles) are dropped. The escape bytes are removed from
+the displayed text, so search, filtering, copy and save see plain text. Styles
+apply within one log entry and do not carry over to the next. HEX mode always
+shows the raw bytes, including `1B`.
+
 ## Log filtering
 
 Use the filter icon next to Search in the receive toolbar to show or hide the
