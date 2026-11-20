@@ -31,3 +31,7 @@ winresource = "0.1"
 # Local fix: upstream accesskit_windows 0.34.0 panics (aborting the process) in
 # client_top_left when a window is destroyed during a UIA query.
 accesskit_windows = { path = "vendor/accesskit_windows" }
+# Local patch: gpui-pre 0.3.12 plus a `WhiteSpace::BreakAnywhere` text wrap mode
+# (long unbreakable tokens such as file paths fill each line instead of jumping
+# whole to the next one). See vendor/gpui-pre/SASHA-PATCHES.md.
+gpui-pre = { path = "vendor/gpui-pre" }
