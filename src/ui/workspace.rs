@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::base::TextSelection;
 use gpui_kit::base::input::Copy;
-use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
+use gpui_kit::component::input::{InputEvent, InputState, MoveDown, MoveUp, TextareaState};
 use gpui_kit::component::resizable::{HandleEdge, resize_handle};
 use gpui_kit::component::{TitleBar, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -18,7 +18,7 @@ use crate::i18n::{
     timer_interval_error, tr, tr_shared,
 };
 use crate::model::log::format_hex_input_with_cursor;
-use crate::model::log::{LogEntry, format_visible_logs};
+use crate::model::log::{LogEntry, format_visible_logs, selectable_log_line};
 use crate::model::log_filter::{LogFilter, LogFilterState, LogProjection};
 use crate::model::quick_command::{
     QuickCommand, QuickEditorDraft, command_for_shortcut, remove_command, visible_rows,
@@ -47,6 +47,7 @@ use crate::ui::filter_bar::{
     FilterControl, FilterFrameEdge, FilterFrameLabel, FrameTransition, LogFilterBar,
     animate_content_corners, animate_frame_inset,
 };
+use crate::ui::log_pointer::LogSelectHandle;
 use crate::ui::log_view::{LogView, log_row_height_hint};
 use crate::ui::marker_editor::{
     MARKER_EDITOR_HEIGHT, MARKER_EDITOR_WIDTH, MarkerEditor, MarkerEditorState,
@@ -72,6 +73,10 @@ use crate::ui::theme::NanoTheme;
 use crate::ui::theme_manager::{ThemeHandle, ThemeManager};
 use crate::ui::throughput_window::{ThroughputSnapshot, ThroughputWindow};
 use crate::ui::update_manager::{UpdateHandle, UpdateManager};
+
+/// Height of the strip at the top of the window that holds the window controls
+/// and the small drag handle.
+const TOP_BAR_HEIGHT: Pixels = px(34.);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppPage {
@@ -140,6 +145,10 @@ struct SessionTab {
     last_notice: bool,
     last_display_flags: (bool, bool),
     log_selection: LogSelectionModel,
+    /// Selected log text (entry ids and offsets) and the rows painted last frame.
+    log_select: LogSelectHandle,
+    /// The wrap mode the list's measured row heights were taken with.
+    last_log_wrap: crate::model::LogWrap,
     log_search: LogSearchState,
     search_input: Option<Entity<InputState>>,
     _search_subscription: Option<Subscription>,
@@ -153,6 +162,9 @@ struct SessionTab {
     stream_error: Option<SharedString>,
     /// Error from the last "save log" export, shown until the next attempt.
     save_log_error: Option<SharedString>,
+    /// Alive while the "copy all" button shows its confirmation tick; dropping it
+    /// (a newer click or its own timeout) ends the confirmation.
+    log_copied_task: Option<Task<()>>,
     stream_poll_task: Option<Task<()>>,
 }
 
@@ -230,6 +242,8 @@ impl SessionTab {
             last_notice: false,
             last_display_flags: (true, false),
             log_selection,
+            log_select: LogSelectHandle::default(),
+            last_log_wrap: crate::model::LogWrap::default(),
             log_search: LogSearchState::default(),
             search_input: None,
             _search_subscription: None,
@@ -242,6 +256,7 @@ impl SessionTab {
             stream_busy: false,
             stream_error: None,
             save_log_error: None,
+            log_copied_task: None,
             stream_poll_task: None,
         }
     }
@@ -311,11 +326,52 @@ impl SessionTab {
         projection.entries(&self.state.logs)
     }
 
-    fn sync_log_list_state(&mut self, log_font_size: u16) {
+    /// The text of the current log selection, built from the log entries (not
+    /// from what happens to be rendered). Empty when nothing is selected.
+    fn selected_log_text(&self) -> String {
+        let Some((first, last)) = self.log_select.model.borrow().id_span() else {
+            return String::new();
+        };
+        let entries = self.visible_logs();
+        let lo = entries.partition_point(|entry| entry.id < first);
+        let hi = entries.partition_point(|entry| entry.id <= last);
+        let (show_timestamp, hex_mode) = (
+            self.state.receive.show_timestamp,
+            self.state.receive.hex_mode,
+        );
+        let rows = entries[lo..hi].iter().map(|entry| {
+            (
+                entry.id,
+                selectable_log_line(entry, show_timestamp, hex_mode).text,
+            )
+        });
+        self.log_select.model.borrow().selected_text(rows)
+    }
+
+    /// Text of every entry shown in the log: the filtered view while a filter is
+    /// active, otherwise all entries. Shared by "save" and "copy all".
+    fn receive_log_text(&self) -> String {
+        if self.log_filter.is_active() {
+            format_visible_logs(
+                &self.visible_logs(),
+                self.state.receive.show_timestamp,
+                self.state.receive.hex_mode,
+            )
+        } else {
+            self.state.visible_log_export_text()
+        }
+    }
+
+    fn sync_log_list_state(&mut self, log_font_size: u16, log_wrap: crate::model::LogWrap) {
         // Markers die with the entries the buffer limit evicted.
         self.state
             .markers
             .prune_before(self.state.logs.first().map(|entry| entry.id));
+        // So does the selection: pull it in, or drop it if it was all evicted.
+        match self.state.logs.first() {
+            Some(first) => self.log_select.model.borrow_mut().retain_from(first.id),
+            None => self.log_select.model.borrow_mut().clear(),
+        }
         let old_len = self.log_projection.rows.len();
         let old_offset = self.log_list_state.logical_scroll_top();
         let anchor_id = self
@@ -341,7 +397,10 @@ impl SessionTab {
             self.state.receive.show_timestamp,
             self.state.receive.hex_mode,
         );
-        let flags_changed = display_flags != self.last_display_flags;
+        // A different wrap mode changes row heights just as a display flag does:
+        // re-measure every row and keep the reader on the same entry.
+        let flags_changed =
+            display_flags != self.last_display_flags || log_wrap != self.last_log_wrap;
         // Source indices may shift after trimming without changing a visible row.
         let prefix = change.prefix;
         let removed = change.removed;
@@ -391,6 +450,7 @@ impl SessionTab {
 
         self.last_notice = notice;
         self.last_display_flags = display_flags;
+        self.last_log_wrap = log_wrap;
     }
 
     /// Give every row that has not been measured a real height.
@@ -1985,6 +2045,7 @@ impl SashaApp {
             tab.state.logs.len(),
         );
         if invalidate {
+            tab.log_select.model.borrow_mut().clear();
             TextSelection::clear(window, cx);
         }
     }
@@ -2101,6 +2162,7 @@ impl SashaApp {
         if let Some(tab) = self.tab_mut(tab_id) {
             tab.log_filter.apply();
             tab.log_selection.set_selected_text("");
+            tab.log_select.model.borrow_mut().clear();
         }
         if is_active_tab {
             TextSelection::clear(window, cx);
@@ -2286,9 +2348,9 @@ impl SashaApp {
         send_focused || search_focused || filter_focused || picker_focused
     }
 
-    fn copy_log_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let selected = TextSelection::selected_text(window, cx);
+    fn copy_log_selection(&mut self, _: &mut Window, cx: &mut Context<Self>) -> bool {
         let tab = self.active_tab_mut();
+        let selected = tab.selected_log_text();
         tab.log_selection.set_selected_text(&selected);
         let Some(text) = tab.log_selection.copy_payload() else {
             return false;
@@ -2299,15 +2361,7 @@ impl SashaApp {
 
     pub fn save_receive_logs(&mut self, cx: &mut Context<Self>) {
         let tab = self.active_tab();
-        let content_to_save = if tab.log_filter.is_active() {
-            format_visible_logs(
-                &tab.visible_logs(),
-                tab.state.receive.show_timestamp,
-                tab.state.receive.hex_mode,
-            )
-        } else {
-            tab.state.visible_log_export_text()
-        };
+        let content_to_save = tab.receive_log_text();
         let suggested_dir =
             std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
         let tab_id = tab.id;
@@ -2329,6 +2383,29 @@ impl SashaApp {
             });
         })
         .detach();
+    }
+
+    /// Copies all shown log text to the clipboard and ticks the toolbar button for a moment.
+    pub fn copy_receive_logs(&mut self, cx: &mut Context<Self>) {
+        const CONFIRM_FOR: Duration = Duration::from_millis(1500);
+        let text = self.active_tab().receive_log_text();
+        if text.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        let tab_id = self.active_tab_id;
+        // Replacing the task cancels an earlier confirmation timer.
+        let task = cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(CONFIRM_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tab_mut(tab_id) {
+                    tab.log_copied_task = None;
+                }
+                cx.notify();
+            });
+        });
+        self.active_tab_mut().log_copied_task = Some(task);
+        cx.notify();
     }
 
     fn toggle_stream_output(&mut self, cx: &mut Context<Self>) {
@@ -2596,6 +2673,59 @@ impl SashaApp {
         };
         self.persist_scripts(updated_scripts, cx);
         cx.notify();
+    }
+
+    /// Terminal-style recall for the send box: Up on the first line shows an older
+    /// sent draft, Down on the last line a newer one. Returns whether the key was
+    /// used; otherwise the textarea moves its cursor as usual.
+    fn recall_send_history(
+        &mut self,
+        older: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(input) = self.active_tab().send_input.clone() else {
+            return false;
+        };
+        if self.active_tab().state.send.collapsed || !input.focus_handle(cx).is_focused(window) {
+            return false;
+        }
+        let (value, line, has_selection) = {
+            let state = input.read(cx);
+            (
+                state.value().to_string(),
+                state.cursor_position().line as usize,
+                !state.selected_range().is_empty(),
+            )
+        };
+        let last_line = value.matches('\n').count();
+        if has_selection || line != if older { 0 } else { last_line } {
+            return false;
+        }
+        let history = &mut self.active_tab_mut().state.send.history;
+        let Some(text) = (if older {
+            history.older(&value)
+        } else {
+            history.newer()
+        }) else {
+            return false;
+        };
+
+        let end_line = text.matches('\n').count();
+        let end_col = text
+            .rsplit('\n')
+            .next()
+            .map_or(0, |l| l.encode_utf16().count());
+        input.update(cx, |state, cx| {
+            state.set_value(text, window, cx);
+            state.set_cursor_position(
+                gpui_kit::component::input::Position::new(end_line as u32, end_col as u32),
+                window,
+                cx,
+            );
+        });
+        cx.notify();
+        true
     }
 
     pub fn toggle_send_display_hex(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2960,8 +3090,10 @@ impl SashaApp {
                 .submit_send_with_timestamp(current_timestamp_hms_ms());
             match res {
                 Ok(_) => {
-                    self.active_tab_mut()
-                        .set_send_error(SendErrorSlot::SendCard, None);
+                    let tab = self.active_tab_mut();
+                    let text = tab.state.send.text.clone();
+                    tab.state.send.history.push(&text);
+                    tab.set_send_error(SendErrorSlot::SendCard, None);
                 }
                 Err(err) => {
                     let msg = send_payload_error_text(locale, true, &err);
@@ -2975,6 +3107,9 @@ impl SashaApp {
 
         match self.active_tab().state.prepare_send_bytes() {
             Ok(bytes) => {
+                let tab = self.active_tab_mut();
+                let text = tab.state.send.text.clone();
+                tab.state.send.history.push(&text);
                 self.enqueue_real_tx(self.active_tab_id, bytes, SendErrorSlot::SendCard, cx);
             }
             Err(err) => {
@@ -3412,21 +3547,43 @@ impl SashaApp {
             .top_0()
             .left_0()
             .right_0()
-            .h(px(34.))
+            .h(TOP_BAR_HEIGHT)
+            // Only a small centered handle drags the window; the rest of the strip
+            // stays click-through so it never covers (or breaks selecting) the log.
             .child(
-                div()
-                    .id("terminal-title-drag")
+                h_flex()
                     .absolute()
                     .top_0()
                     .left_0()
                     .right(TAB_RAIL_WIDTH + script_width)
-                    .h_full()
-                    .occlude()
-                    .cursor_default()
-                    .window_control_area(WindowControlArea::Drag)
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        gpui_kit::base::GlobalState::suppress_text_selection(cx);
-                    }),
+                    .justify_center()
+                    .child(
+                        div()
+                            .id("terminal-title-drag")
+                            .group("terminal-title-drag")
+                            .w(px(112.))
+                            .h(px(16.))
+                            .flex()
+                            .items_start()
+                            .justify_center()
+                            .pt(px(5.))
+                            .occlude()
+                            .cursor_default()
+                            .window_control_area(WindowControlArea::Drag)
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                gpui_kit::base::GlobalState::suppress_text_selection(cx);
+                            })
+                            .child(
+                                div()
+                                    .w(px(44.))
+                                    .h(px(4.))
+                                    .rounded_full()
+                                    .bg(self.theme.text_secondary.alpha(0.55))
+                                    .group_hover("terminal-title-drag", |style| {
+                                        style.bg(self.theme.text_secondary.alpha(0.9))
+                                    }),
+                            ),
+                    ),
             )
             .child(
                 div()
@@ -3587,15 +3744,15 @@ impl Render for SashaApp {
                 .into_any_element();
         }
 
-        let (log_font_size, log_buffer_limit) = {
+        let (log_font_size, log_buffer_limit, log_wrap) = {
             let cfg = self.config_store.read(cx).config();
-            (cfg.log_font_size, cfg.log_buffer_limit)
+            (cfg.log_font_size, cfg.log_buffer_limit, cfg.log_wrap)
         };
         {
             let tab = self.active_tab_mut();
             let log_len = tab.state.logs.len();
             tab.log_selection.observe_log_len(log_len);
-            tab.sync_log_list_state(log_font_size);
+            tab.sync_log_list_state(log_font_size, log_wrap);
         }
         let filter_on = self.active_tab().log_filter.is_active();
         let (frame_mounted, frame_transition) = self.frame_state(active_id, filter_on, cx);
@@ -3641,6 +3798,7 @@ impl Render for SashaApp {
         let search_has_matches = !tab.log_search.matches.is_empty();
         let log_focus = tab.log_focus.clone();
         let log_list_state = tab.log_list_state.clone();
+        let log_select = tab.log_select.clone();
         let logs = tab.log_projection.entries(&tab.state.logs);
         let receive_state = tab.state.receive.clone();
         let simulated_notice = tab.state.simulated_notice_for(locale);
@@ -4078,6 +4236,11 @@ impl Render for SashaApp {
         let on_rx_save = Rc::new(move |_: &mut Window, cx: &mut App| {
             let _ = weak.update(cx, |this, cx| this.save_receive_logs(cx));
         });
+        let weak = cx.entity().downgrade();
+        let on_rx_copy = Rc::new(move |_: &mut Window, cx: &mut App| {
+            let _ = weak.update(cx, |this, cx| this.copy_receive_logs(cx));
+        });
+        let log_copied = self.active_tab().log_copied_task.is_some();
         let stream_active = self
             .active_tab()
             .state
@@ -4348,6 +4511,8 @@ impl Render for SashaApp {
                                                         on_mark,
                                                         on_jump,
                                                         on_disable_auto_scroll,
+                                                        log_select,
+                                                        log_wrap,
                                                     ))
                                                     .when_some(search_input, |this, input| {
                                                         this.child(
@@ -4414,6 +4579,7 @@ impl Render for SashaApp {
                                                     on_tx_send_hex,
                                                     on_tx_line_ending,
                                                 )
+                                                .copy_all(log_copied, on_rx_copy)
                                                 .search_shortcut(search_keys.clone())
                                                 .send_collapse(
                                                     send_collapsed,
@@ -4451,6 +4617,26 @@ impl Render for SashaApp {
                                                     .mt(px(if send_collapsed { 0. } else { -12. }))
                                                     // Lifts the card off the status bar's divider.
                                                     .mb(px(8.))
+                                                    // Capture runs before the textarea's own Up/Down
+                                                    // cursor movement, so history recall can claim them.
+                                                    .capture_action(cx.listener(
+                                                        |this, _: &MoveUp, window, cx| {
+                                                            if this.recall_send_history(
+                                                                true, window, cx,
+                                                            ) {
+                                                                cx.stop_propagation();
+                                                            }
+                                                        },
+                                                    ))
+                                                    .capture_action(cx.listener(
+                                                        |this, _: &MoveDown, window, cx| {
+                                                            if this.recall_send_history(
+                                                                false, window, cx,
+                                                            ) {
+                                                                cx.stop_propagation();
+                                                            }
+                                                        },
+                                                    ))
                                                     .child(
                                                         SendCard::new(
                                                             surface_theme,
