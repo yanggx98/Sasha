@@ -16,6 +16,46 @@ HEX input uses space-separated byte pairs, such as `0A FF 1B`.
 Text mode can append no line ending, CRLF (`\r\n`), or LF (`\n`); HEX mode sends the
 parsed bytes without appending a text line ending. Converting HEX back to text
 requires valid UTF-8.
+
+## ANSI colors
+
+In text mode, received ANSI escape sequences are rendered instead of shown as
+garbage: SGR colors (16, 256 and 24-bit), bold, dim, italic, underline,
+strikethrough and inverse are applied, and all other escape sequences (cursor
+movement, screen clearing, titles) are dropped. The escape bytes are removed from
+the displayed text, so search, filtering, copy and save see plain text. Styles
+apply within one log entry and do not carry over to the next. HEX mode always
+shows the raw bytes, including `1B`.
+
+## Send history
+
+Press `Up` in the send box (with the cursor on its first line) to bring back the
+previous draft you sent, and keep pressing to go further back. `Down` on the last
+line walks forward again, and going past the newest entry restores what you were
+typing. Consecutive duplicates and blank drafts are not recorded. History is kept
+per session (up to 100 entries) and is not saved to disk. Only sends from the send
+box are recorded, not Quick send commands or timed sends.
+
+## Copying and selecting logs
+
+Drag across the log to select text, then copy it with the usual shortcut. Double-click selects a
+word and triple-click a whole entry; dragging after either extends by words or entries, and
+Shift+click extends the current selection. Clicking without dragging clears it. While dragging,
+hold the pointer near the top or bottom edge of the log area, or move it beyond the edge, to keep
+scrolling and extending the selection; the further out the pointer, the faster it scrolls.
+Scrolling upward this way turns auto-scroll off, like any manual scroll. A selection may span any
+number of screens, and copying takes every selected entry, including those scrolled out of view.
+It is cleared when the log is cleared, a filter is applied, or the timestamp or HEX display is
+changed, and its start moves in if the log buffer discards the oldest entries.
+
+The **Copy all** button next to Save in the receive toolbar puts every displayed entry on the
+clipboard in one click, exactly as Save would write it: it follows the timestamp and HEX settings
+and, while a filter is active, copies only the entries that pass it. The icon briefly turns into a
+check mark once copied; an empty log leaves the clipboard untouched.
+
+The strip at the top of the window is click-through except for a small handle at the top centre
+(a short light bar) that drags the window, so it never covers log text.
+
 ## Log filtering
 
 Use the filter icon next to Search in the receive toolbar to show or hide the
@@ -46,7 +86,7 @@ is on; with the system's "reduce motion" setting on, only the still line is show
 filter button on the toolbar is also highlighted with a small dot. The filter remains active when the drawer is collapsed.
 
 Filters belong to each session and survive tab switches, but are not saved across
-app restarts. Search, selection copying and Save operate on filtered entries.
+app restarts. Search, selection copying, Copy all and Save operate on filtered entries.
 Clear removes **all** displayed-cache entries, including those hidden by the
 filter, while keeping the filter settings and byte counters. Filtering does not
 affect serial reception, paused data retention, Lua input, or live stream output
@@ -166,7 +206,7 @@ theme = "dark"                # built-in id or a file in themes/
 ```
 
 Supported locale values are `en-US` and `zh-CN`; the default is `zh-CN`.
-The log font size presets are 12, 13, 14, and 15 logical pixels.
+The log font size presets are 12, 13, 14, and 15 logical pixels. `log_wrap` chooses how a log line wider than the log area wraps: `"anywhere"` (the default) breaks between any two characters so every line is filled, which suits long tokens such as file paths; `"words"` breaks only at spaces, `/` and similar positions, so a long token moves whole to the next line and can leave a large gap. It is also set under **Settings → View → Log Line Wrapping** and takes effect immediately; an unrecognized value falls back to `"anywhere"`.
 Session drafts and connection states are not restored from this file.
 If a malformed TOML file is detected, Sasha attempts to back it up as
 `config.toml.bak` and falls back to defaults.

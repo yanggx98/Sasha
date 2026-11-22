@@ -1,3 +1,5 @@
+use super::ansi::{AnsiSpans, parse_ansi};
+
 /// Direction of a serial log entry.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,14 +61,21 @@ impl LogEntry {
         }
     }
 
-    /// Formats payload as UTF-8 text (stripping `\0` and trailing `\r`/`\n`) or space-separated uppercase HEX bytes.
+    /// Formats payload as UTF-8 text (stripping `\0`, trailing `\r`/`\n` and ANSI
+    /// escape sequences) or space-separated uppercase HEX bytes.
     pub fn format_payload(&self, hex_mode: bool) -> String {
+        self.format_payload_styled(hex_mode).0
+    }
+
+    /// Like [`Self::format_payload`], plus ANSI style spans (byte ranges into the
+    /// returned text). HEX mode never has spans.
+    pub fn format_payload_styled(&self, hex_mode: bool) -> (String, AnsiSpans) {
         if hex_mode {
-            format_hex_bytes(&self.bytes)
+            (format_hex_bytes(&self.bytes), Vec::new())
         } else {
-            String::from_utf8_lossy(&self.bytes)
-                .trim_end_matches(&['\r', '\n'][..])
-                .replace('\0', "")
+            let text = String::from_utf8_lossy(&self.bytes);
+            let text = text.trim_end_matches(&['\r', '\n'][..]).replace('\0', "");
+            parse_ansi(&text)
         }
     }
 }
@@ -193,6 +202,8 @@ pub struct SelectableLogLine {
     pub timestamp_bytes: Option<std::ops::Range<usize>>,
     pub tag_bytes: std::ops::Range<usize>,
     pub payload_bytes: std::ops::Range<usize>,
+    /// ANSI style spans, as byte ranges into `text` (already offset past the prefix).
+    pub payload_styles: AnsiSpans,
 }
 
 /// Builds the selectable display string for one log row.
@@ -201,31 +212,33 @@ pub fn selectable_log_line(
     show_timestamp: bool,
     hex_mode: bool,
 ) -> SelectableLogLine {
-    let payload = entry.format_payload(hex_mode);
+    let (payload, mut styles) = entry.format_payload_styled(hex_mode);
     let tag = entry.direction.tag();
-    if show_timestamp {
+    let (text, timestamp_bytes, tag_bytes, payload_start) = if show_timestamp {
         let timestamp = format!("[{}]", entry.timestamp);
-        let text = format!("{timestamp} {tag} {payload}");
         let timestamp_end = timestamp.len();
         let tag_start = timestamp_end + 1;
         let tag_end = tag_start + tag.len();
-        let payload_start = tag_end + 1;
-        SelectableLogLine {
-            text,
-            timestamp_bytes: Some(0..timestamp_end),
-            tag_bytes: tag_start..tag_end,
-            payload_bytes: payload_start..payload_start + payload.len(),
-        }
+        (
+            format!("{timestamp} {tag} {payload}"),
+            Some(0..timestamp_end),
+            tag_start..tag_end,
+            tag_end + 1,
+        )
     } else {
-        let text = format!("{tag} {payload}");
         let tag_end = tag.len();
-        let payload_start = tag_end + 1;
-        SelectableLogLine {
-            text,
-            timestamp_bytes: None,
-            tag_bytes: 0..tag_end,
-            payload_bytes: payload_start..payload_start + payload.len(),
-        }
+        (format!("{tag} {payload}"), None, 0..tag_end, tag_end + 1)
+    };
+    for (range, _) in &mut styles {
+        range.start += payload_start;
+        range.end += payload_start;
+    }
+    SelectableLogLine {
+        text,
+        timestamp_bytes,
+        tag_bytes,
+        payload_bytes: payload_start..payload_start + payload.len(),
+        payload_styles: styles,
     }
 }
 
@@ -618,6 +631,30 @@ mod tests {
         assert_eq!(
             format_visible_logs(&logs, false, true),
             "TX 41 54\nRX 4F 4B"
+        );
+    }
+
+    #[test]
+    fn ansi_sequences_are_stripped_from_text_and_styled_in_place() {
+        let entry = LogEntry::new(
+            1,
+            "12:00:00.000",
+            LogDirection::Rx,
+            b"\x1b[31mERR\x1b[0m ok\x1b[0m\r\n".to_vec(),
+        );
+        assert_eq!(entry.format_payload(false), "ERR ok");
+        assert_eq!(entry.format_payload(true).split(' ').next(), Some("1B"));
+
+        let line = selectable_log_line(&entry, true, false);
+        assert_eq!(line.text, "[12:00:00.000] RX ERR ok");
+        assert_eq!(line.payload_styles.len(), 1);
+        let (range, style) = &line.payload_styles[0];
+        assert_eq!(&line.text[range.clone()], "ERR");
+        assert_eq!(style.fg, Some(crate::model::ansi::AnsiColor::Indexed(1)));
+        assert!(
+            selectable_log_line(&entry, false, true)
+                .payload_styles
+                .is_empty()
         );
     }
 

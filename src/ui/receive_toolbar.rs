@@ -46,6 +46,8 @@ pub struct ReceiveToolbar {
     send_collapse: Option<(bool, ToolbarActionCallback)>,
     /// Key combination appended to the search tooltip, e.g. `Ctrl+F`.
     search_shortcut: Option<SharedString>,
+    /// `(copied, callback)`: "copy all" button; `copied` shows the confirmation tick.
+    copy_all: Option<(bool, ToolbarActionCallback)>,
 }
 
 impl ReceiveToolbar {
@@ -100,7 +102,14 @@ impl ReceiveToolbar {
             filter_panel: None,
             send_collapse: None,
             search_shortcut: None,
+            copy_all: None,
         }
+    }
+
+    /// Adds the "copy all logs" button beside Save.
+    pub fn copy_all(mut self, copied: bool, callback: ToolbarActionCallback) -> Self {
+        self.copy_all = Some((copied, callback));
+        self
     }
 
     pub fn send_collapse(mut self, collapsed: bool, callback: ToolbarActionCallback) -> Self {
@@ -289,6 +298,26 @@ impl RenderOnce for ReceiveToolbar {
                 None,
                 self.on_save.clone(),
             ))
+            .children(self.copy_all.as_ref().map(|(copied, callback)| {
+                self.icon_tool_button(
+                    "rx-tool-copy-all",
+                    if *copied {
+                        LucideIcon::Check
+                    } else {
+                        LucideIcon::Copy
+                    },
+                    tr_shared(
+                        locale,
+                        if *copied {
+                            "tooltip.rx_copied"
+                        } else {
+                            "tooltip.rx_copy_all"
+                        },
+                    ),
+                    None,
+                    callback.clone(),
+                )
+            }))
             .child(self.icon_tool_button(
                 "rx-tool-search",
                 LucideIcon::Search,

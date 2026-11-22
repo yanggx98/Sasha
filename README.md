@@ -33,9 +33,9 @@ welcome.
 
 - **Multiple sessions** — independent connections, switched from the right sidebar.
 - **Full serial configuration** — port discovery, baud rate, frame format, flow control, DTR/RTS.
-- **Receive inspection** — text or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy, export.
+- **Receive inspection** — text (with ANSI colors rendered) or HEX, timestamps, search, RX/TX and keyword filters (case, regex, exclude), pause, copy (selection or all), export.
 - **Log markers** — right-click an entry to mark it with a name and color; it is highlighted, shown on a mini map beside the scrollbar, and listed in the right dock.
-- **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands and timed send.
+- **Flexible sending** — UTF-8 text or HEX bytes, plus quick-send commands, timed send, and Up/Down recall of previously sent text.
 - **Lua scripting** — built-in Lua 5.4 to automate serial workflows; no separate install.
 - **Command line** — `sasha-cli` lists ports, sends data, monitors and runs Lua scripts without a window, with exit codes for automation.
 - **Live stream output** — append all RX/TX logs of a session to a file in real time.
@@ -83,8 +83,9 @@ These are the defaults. Everything except copy can be changed in **Settings → 
 
 ## Current boundaries
 
-- The visible log history retains the most recent **2,000 entries**. Export saves the
-  visible history in its current display format, not a full raw capture.
+- The visible log history is capped by payload size (**1 MiB** by default, adjustable
+  from 4 KiB to 64 MiB in the bottom bar); the oldest entries are dropped past the cap.
+  Export saves the visible history in its current display format, not a full raw capture.
 - Pausing freezes log display, not the serial connection.
 - Real serial connections support one or two stop bits; 1.5 is rejected by the backend.
 - Only a Latin monospace font is bundled; other scripts such as Chinese use system fallback fonts. On Linux, install a CJK font (e.g. `fonts-noto-cjk`) if they show as boxes.

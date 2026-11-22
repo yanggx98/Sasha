@@ -139,6 +139,8 @@ pub struct SendDraftState {
     pub line_ending: SendLineEnding,
     /// Send card folded into a read-only strip (observe mode). Per session, not persisted.
     pub collapsed: bool,
+    /// Sent drafts, recalled with Up/Down in the send box. Per session, not persisted.
+    pub history: super::send_history::SendHistory,
 }
 
 impl Default for SendDraftState {
@@ -149,6 +151,7 @@ impl Default for SendDraftState {
             send_hex: false,
             line_ending: SendLineEnding::None,
             collapsed: false,
+            history: Default::default(),
         }
     }
 }
@@ -236,6 +239,7 @@ impl SessionState {
                 send_hex: false,
                 line_ending: SendLineEnding::None,
                 collapsed: false,
+                history: Default::default(),
             },
             counters: SessionCounters { rx_bytes, tx_bytes },
             throughput: super::throughput::ThroughputHistory::new(rx_bytes, tx_bytes),

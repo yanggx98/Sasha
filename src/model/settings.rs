@@ -55,6 +55,22 @@ pub enum StreamOutputScope {
     FutureOnly,
 }
 
+/// How a log line that is wider than the log area wraps.
+///
+/// An unrecognized value in `config.toml` falls back to [`LogWrap::Anywhere`]
+/// instead of discarding the rest of the configuration.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LogWrap {
+    /// Break only at word boundaries (spaces, `/`, ...): a long token such as a
+    /// file path moves whole to the next line, which can leave a large gap.
+    Words,
+    /// Break between any two characters so every line is filled.
+    #[default]
+    #[serde(other)]
+    Anywhere,
+}
+
 /// Global application configuration persisted as `config.toml`.
 ///
 /// Session/tab states are intentionally excluded in this phase.
@@ -72,6 +88,8 @@ pub struct AppConfig {
     /// Maximum receive-log payload retained per session, in bytes.
     #[serde(default = "default_log_buffer_limit")]
     pub log_buffer_limit: u32,
+    /// How log lines wider than the log area wrap.
+    pub log_wrap: LogWrap,
     /// Applies when the next stream capture is attached to its session.
     pub stream_output_scope: StreamOutputScope,
     /// Persisted Lua script paths shown in the script panel.
@@ -109,6 +127,7 @@ impl Default for AppConfig {
             locale: Locale::default(),
             log_font_size: DEFAULT_LOG_FONT_SIZE,
             log_buffer_limit: DEFAULT_LOG_BUFFER_LIMIT,
+            log_wrap: LogWrap::default(),
             stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
             background_image: None,
@@ -640,6 +659,41 @@ mod tests {
                 .config()
                 .stream_output_scope,
             StreamOutputScope::FutureOnly
+        );
+    }
+
+    #[test]
+    fn log_wrap_defaults_to_anywhere_roundtrips_and_tolerates_unknown_values() {
+        let dir = TempDir::new("log-wrap");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\nlocale = \"en-US\"\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert_eq!(store.config().log_wrap, LogWrap::Anywhere);
+
+        store.update(|cfg| cfg.log_wrap = LogWrap::Words).unwrap();
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .contains("log_wrap = \"words\"")
+        );
+        assert_eq!(
+            ConfigStore::load_from_path(path.clone()).config().log_wrap,
+            LogWrap::Words
+        );
+
+        // A value from a newer or hand-edited file must not cost the user the
+        // rest of their configuration.
+        fs::write(&path, "locale = \"en-US\"\nlog_wrap = \"sideways\"\n").unwrap();
+        let tolerant = ConfigStore::load_from_path(path.clone());
+        assert_eq!(tolerant.config().log_wrap, LogWrap::Anywhere);
+        assert_eq!(tolerant.config().locale, Locale::EnUs);
+        assert!(tolerant.last_load_warning().is_none());
+
+        store.update(|cfg| cfg.log_wrap = LogWrap::Words).unwrap();
+        store.reset_to_default().unwrap();
+        assert_eq!(
+            ConfigStore::load_from_path(path).config().log_wrap,
+            LogWrap::Anywhere
         );
     }
 

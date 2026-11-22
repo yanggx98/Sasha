@@ -1,8 +1,11 @@
+pub mod ansi;
 pub mod config;
 pub mod log;
 pub mod log_filter;
 pub mod log_marker;
+pub mod log_select;
 pub mod quick_command;
+pub mod send_history;
 pub mod session;
 pub mod settings;
 pub mod shortcuts;
@@ -30,7 +33,7 @@ pub use session::{
 };
 #[allow(unused_imports)]
 pub use settings::{
-    AppConfig, ConfigStore, DEFAULT_LOG_BUFFER_LIMIT, LOG_BUFFER_LIMIT_PRESETS,
+    AppConfig, ConfigStore, DEFAULT_LOG_BUFFER_LIMIT, LOG_BUFFER_LIMIT_PRESETS, LogWrap,
     MAX_LOG_BUFFER_LIMIT, MIN_LOG_BUFFER_LIMIT, format_buffer_usage, format_log_buffer_limit,
     parse_log_buffer_limit_for,
 };
