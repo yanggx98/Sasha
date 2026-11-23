@@ -664,3 +664,242 @@ fn event_queue_is_bounded_but_keeps_lifecycle_events() {
         }
     )));
 }
+
+mod monitor_tests {
+    use super::*;
+    use crate::scripting::MonitorRequest;
+    use std::sync::mpsc::Receiver;
+
+    type Records = Arc<Mutex<Vec<String>>>;
+
+    /// Plays the UI thread: records each request and answers `is_paused` / `save`.
+    /// With `reply_to_save == false` it keeps the save reply open without answering.
+    fn spawn_fake_ui(
+        rx: Receiver<MonitorRequest>,
+        paused: bool,
+        save_result: Result<(), String>,
+        reply_to_save: bool,
+    ) -> Records {
+        let records: Records = Arc::new(Mutex::new(Vec::new()));
+        let thread_records = Arc::clone(&records);
+        thread::spawn(move || {
+            let mut held = Vec::new();
+            while let Ok(request) = rx.recv() {
+                let mut log = thread_records.lock().unwrap();
+                match request {
+                    MonitorRequest::Pause => log.push("pause".to_string()),
+                    MonitorRequest::Resume => log.push("resume".to_string()),
+                    MonitorRequest::Clear => log.push("clear".to_string()),
+                    MonitorRequest::IsPaused { reply } => {
+                        log.push("is_paused".to_string());
+                        let _ = reply.send(paused);
+                    }
+                    MonitorRequest::Save {
+                        rel_path, reply, ..
+                    } => {
+                        log.push(format!("save:{}", rel_path.display()));
+                        if reply_to_save {
+                            let _ = reply.send(save_result.clone());
+                        } else {
+                            held.push(reply);
+                        }
+                    }
+                }
+            }
+        });
+        records
+    }
+
+    fn wait_for_records(records: &Records, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while records.lock().unwrap().len() < count {
+            assert!(Instant::now() < deadline, "timed out waiting for records");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn run(
+        manager: &mut ScriptManager,
+        service: &SessionService,
+        generation: u64,
+        src: &str,
+    ) -> u64 {
+        manager
+            .start_script(
+                PathBuf::from("monitor.lua"),
+                src.to_string(),
+                service,
+                generation,
+            )
+            .unwrap()
+    }
+
+    fn log_messages(snap: &ScriptInstanceSnapshot) -> Vec<String> {
+        snap.logs
+            .iter()
+            .map(|entry| entry.message.clone())
+            .collect()
+    }
+
+    #[test]
+    fn monitor_calls_are_forwarded_in_order() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), true);
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            "monitor.pause() monitor.clear() monitor.resume()",
+        );
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        wait_for_records(&records, 3);
+        assert_eq!(*records.lock().unwrap(), vec!["pause", "clear", "resume"]);
+    }
+
+    #[test]
+    fn monitor_is_paused_returns_ui_reply() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let _records = spawn_fake_ui(manager.enable_monitor(), true, Ok(()), true);
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"log.info("paused=" .. tostring(monitor.is_paused()))"#,
+        );
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert!(log_messages(&snap).contains(&"paused=true".to_string()));
+    }
+
+    #[test]
+    fn monitor_save_returns_true_or_nil_and_message() {
+        let (service, generation, _writes) = setup_connected_service();
+        let src = r#"local ok, err = monitor.save("a.txt") log.info("saved=" .. tostring(ok) .. " " .. tostring(err))"#;
+
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), true);
+        let id = run(&mut manager, &service, generation, src);
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert!(log_messages(&snap).contains(&"saved=true nil".to_string()));
+        assert_eq!(*records.lock().unwrap(), vec!["save:a.txt"]);
+
+        let mut failing = ScriptManager::new();
+        let _records = spawn_fake_ui(
+            failing.enable_monitor(),
+            false,
+            Err("disk full".into()),
+            true,
+        );
+        let id = run(&mut failing, &service, generation, src);
+        let snap = wait_until_finished(&failing, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert!(log_messages(&snap).contains(&"saved=nil disk full".to_string()));
+    }
+
+    #[test]
+    fn monitor_save_rejects_bad_paths_without_contacting_ui() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), true);
+        let sources = [
+            r#"monitor.save("")"#,
+            r#"monitor.save("../x")"#,
+            r#"monitor.save("a/../../x")"#,
+            r#"monitor.save("/x")"#,
+            r#"monitor.save("C:\\x")"#,
+            r#"monitor.save("\\\\srv\\sh\\x")"#,
+            r#"monitor.save("a.txt:stream")"#,
+            r#"monitor.save("a\0b")"#,
+            "monitor.save(nil)",
+            "monitor.save(5)",
+        ];
+        for src in sources {
+            let id = run(&mut manager, &service, generation, src);
+            let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+            match snap.status {
+                ScriptStatus::Failed { ref error } => assert!(
+                    error.contains("bad argument #1 to 'monitor.save'"),
+                    "{src}: unexpected error {error}"
+                ),
+                other => panic!("{src}: expected Failed, got {other:?}"),
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+        assert!(records.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn monitor_save_is_interrupted_by_stop() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), false);
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"monitor.save("a.txt")"#,
+        );
+        wait_for_records(&records, 1);
+        assert!(manager.stop_instance(id));
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(
+            snap.status,
+            ScriptStatus::Stopped {
+                reason: StopReason::User
+            }
+        );
+    }
+
+    #[test]
+    fn monitor_reports_unavailable_when_ui_receiver_dropped() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        drop(manager.enable_monitor());
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"local ok, err = pcall(monitor.save, "a.txt") log.info("ok=" .. tostring(ok) .. " " .. tostring(err))"#,
+        );
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert!(
+            log_messages(&snap)
+                .iter()
+                .any(|m| m.starts_with("ok=false") && m.contains("unavailable"))
+        );
+    }
+
+    #[test]
+    fn monitor_is_not_supported_without_enable_monitor() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"
+            for _, name in ipairs({"pause", "resume", "clear", "is_paused"}) do
+                local ok, err = pcall(monitor[name])
+                log.info(name .. ":" .. tostring(ok) .. ":" .. tostring(err))
+            end
+            local ok, err = pcall(monitor.save, "a.txt")
+            log.info("save:" .. tostring(ok) .. ":" .. tostring(err))
+            "#,
+        );
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        let messages = log_messages(&snap);
+        assert_eq!(messages.len(), 5);
+        for message in messages {
+            assert!(
+                message.contains(":false:") && message.contains("not supported in CLI mode"),
+                "{message}"
+            );
+        }
+    }
+}
