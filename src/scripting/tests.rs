@@ -875,6 +875,38 @@ mod monitor_tests {
     }
 
     #[test]
+    fn monitor_requests_are_bounded_and_script_blocks_when_ui_is_slow() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let _rx = manager.enable_monitor(); // never drained: a stalled UI
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"for i = 1, 100000 do monitor.clear() end log.info("done")"#,
+        );
+        thread::sleep(Duration::from_millis(300));
+        let snap = manager
+            .snapshots()
+            .into_iter()
+            .find(|s| s.run_id == id)
+            .unwrap();
+        assert!(
+            snap.status.is_active(),
+            "script should be blocked on a full queue"
+        );
+        assert!(!log_messages(&snap).contains(&"done".to_string()));
+        assert!(manager.stop_instance(id));
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(
+            snap.status,
+            ScriptStatus::Stopped {
+                reason: StopReason::User
+            }
+        );
+    }
+
+    #[test]
     fn monitor_is_not_supported_without_enable_monitor() {
         let (service, generation, _writes) = setup_connected_service();
         let mut manager = ScriptManager::new();

@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
@@ -31,6 +31,10 @@ pub const SCRIPT_EVENT_QUEUE_MAX: usize = 10_000;
 
 /// Default timeout in milliseconds when `timeout_ms` is omitted in `serial.read` / `serial.wait_text`.
 pub const DEFAULT_RX_TIMEOUT_MS: u64 = 5_000;
+
+/// Pending `monitor.*` requests per manager. When the UI falls behind, the script blocks
+/// (abort-aware) instead of queueing without limit.
+pub const MONITOR_QUEUE_DEPTH: usize = 256;
 
 /// An action a script asks the UI to perform on the receive area (see the Lua `monitor` module).
 #[derive(Debug)]
@@ -137,7 +141,7 @@ pub struct ScriptManager {
     instances: Arc<Mutex<InstanceMap>>,
     events: Arc<Mutex<EventQueue>>,
     disconnect_watcher_attached: bool,
-    monitor_tx: Option<Sender<MonitorRequest>>,
+    monitor_tx: Option<SyncSender<MonitorRequest>>,
 }
 
 impl Default for ScriptManager {
@@ -161,7 +165,7 @@ impl ScriptManager {
     /// receives their requests on the returned channel. Without this call (the CLI) every
     /// `monitor.*` function raises "not supported in CLI mode".
     pub fn enable_monitor(&mut self) -> Receiver<MonitorRequest> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(MONITOR_QUEUE_DEPTH);
         self.monitor_tx = Some(tx);
         rx
     }

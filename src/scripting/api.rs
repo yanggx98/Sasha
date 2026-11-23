@@ -1,7 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
+use std::thread;
 use std::time::Duration;
 
 use mlua::{Lua, MultiValue, Value};
@@ -23,6 +24,7 @@ pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
 }
 
 const MONITOR_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MONITOR_FULL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
 
 fn monitor_unavailable() -> mlua::Error {
     mlua::Error::RuntimeError("monitor is unavailable: the session tab is gone".to_string())
@@ -38,7 +40,19 @@ fn send_monitor_request(
     let tx = ctx.shared.monitor.as_ref().ok_or_else(|| {
         mlua::Error::RuntimeError(format!("monitor.{name} is not supported in CLI mode"))
     })?;
-    tx.send(request).map_err(|_| monitor_unavailable())
+    let mut request = request;
+    loop {
+        match tx.try_send(request) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) => return Err(monitor_unavailable()),
+            Err(TrySendError::Full(returned)) => {
+                // The UI is behind: wait for room, but stay stoppable.
+                request = returned;
+                thread::sleep(MONITOR_FULL_RETRY_INTERVAL);
+                ctx.check_abort().map_err(mlua::Error::external)?;
+            }
+        }
+    }
 }
 
 /// Waits for the UI's reply, waking on cancellation or disconnect.
