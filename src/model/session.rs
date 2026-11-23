@@ -365,6 +365,13 @@ impl SessionState {
         }
     }
 
+    /// Pauses or resumes the receive display; a no-op when already in that state.
+    pub fn set_receive_paused(&mut self, paused: bool) {
+        if self.receive.paused != paused {
+            self.toggle_receive_pause();
+        }
+    }
+
     /// Toggles automatic scrolling to the newest log entry.
     pub fn toggle_auto_scroll(&mut self) {
         self.receive.auto_scroll = !self.receive.auto_scroll;
@@ -638,6 +645,23 @@ mod tests {
         assert_eq!(state.markers.len(), 1);
         state.clear_receive_logs();
         assert!(state.markers.is_empty());
+    }
+
+    #[test]
+    fn set_receive_paused_is_idempotent_and_flushes_on_resume() {
+        let mut state = SessionState::new_simulated_demo();
+        state.clear_receive_logs();
+        state.set_receive_paused(true);
+        state.set_receive_paused(true);
+        assert!(state.receive.paused);
+        state.record_tx_bytes(b"AT", "12:00:00.000");
+        assert_eq!(state.retained_while_paused.len(), 1);
+        assert!(state.logs.is_empty());
+        state.set_receive_paused(false);
+        state.set_receive_paused(false);
+        assert!(!state.receive.paused);
+        assert!(state.retained_while_paused.is_empty());
+        assert_eq!(state.logs.len(), 1);
     }
 
     #[test]

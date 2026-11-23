@@ -14,6 +14,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::session_service::SessionService;
 
+pub(crate) use monitor::save_text;
 use runtime::{CancellableSleeper, InstanceShared, run_script_instance};
 
 /// Per-instance Lua VM memory limit (16 MiB).
