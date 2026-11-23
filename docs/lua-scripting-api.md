@@ -76,6 +76,31 @@
 
 `data` 必须是字符串（可含 `\0` 与二进制字节），否则抛出参数错误。
 
+---
+
+### 1.5 `monitor` 模块（接收区动作）
+
+让脚本执行与接收区工具栏等价的操作。**仅图形界面可用**；`sasha-cli run` 中调用任何 `monitor.*` 都会抛出 `monitor.<name> is not supported in CLI mode`（可被 `pcall` 捕获）。
+
+| 函数签名 | 说明 | 返回值 |
+| --- | --- | --- |
+| `monitor.pause()` | 暂停接收区输出，等价于工具栏暂停按钮。暂停期间新数据（RX 与 TX）不会丢失，恢复后显示；脚本自己的接收缓冲不受影响 | 无 |
+| `monitor.resume()` | 恢复接收区输出 | 无 |
+| `monitor.is_paused()` | 查询接收区当前是否暂停 | 布尔值 |
+| `monitor.clear()` | 清空接收区日志与标记，等价于工具栏清空按钮 | 无 |
+| `monitor.save(path)` | 把接收区**当前显示的文本**写入文件，内容与工具栏保存一致（含 RX 与 TX 行，受 HEX/文本、时间戳开关和过滤影响） | 成功返回 `true`；写入失败返回 `nil, "错误信息"` |
+
+#### `monitor.save` 的路径规则
+
+- `path` 必须是相对路径，写入「脚本输出目录」下。脚本输出目录默认是脚本文件所在目录，可在设置中修改。缺失的子目录会自动创建，同名文件会被覆盖。
+- 空路径、绝对路径、盘符、UNC 路径、含 `:`、含 `..`、含 `\0` 或控制字符的路径，含 `<>"|?*` 的名称，以 `.` 或空格结尾的名称，以及 Windows 保留设备名（`CON`、`PRN`、`AUX`、`NUL`、`COM1`–`COM9`、`LPT1`–`LPT9`，不论大小写与扩展名）会触发参数错误（抛出错误，不会写文件）。
+- 路径经符号链接或目录联接（junction）解析后若落在输出目录之外，保存会失败并返回 `nil, "错误信息"`，且不会在输出目录之外创建任何目录。
+- 路径合法但系统无法写入（权限、磁盘已满、上级路径是文件等）时返回 `nil, "错误信息"`，不会终止脚本。
+- `monitor.*` 请求队列有上限（256）。界面处理不过来时脚本会在调用处等待，仍可被停止。
+- `monitor.save` 保存的是界面**已经显示**的内容。刚到达、界面尚未处理的数据，以及暂停期间暂存的数据不在其中；需要时先 `task.sleep(100)` 再保存。
+- `monitor.save` 与 `monitor.clear` 是两个独立动作：从界面取快照到清空之间新到达的数据会随清空一起丢失；开启了过滤时，`save` 只保存过滤后可见的行，而 `clear` 会清掉全部行。需要不丢数据的轮转时，请不要在过滤开启的状态下使用，并尽量在数据流停顿时保存。
+- 脚本在等待保存结果时被停止或断线，会立即以 `Stopped` 结束；此时已排队的保存请求仍可能被界面执行并写出文件。
+
 ## 2. 错误语义与实例生命周期
 
 脚本实例状态分为：`Running`（运行中）、`Stopping`（停止中）、`Completed`（已完成）、`Stopped { reason }`（已停止：`User` 或 `Disconnected`）、`Failed { error }`（失败）。
@@ -83,7 +108,7 @@
 | 类别 | 触发场景 | 运行表现 | 实例最终状态 |
 | --- | --- | --- | --- |
 | **预期超时** | `serial.read` / `serial.wait_text` 在 `timeout_ms` 内未收到匹配数据 | 返回 `nil, "timeout"`，由脚本自行分支处理 | 继续运行 |
-| **参数错误** | 传入非法类型、空 hex、奇数 hex、空 `pattern`、负数延时等 | 抛出 Lua 运行时错误（可被 `pcall` 捕获） | 未捕获时变为 `Failed` |
+| **参数错误** | 传入非法类型、空 hex、奇数 hex、空 `pattern`、负数延时、非法的 `monitor.save` 路径等 | 抛出 Lua 运行时错误（可被 `pcall` 捕获） | 未捕获时变为 `Failed` |
 | **取消 / 断线** | 用户点击停止、会话断开、关闭会话、或调用 `serial.*` 时连接代次过期 | 立即唤醒等待中的 `sleep`/`read`/`wait_text`，指令钩子中断纯 Lua 循环 | `Stopped`（`User` 或 `Disconnected`），**不记为 `Failed`** |
 | **资源限制** | 单实例 RX 缓冲溢出、RX 订阅队列溢出、Lua 内存超限 | 抛出不可恢复错误并终止受影响实例 | `Failed` |
 | **语法 / 运行错误** | Lua 语法错误、调用 `nil`、未捕获异常、串口写入队列满或底层写失败 | 终止当前实例，不影响同会话其他正在运行的脚本 | `Failed` |
@@ -163,5 +188,32 @@ while not task.is_cancelled() do
         log.warn("第", count, "次心跳超时")
     end
     task.sleep(1000)
+end
+```
+
+### 5.4 收到特定数据后暂停接收区
+
+```lua
+local line = serial.wait_text("FATAL", 60000)
+if line then
+    monitor.pause()
+    log.error("设备报告 FATAL，接收区已暂停:", line)
+end
+```
+
+### 5.5 周期保存并清空接收区
+
+```lua
+local n = 0
+while not task.is_cancelled() do
+    task.sleep(3600 * 1000)
+    task.sleep(100) -- 让界面处理完刚到达的数据
+    n = n + 1
+    local ok, err = monitor.save(string.format("capture/part_%03d.txt", n))
+    if ok then
+        monitor.clear() -- 保存成功才清空，失败时数据保留
+    else
+        log.error("保存失败:", err)
+    end
 end
 ```

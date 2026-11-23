@@ -1,13 +1,17 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
+use std::thread;
 use std::time::Duration;
 
 use mlua::{Lua, MultiValue, Value};
 
 use crate::session_service::SessionTxError;
 
+use super::monitor::validate_relative_path;
 use super::runtime::{ScriptAbort, ScriptContext, deadline_after};
-use super::{DEFAULT_RX_TIMEOUT_MS, ScriptLogLevel};
+use super::{DEFAULT_RX_TIMEOUT_MS, MonitorRequest, ScriptLogLevel};
 
 /// Registers `serial`, `task`, `log`, and global `print` into the Lua VM.
 pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
@@ -15,6 +19,110 @@ pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
     register_task_module(lua, &ctx)?;
     register_log_module(lua, &ctx)?;
     register_checksum_module(lua)?;
+    register_monitor_module(lua, &ctx)?;
+    Ok(())
+}
+
+const MONITOR_REPLY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MONITOR_FULL_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+
+fn monitor_unavailable() -> mlua::Error {
+    mlua::Error::RuntimeError("monitor is unavailable: the session tab is gone".to_string())
+}
+
+/// Sends `request` to the UI. Errors when the host has no receive area (CLI) or the UI is gone.
+fn send_monitor_request(
+    ctx: &ScriptContext,
+    name: &str,
+    request: MonitorRequest,
+) -> mlua::Result<()> {
+    ctx.check_abort().map_err(mlua::Error::external)?;
+    let tx = ctx.shared.monitor.as_ref().ok_or_else(|| {
+        mlua::Error::RuntimeError(format!("monitor.{name} is not supported in CLI mode"))
+    })?;
+    let mut request = request;
+    loop {
+        match tx.try_send(request) {
+            Ok(()) => return Ok(()),
+            Err(TrySendError::Disconnected(_)) => return Err(monitor_unavailable()),
+            Err(TrySendError::Full(returned)) => {
+                // The UI is behind: wait for room, but stay stoppable.
+                request = returned;
+                thread::sleep(MONITOR_FULL_RETRY_INTERVAL);
+                ctx.check_abort().map_err(mlua::Error::external)?;
+            }
+        }
+    }
+}
+
+/// Waits for the UI's reply, waking on cancellation or disconnect.
+fn wait_monitor_reply<T>(ctx: &ScriptContext, rx: &Receiver<T>) -> mlua::Result<T> {
+    loop {
+        ctx.check_abort().map_err(mlua::Error::external)?;
+        match rx.recv_timeout(MONITOR_REPLY_POLL_INTERVAL) {
+            Ok(value) => return Ok(value),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return Err(monitor_unavailable()),
+        }
+    }
+}
+
+fn register_monitor_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
+    let monitor = lua.create_table()?;
+
+    let simple: [(&'static str, fn() -> MonitorRequest); 3] = [
+        ("pause", || MonitorRequest::Pause),
+        ("resume", || MonitorRequest::Resume),
+        ("clear", || MonitorRequest::Clear),
+    ];
+    for (name, make_request) in simple {
+        let call_ctx = ctx.clone();
+        let f = lua
+            .create_function(move |_, ()| send_monitor_request(&call_ctx, name, make_request()))?;
+        monitor.set(name, f)?;
+    }
+
+    let paused_ctx = ctx.clone();
+    let is_paused_fn = lua.create_function(move |_, ()| {
+        let (reply, rx) = mpsc::channel();
+        send_monitor_request(&paused_ctx, "is_paused", MonitorRequest::IsPaused { reply })?;
+        wait_monitor_reply(&paused_ctx, &rx)
+    })?;
+    monitor.set("is_paused", is_paused_fn)?;
+
+    let save_ctx = ctx.clone();
+    let save_fn = lua.create_function(move |lua, val: Value| {
+        let raw = expect_utf8_arg(val, "monitor.save", 1)?;
+        let rel_path = validate_relative_path(&raw).map_err(|reason| {
+            mlua::Error::RuntimeError(format!("bad argument #1 to 'monitor.save' ({reason})"))
+        })?;
+        let script_dir = save_ctx
+            .shared
+            .path
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        let (reply, rx) = mpsc::channel();
+        send_monitor_request(
+            &save_ctx,
+            "save",
+            MonitorRequest::Save {
+                rel_path,
+                script_dir,
+                reply,
+            },
+        )?;
+        match wait_monitor_reply(&save_ctx, &rx)? {
+            Ok(()) => Ok(MultiValue::from_vec(vec![Value::Boolean(true)])),
+            Err(message) => Ok(MultiValue::from_vec(vec![
+                Value::Nil,
+                Value::String(lua.create_string(&message)?),
+            ])),
+        }
+    })?;
+    monitor.set("save", save_fn)?;
+
+    lua.globals().set("monitor", monitor)?;
     Ok(())
 }
 

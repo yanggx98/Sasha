@@ -179,6 +179,8 @@ pub(crate) struct InstanceShared {
     pub(crate) rx_subscriber: Arc<RxSubscriber>,
     pub(crate) status: Mutex<ScriptStatus>,
     pub(crate) logs: Mutex<VecDeque<ScriptLogEntry>>,
+    /// `None` when the host has no receive area (CLI): `monitor.*` then raises an error.
+    pub(crate) monitor: Option<std::sync::mpsc::SyncSender<super::MonitorRequest>>,
 }
 
 /// Worker-thread-local context captured by Lua host API closures.

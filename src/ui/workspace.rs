@@ -38,7 +38,7 @@ use crate::model::{
     parse_log_buffer_limit_for, theoretical_max_bytes_per_sec,
 };
 use crate::model::{MarkerColor, panel_items};
-use crate::scripting::{ScriptEvent, ScriptManager, ScriptStatus};
+use crate::scripting::{MonitorRequest, ScriptEvent, ScriptManager, ScriptStatus, save_text};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
@@ -155,6 +155,11 @@ struct SessionTab {
     script_paths: Vec<PathBuf>,
     script_states: HashMap<PathBuf, ScriptEntryState>,
     script_manager: ScriptManager,
+    /// Receive-area actions requested by this tab's scripts (Lua `monitor` module).
+    monitor_requests: Receiver<MonitorRequest>,
+    /// Set when a script cleared the log; the next render resets the text selection,
+    /// which needs a `Window` the script poller does not have.
+    pending_selection_reset: bool,
     script_poll_task: Option<Task<()>>,
     script_preferred_width: Pixels,
     script_load_error: Option<SharedString>,
@@ -194,6 +199,8 @@ impl SessionTab {
             state.receive.hex_mode,
             state.logs.len(),
         );
+        let mut script_manager = ScriptManager::new();
+        let monitor_requests = script_manager.enable_monitor();
         Self {
             id,
             page: AppPage::Start,
@@ -249,7 +256,9 @@ impl SessionTab {
             _search_subscription: None,
             script_paths: initial_scripts,
             script_states: HashMap::new(),
-            script_manager: ScriptManager::new(),
+            script_manager,
+            monitor_requests,
+            pending_selection_reset: false,
             script_poll_task: None,
             script_preferred_width: SCRIPT_PANEL_MIN_WIDTH,
             script_load_error: None,
@@ -535,6 +544,49 @@ impl SessionTab {
             }
         }
         true
+    }
+
+    /// Runs the receive-area actions this tab's scripts asked for, in arrival order.
+    /// `output_dir` is the configured script output folder; without it a save goes to
+    /// the requesting script's own folder.
+    fn drain_monitor_requests(&mut self, output_dir: Option<&Path>) -> bool {
+        let mut handled = false;
+        while let Ok(request) = self.monitor_requests.try_recv() {
+            handled = true;
+            match request {
+                MonitorRequest::Pause => self.state.set_receive_paused(true),
+                MonitorRequest::Resume => self.state.set_receive_paused(false),
+                MonitorRequest::Clear => {
+                    self.state.clear_receive_logs();
+                    self.pending_selection_reset = true;
+                }
+                MonitorRequest::IsPaused { reply } => {
+                    let _ = reply.send(self.state.receive.paused);
+                }
+                MonitorRequest::Save {
+                    rel_path,
+                    script_dir,
+                    reply,
+                } => {
+                    let Some(base) = output_dir.map(Path::to_path_buf).or(script_dir) else {
+                        let _ = reply.send(Err("no output directory".to_string()));
+                        continue;
+                    };
+                    // Snapshot on the UI thread; write on a worker so the UI never waits on disk.
+                    let text = self.receive_log_text();
+                    let worker_reply = reply.clone();
+                    let spawned = std::thread::Builder::new()
+                        .name("sasha-monitor-save".to_string())
+                        .spawn(move || {
+                            let _ = worker_reply.send(save_text(&base, &rel_path, &text));
+                        });
+                    if let Err(err) = spawned {
+                        let _ = reply.send(Err(format!("failed to start save: {err}")));
+                    }
+                }
+            }
+        }
+        handled
     }
 
     fn script_panel_items(&self, locale: Locale) -> Vec<ScriptPanelItem> {
@@ -2574,15 +2626,19 @@ impl SashaApp {
                     .timer(Duration::from_millis(50))
                     .await;
                 let keep_going = this.update(cx, |app, cx| {
+                    let output_dir = app.config_store.read(cx).config().script_output_dir.clone();
                     let Some(tab) = app.tab_mut(tab_id) else {
                         return false;
                     };
+                    // Read before draining: a script that finishes after this read has
+                    // already queued its requests, so the drain below still sees them.
+                    let still_running = tab.script_manager.running_count() > 0;
+                    let had_monitor_requests = tab.drain_monitor_requests(output_dir.as_deref());
                     let had_script_events = tab.drain_script_events();
                     let had_tx_logs = tab.drain_tx_completed_logs();
-                    if had_script_events || had_tx_logs {
+                    if had_monitor_requests || had_script_events || had_tx_logs {
                         cx.notify();
                     }
-                    let still_running = tab.script_manager.running_count() > 0;
                     if !still_running {
                         tab.script_poll_task = None;
                     }
@@ -3748,6 +3804,10 @@ impl Render for SashaApp {
             let cfg = self.config_store.read(cx).config();
             (cfg.log_font_size, cfg.log_buffer_limit, cfg.log_wrap)
         };
+        if std::mem::take(&mut self.active_tab_mut().pending_selection_reset) {
+            // Before `observe_log_len`: the sync compares against the pre-clear length.
+            self.sync_log_selection(window, cx);
+        }
         {
             let tab = self.active_tab_mut();
             let log_len = tab.state.logs.len();

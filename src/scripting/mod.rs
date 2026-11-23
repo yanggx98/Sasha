@@ -1,17 +1,20 @@
 #![allow(dead_code)]
 
 mod api;
+mod monitor;
 mod runtime;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::sync::{Arc, Mutex, Weak};
 use std::thread::{self, JoinHandle};
 
 use crate::session_service::SessionService;
 
+pub(crate) use monitor::save_text;
 use runtime::{CancellableSleeper, InstanceShared, run_script_instance};
 
 /// Per-instance Lua VM memory limit (16 MiB).
@@ -28,6 +31,27 @@ pub const SCRIPT_EVENT_QUEUE_MAX: usize = 10_000;
 
 /// Default timeout in milliseconds when `timeout_ms` is omitted in `serial.read` / `serial.wait_text`.
 pub const DEFAULT_RX_TIMEOUT_MS: u64 = 5_000;
+
+/// Pending `monitor.*` requests per manager. When the UI falls behind, the script blocks
+/// (abort-aware) instead of queueing without limit.
+pub const MONITOR_QUEUE_DEPTH: usize = 256;
+
+/// An action a script asks the UI to perform on the receive area (see the Lua `monitor` module).
+#[derive(Debug)]
+pub enum MonitorRequest {
+    Pause,
+    Resume,
+    Clear,
+    IsPaused {
+        reply: Sender<bool>,
+    },
+    /// `script_dir` is the directory of the script file, the default output directory.
+    Save {
+        rel_path: PathBuf,
+        script_dir: Option<PathBuf>,
+        reply: Sender<Result<(), String>>,
+    },
+}
 
 /// Reason a script instance stopped before natural completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +141,7 @@ pub struct ScriptManager {
     instances: Arc<Mutex<InstanceMap>>,
     events: Arc<Mutex<EventQueue>>,
     disconnect_watcher_attached: bool,
+    monitor_tx: Option<SyncSender<MonitorRequest>>,
 }
 
 impl Default for ScriptManager {
@@ -132,7 +157,17 @@ impl ScriptManager {
             instances: Arc::new(Mutex::new(BTreeMap::new())),
             events: Arc::new(Mutex::new(VecDeque::new())),
             disconnect_watcher_attached: false,
+            monitor_tx: None,
         }
+    }
+
+    /// Lets scripts started from now on use the Lua `monitor` module; the caller (the GUI)
+    /// receives their requests on the returned channel. Without this call (the CLI) every
+    /// `monitor.*` function raises "not supported in CLI mode".
+    pub fn enable_monitor(&mut self) -> Receiver<MonitorRequest> {
+        let (tx, rx) = mpsc::sync_channel(MONITOR_QUEUE_DEPTH);
+        self.monitor_tx = Some(tx);
+        rx
     }
 
     /// Starts a new Lua script instance using the provided `source` snapshot.
@@ -167,6 +202,7 @@ impl ScriptManager {
             rx_subscriber: Arc::clone(&rx_subscriber),
             status: Mutex::new(ScriptStatus::Running),
             logs: Mutex::new(VecDeque::new()),
+            monitor: self.monitor_tx.clone(),
         });
 
         {
