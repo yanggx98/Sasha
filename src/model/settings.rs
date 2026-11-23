@@ -94,6 +94,8 @@ pub struct AppConfig {
     pub stream_output_scope: StreamOutputScope,
     /// Persisted Lua script paths shown in the script panel.
     pub scripts: Vec<PathBuf>,
+    /// Directory Lua `monitor.save` writes under; `None` means the script's own directory.
+    pub script_output_dir: Option<PathBuf>,
     /// Optional custom background image path for the main workspace.
     pub background_image: Option<PathBuf>,
     /// Background image opacity percentage (`0..=100`).
@@ -130,6 +132,7 @@ impl Default for AppConfig {
             log_wrap: LogWrap::default(),
             stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
+            script_output_dir: None,
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
             theme: DEFAULT_THEME_ID.to_string(),
@@ -694,6 +697,32 @@ mod tests {
         assert_eq!(
             ConfigStore::load_from_path(path).config().log_wrap,
             LogWrap::Anywhere
+        );
+    }
+
+    #[test]
+    fn script_output_dir_defaults_to_none_and_roundtrips() {
+        let dir = TempDir::new("script-output-dir");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\nlocale = \"en-US\"\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert_eq!(store.config().script_output_dir, None);
+
+        let chosen = PathBuf::from("captures");
+        store
+            .update(|cfg| cfg.script_output_dir = Some(chosen.clone()))
+            .unwrap();
+        assert_eq!(
+            ConfigStore::load_from_path(path.clone())
+                .config()
+                .script_output_dir,
+            Some(chosen)
+        );
+
+        store.update(|cfg| cfg.script_output_dir = None).unwrap();
+        assert_eq!(
+            ConfigStore::load_from_path(path).config().script_output_dir,
+            None
         );
     }
 

@@ -557,6 +557,44 @@ impl SettingsWindow {
         .detach();
     }
 
+    fn choose_script_output_dir(&mut self, cx: &mut Context<Self>) {
+        let locale = self.current_locale(cx);
+        let picker = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(tr_shared(locale, "settings.script_output_dir_choose")),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut paths))) = picker.await else {
+                return;
+            };
+            let Some(path) = paths.pop() else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                let res = this.config_store.update(cx, |store, cx| {
+                    let saved = store.update(|cfg| cfg.script_output_dir = Some(path));
+                    cx.notify();
+                    saved
+                });
+                this.save_error = res.err();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn reset_script_output_dir(&mut self, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.script_output_dir = None);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
     fn clear_background_image(&mut self, cx: &mut Context<Self>) {
         let result = self.config_store.update(cx, |store, cx| {
             let res = store.update(|cfg| cfg.background_image = None);
@@ -950,6 +988,46 @@ impl SettingsWindow {
         let locale = self.current_locale(cx);
         let theme = self.theme;
         let path_text = self.config_store.read(cx).path().display().to_string();
+        let output_dir = self
+            .config_store
+            .read(cx)
+            .config()
+            .script_output_dir
+            .clone();
+        let has_output_dir = output_dir.is_some();
+        let output_dir_text: SharedString = output_dir
+            .map(|dir| dir.display().to_string().into())
+            .unwrap_or_else(|| tr_shared(locale, "settings.script_output_dir_default"));
+        let output_dir_controls = h_flex()
+            .items_center()
+            .gap_2()
+            .child(
+                div()
+                    .max_w(px(220.))
+                    .truncate()
+                    .text_xs()
+                    .text_color(if has_output_dir {
+                        theme.text_primary
+                    } else {
+                        theme.text_muted
+                    })
+                    .child(output_dir_text),
+            )
+            .child(self.flat_action_button(
+                "settings-script-output-choose",
+                tr_shared(locale, "settings.script_output_dir_choose"),
+                |this, _, cx| this.choose_script_output_dir(cx),
+                cx,
+            ))
+            .when(has_output_dir, |this| {
+                this.child(self.flat_action_button(
+                    "settings-script-output-reset",
+                    tr_shared(locale, "settings.script_output_dir_reset"),
+                    |this, _, cx| this.reset_script_output_dir(cx),
+                    cx,
+                ))
+            })
+            .into_any_element();
 
         let language_picker = h_flex()
             .p_0p5()
@@ -1106,6 +1184,11 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.auto_update_title"),
                 tr_shared(locale, "settings.auto_update_desc"),
                 auto_check_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.script_output_dir_title"),
+                tr_shared(locale, "settings.script_output_dir_desc"),
+                output_dir_controls,
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.config_path_title"),
