@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 mod api;
+mod monitor;
 mod runtime;
 
 use std::collections::{BTreeMap, VecDeque};
