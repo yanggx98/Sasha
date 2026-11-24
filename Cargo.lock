@@ -6081,7 +6081,7 @@ dependencies = [
 
 [[package]]
 name = "sasha"
-version = "0.2.1-b"
+version = "0.2.2-b"
 dependencies = [
  "chrono",
  "clap",
