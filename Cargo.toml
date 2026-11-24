@@ -1,6 +1,6 @@
 [package]
 name = "sasha"
-version = "0.2.3-b"
+version = "0.3.0-b"
 edition = "2024"
 license = "GPL-3.0-only"
 
