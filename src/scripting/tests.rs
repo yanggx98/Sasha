@@ -704,6 +704,12 @@ mod monitor_tests {
                             held.push(reply);
                         }
                     }
+                    MonitorRequest::Rotate {
+                        rel_path, reply, ..
+                    } => {
+                        log.push(format!("rotate:{}", rel_path.display()));
+                        let _ = reply.send(save_result.clone());
+                    }
                 }
             }
         });
@@ -875,6 +881,78 @@ mod monitor_tests {
     }
 
     #[test]
+    fn monitor_rotate_returns_true_or_nil_and_message() {
+        let (service, generation, _writes) = setup_connected_service();
+        let src = r#"local ok, err = monitor.rotate("r/a.txt") log.info("rotated=" .. tostring(ok) .. " " .. tostring(err))"#;
+
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), true);
+        let id = run(&mut manager, &service, generation, src);
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert!(log_messages(&snap).contains(&"rotated=true nil".to_string()));
+        let expected = format!(
+            "rotate:{}",
+            std::path::Path::new("r").join("a.txt").display()
+        );
+        assert_eq!(*records.lock().unwrap(), vec![expected]);
+
+        let mut failing = ScriptManager::new();
+        let _records = spawn_fake_ui(
+            failing.enable_monitor(),
+            false,
+            Err("disk full".into()),
+            true,
+        );
+        let id = run(&mut failing, &service, generation, src);
+        let snap = wait_until_finished(&failing, id, Duration::from_secs(3));
+        assert!(log_messages(&snap).contains(&"rotated=nil disk full".to_string()));
+    }
+
+    #[test]
+    fn monitor_rotate_rejects_bad_paths_without_contacting_ui() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let records = spawn_fake_ui(manager.enable_monitor(), false, Ok(()), true);
+        for src in [
+            r#"monitor.rotate("../x")"#,
+            r#"monitor.rotate("CON")"#,
+            r#"monitor.rotate("")"#,
+            "monitor.rotate(nil)",
+        ] {
+            let id = run(&mut manager, &service, generation, src);
+            let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+            match snap.status {
+                ScriptStatus::Failed { ref error } => assert!(
+                    error.contains("bad argument #1 to 'monitor.rotate'"),
+                    "{src}: unexpected error {error}"
+                ),
+                other => panic!("{src}: expected Failed, got {other:?}"),
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+        assert!(records.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn monitor_rotate_is_not_supported_without_enable_monitor() {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let id = run(
+            &mut manager,
+            &service,
+            generation,
+            r#"local ok, err = pcall(monitor.rotate, "a.txt") log.info(tostring(ok) .. ":" .. tostring(err))"#,
+        );
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        let messages = log_messages(&snap);
+        assert!(
+            messages[0].starts_with("false:") && messages[0].contains("not supported in CLI mode")
+        );
+    }
+
+    #[test]
     fn monitor_requests_are_bounded_and_script_blocks_when_ui_is_slow() {
         let (service, generation, _writes) = setup_connected_service();
         let mut manager = ScriptManager::new();
@@ -932,6 +1010,93 @@ mod monitor_tests {
                 message.contains(":false:") && message.contains("not supported in CLI mode"),
                 "{message}"
             );
+        }
+    }
+}
+
+mod time_tests {
+    use super::*;
+
+    fn run_logs(src: &str) -> (ScriptStatus, Vec<String>) {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let id = manager
+            .start_script(
+                PathBuf::from("time.lua"),
+                src.to_string(),
+                &service,
+                generation,
+            )
+            .unwrap();
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(3));
+        let logs = snap.logs.iter().map(|e| e.message.clone()).collect();
+        (snap.status, logs)
+    }
+
+    // 2001-07-15T12:00:00Z: the month and year are the same in every time zone.
+    const MID_2001_MS: &str = "995198400000";
+
+    #[test]
+    fn time_now_matches_the_system_clock() {
+        let (status, logs) = run_logs("log.info(time.now())");
+        assert_eq!(status, ScriptStatus::Completed);
+        let reported: i64 = logs[0].parse().unwrap();
+        let actual = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!((actual - reported).abs() < 5_000, "{reported} vs {actual}");
+    }
+
+    #[test]
+    fn time_monotonic_advances_with_sleep() {
+        let (status, logs) = run_logs(
+            "local a = time.monotonic() task.sleep(30) local b = time.monotonic() log.info(tostring(b - a >= 30))",
+        );
+        assert_eq!(status, ScriptStatus::Completed);
+        assert_eq!(logs, vec!["true"]);
+    }
+
+    #[test]
+    fn time_format_uses_the_given_timestamp() {
+        let (status, logs) = run_logs(&format!("log.info(time.format('%Y-%m', {MID_2001_MS}))"));
+        assert_eq!(status, ScriptStatus::Completed);
+        assert_eq!(logs, vec!["2001-07"]);
+    }
+
+    #[test]
+    fn time_format_defaults_to_now() {
+        let (status, logs) = run_logs("log.info(#time.format('%Y'))");
+        assert_eq!(status, ScriptStatus::Completed);
+        assert_eq!(logs, vec!["4"]);
+    }
+
+    #[test]
+    fn time_date_returns_local_fields() {
+        let (status, logs) = run_logs(&format!(
+            "local d = time.date({MID_2001_MS}) log.info(d.year, d.month, d.hour >= 0 and d.min == 0 and d.sec == 0 and d.ms == 0, d.wday >= 1 and d.wday <= 7)"
+        ));
+        assert_eq!(status, ScriptStatus::Completed);
+        assert_eq!(logs, vec!["2001\t7\ttrue\ttrue"]);
+    }
+
+    #[test]
+    fn time_rejects_bad_arguments() {
+        for src in [
+            "time.format('%Q')",
+            "time.format(5)",
+            "time.format('%Y', 'x')",
+            "time.date('x')",
+            "time.date(0/0)",
+        ] {
+            let (status, _) = run_logs(src);
+            match status {
+                ScriptStatus::Failed { ref error } => assert!(
+                    error.contains("bad argument"),
+                    "{src}: unexpected error {error}"
+                ),
+                other => panic!("{src}: expected Failed, got {other:?}"),
+            }
         }
     }
 }

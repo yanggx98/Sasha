@@ -1,7 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::thread;
 use std::time::Duration;
 
@@ -20,6 +20,100 @@ pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
     register_log_module(lua, &ctx)?;
     register_checksum_module(lua)?;
     register_monitor_module(lua, &ctx)?;
+    register_time_module(lua)?;
+    Ok(())
+}
+
+/// Reads an optional epoch-milliseconds argument (`nil` means "now").
+fn parse_optional_epoch_ms(val: Value, fn_name: &str, idx: usize) -> mlua::Result<Option<i64>> {
+    let bad = |got: &str| {
+        mlua::Error::RuntimeError(format!(
+            "bad argument #{idx} to '{fn_name}' (integer milliseconds expected, got {got})"
+        ))
+    };
+    match val {
+        Value::Nil => Ok(None),
+        Value::Integer(n) => Ok(Some(n)),
+        Value::Number(f) if f.is_finite() && f.abs() < 9.0e15 => Ok(Some(f as i64)),
+        other => Err(bad(other.type_name())),
+    }
+}
+
+fn local_time(
+    ms: Option<i64>,
+    fn_name: &str,
+    idx: usize,
+) -> mlua::Result<chrono::DateTime<chrono::Local>> {
+    use chrono::TimeZone;
+    match ms {
+        None => Ok(chrono::Local::now()),
+        Some(ms) => chrono::Local
+            .timestamp_millis_opt(ms)
+            .single()
+            .ok_or_else(|| {
+                mlua::Error::RuntimeError(format!(
+                    "bad argument #{idx} to '{fn_name}' (timestamp out of range)"
+                ))
+            }),
+    }
+}
+
+/// Read-only clock access; `os` stays disabled. Local time zone, millisecond resolution.
+fn register_time_module(lua: &Lua) -> mlua::Result<()> {
+    use chrono::{Datelike, Timelike};
+    use std::fmt::Write as _;
+
+    let time = lua.create_table()?;
+
+    time.set(
+        "now",
+        lua.create_function(|_, ()| Ok(chrono::Local::now().timestamp_millis()))?,
+    )?;
+
+    let started = std::time::Instant::now();
+    time.set(
+        "monotonic",
+        lua.create_function(move |_, ()| Ok(started.elapsed().as_millis() as i64))?,
+    )?;
+
+    time.set(
+        "format",
+        lua.create_function(|_, (fmt, ms): (Value, Value)| {
+            let fmt = expect_utf8_arg(fmt, "time.format", 1)?;
+            let when = local_time(
+                parse_optional_epoch_ms(ms, "time.format", 2)?,
+                "time.format",
+                2,
+            )?;
+            let mut out = String::new();
+            // An invalid specifier makes the formatter fail; surface it instead of panicking.
+            write!(out, "{}", when.format(&fmt)).map_err(|_| {
+                mlua::Error::RuntimeError(
+                    "bad argument #1 to 'time.format' (invalid format string)".to_string(),
+                )
+            })?;
+            Ok(out)
+        })?,
+    )?;
+
+    time.set(
+        "date",
+        lua.create_function(|lua, ms: Value| {
+            let when = local_time(parse_optional_epoch_ms(ms, "time.date", 1)?, "time.date", 1)?;
+            let table = lua.create_table()?;
+            table.set("year", when.year())?;
+            table.set("month", when.month())?;
+            table.set("day", when.day())?;
+            table.set("hour", when.hour())?;
+            table.set("min", when.minute())?;
+            table.set("sec", when.second())?;
+            table.set("ms", when.timestamp_subsec_millis().min(999))?;
+            table.set("wday", when.weekday().num_days_from_sunday() + 1)?;
+            Ok(table)
+        })?,
+    )?;
+
+    lua.globals().set("time", time)?;
     Ok(())
 }
 
@@ -90,37 +184,47 @@ fn register_monitor_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
     })?;
     monitor.set("is_paused", is_paused_fn)?;
 
-    let save_ctx = ctx.clone();
-    let save_fn = lua.create_function(move |lua, val: Value| {
-        let raw = expect_utf8_arg(val, "monitor.save", 1)?;
-        let rel_path = validate_relative_path(&raw).map_err(|reason| {
-            mlua::Error::RuntimeError(format!("bad argument #1 to 'monitor.save' ({reason})"))
-        })?;
-        let script_dir = save_ctx
-            .shared
-            .path
-            .parent()
-            .filter(|dir| !dir.as_os_str().is_empty())
-            .map(Path::to_path_buf);
-        let (reply, rx) = mpsc::channel();
-        send_monitor_request(
-            &save_ctx,
-            "save",
-            MonitorRequest::Save {
+    type PathRequest = fn(PathBuf, Option<PathBuf>, Sender<Result<(), String>>) -> MonitorRequest;
+    let path_requests: [(&'static str, PathRequest); 2] = [
+        ("save", |rel_path, script_dir, reply| MonitorRequest::Save {
+            rel_path,
+            script_dir,
+            reply,
+        }),
+        ("rotate", |rel_path, script_dir, reply| {
+            MonitorRequest::Rotate {
                 rel_path,
                 script_dir,
                 reply,
-            },
-        )?;
-        match wait_monitor_reply(&save_ctx, &rx)? {
-            Ok(()) => Ok(MultiValue::from_vec(vec![Value::Boolean(true)])),
-            Err(message) => Ok(MultiValue::from_vec(vec![
-                Value::Nil,
-                Value::String(lua.create_string(&message)?),
-            ])),
-        }
-    })?;
-    monitor.set("save", save_fn)?;
+            }
+        }),
+    ];
+    for (name, make_request) in path_requests {
+        let call_ctx = ctx.clone();
+        let f = lua.create_function(move |lua, val: Value| {
+            let qualified = format!("monitor.{name}");
+            let raw = expect_utf8_arg(val, &qualified, 1)?;
+            let rel_path = validate_relative_path(&raw).map_err(|reason| {
+                mlua::Error::RuntimeError(format!("bad argument #1 to '{qualified}' ({reason})"))
+            })?;
+            let script_dir = call_ctx
+                .shared
+                .path
+                .parent()
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .map(Path::to_path_buf);
+            let (reply, rx) = mpsc::channel();
+            send_monitor_request(&call_ctx, name, make_request(rel_path, script_dir, reply))?;
+            match wait_monitor_reply(&call_ctx, &rx)? {
+                Ok(()) => Ok(MultiValue::from_vec(vec![Value::Boolean(true)])),
+                Err(message) => Ok(MultiValue::from_vec(vec![
+                    Value::Nil,
+                    Value::String(lua.create_string(&message)?),
+                ])),
+            }
+        })?;
+        monitor.set(name, f)?;
+    }
 
     lua.globals().set("monitor", monitor)?;
     Ok(())

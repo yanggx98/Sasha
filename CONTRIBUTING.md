@@ -50,6 +50,19 @@ digest for uploaded assets, which the updater requires; alternatively upload a
 `sasha-windows-x86_64.exe.sha256` file. Releases without a verifiable asset still
 notify users but link to the release page instead of installing.
 
+## Versioning
+
+Sasha follows [Semantic Versioning](https://semver.org/) in its `0.x` phase, with a
+`-b` (beta) suffix until the features and platforms are validated, e.g. `0.1.9-b`.
+
+- **MINOR** (`0.X.0`): new features, or incompatible changes to behavior or config.
+- **PATCH** (`0.1.X`): fixes, docs and CI only, no new features.
+- Drop `-b` only when the release is considered stable.
+- Any tag containing `-` is published as a pre-release.
+- Bump `version` in `Cargo.toml` only when you are about to release, in its own
+  `chore: bump version to X` commit, then tag `vX` on that commit. Don't leave a
+  bumped version without a matching tag and release.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under

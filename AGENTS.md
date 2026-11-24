@@ -62,6 +62,14 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
 Use the agent's own real name and noreply address; don't impersonate another tool.
 Pull request descriptions should also state that they were AI-generated.
 
+## Versioning
+
+SemVer in the `0.x` phase with a `-b` (beta) suffix, e.g. `0.1.9-b`: new features or
+incompatible changes bump MINOR, fixes/docs/CI only bump PATCH. Bump `Cargo.toml`
+only when releasing, in its own `chore: bump version to X` commit, and tag `vX`
+(must match `Cargo.toml`) on it. Never bump without tagging, and don't tag or push
+tags unless asked. Details in [CONTRIBUTING.md](CONTRIBUTING.md#versioning).
+
 ## Don't
 
 - Don't commit internal workflow/tooling files (they are git-ignored on purpose).

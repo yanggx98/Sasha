@@ -89,6 +89,9 @@
 | `monitor.is_paused()` | 查询接收区当前是否暂停 | 布尔值 |
 | `monitor.clear()` | 清空接收区日志与标记，等价于工具栏清空按钮 | 无 |
 | `monitor.save(path)` | 把接收区**当前显示的文本**写入文件，内容与工具栏保存一致（含 RX 与 TX 行，受 HEX/文本、时间戳开关和过滤影响） | 成功返回 `true`；写入失败返回 `nil, "错误信息"` |
+| `monitor.rotate(path)` | 保存并清空，在界面线程里一步完成：保存**全部行**（不受过滤影响，仍受 HEX/文本与时间戳开关影响），写入成功后才清空日志与标记；写入失败时不清空，返回 `nil, "错误信息"`。保存与清空之间不会丢失新到达的数据，适合定时切割日志 | 成功返回 `true`；失败返回 `nil, "错误信息"` |
+
+`monitor.rotate` 的路径规则、输出目录、等待与取消行为与 `monitor.save` 相同。文件在界面线程内同步写入，写入期间界面会短暂停顿（本地磁盘通常是几十毫秒；输出目录在很慢的网络盘上可能更久）。
 
 #### `monitor.save` 的路径规则
 
@@ -98,8 +101,25 @@
 - 路径合法但系统无法写入（权限、磁盘已满、上级路径是文件等）时返回 `nil, "错误信息"`，不会终止脚本。
 - `monitor.*` 请求队列有上限（256）。界面处理不过来时脚本会在调用处等待，仍可被停止。
 - `monitor.save` 保存的是界面**已经显示**的内容。刚到达、界面尚未处理的数据，以及暂停期间暂存的数据不在其中；需要时先 `task.sleep(100)` 再保存。
-- `monitor.save` 与 `monitor.clear` 是两个独立动作：从界面取快照到清空之间新到达的数据会随清空一起丢失；开启了过滤时，`save` 只保存过滤后可见的行，而 `clear` 会清掉全部行。需要不丢数据的轮转时，请不要在过滤开启的状态下使用，并尽量在数据流停顿时保存。
+- `monitor.save` 与 `monitor.clear` 是两个独立动作：从界面取快照到清空之间新到达的数据会随清空一起丢失；开启了过滤时，`save` 只保存过滤后可见的行，而 `clear` 会清掉全部行。需要不丢数据的定时切割时，请使用 `monitor.rotate`。
 - 脚本在等待保存结果时被停止或断线，会立即以 `Stopped` 结束；此时已排队的保存请求仍可能被界面执行并写出文件。
+
+---
+
+### 1.6 `time` 模块（只读时钟）
+
+脚本无法使用 `os`，`time` 提供只读的时间访问，使用本机本地时区、毫秒精度。图形界面与 `sasha-cli run` 中均可用。
+
+| 函数签名 | 说明 | 返回值 |
+| --- | --- | --- |
+| `time.now()` | 当前本地时间的 Unix 毫秒时间戳 | 整数 |
+| `time.monotonic()` | 自脚本启动起经过的毫秒数（单调，不受系统改时钟影响），用于计算间隔 | 整数 |
+| `time.format(fmt [, ms])` | 按 strftime 格式（如 `"%Y-%m-%d_%H-%M-%S"`）格式化本地时间；`ms` 缺省为当前时间。`fmt` 非法或 `ms` 超出范围会触发参数错误 | 字符串 |
+| `time.date([ms])` | 返回本地时间的各个字段；`ms` 缺省为当前时间 | 表 `{year, month, day, hour, min, sec, ms, wday}`，`wday` 1 表示周日（与 Lua `os.date` 一致） |
+
+`ms` 必须是有限数值（毫秒时间戳），否则触发参数错误。
+
+---
 
 ## 2. 错误语义与实例生命周期
 
@@ -201,19 +221,30 @@ if line then
 end
 ```
 
-### 5.5 周期保存并清空接收区
+### 5.5 每小时切割日志（文件名带时间）
 
 ```lua
-local n = 0
 while not task.is_cancelled() do
     task.sleep(3600 * 1000)
-    task.sleep(100) -- 让界面处理完刚到达的数据
-    n = n + 1
-    local ok, err = monitor.save(string.format("capture/part_%03d.txt", n))
-    if ok then
-        monitor.clear() -- 保存成功才清空，失败时数据保留
-    else
-        log.error("保存失败:", err)
+    local ok, err = monitor.rotate(time.format("capture/%Y-%m-%d_%H-%M.txt"))
+    if not ok then
+        log.error("切割失败:", err) -- 失败时接收区保持原样，数据不丢
     end
+end
+```
+
+### 5.6 对齐到整点切割
+
+```lua
+-- 到下一个整点还有多少毫秒（用本地时间字段计算，不依赖时区偏移是否为整小时）
+local function ms_to_next_hour()
+    local d = time.date()
+    return (60 - d.min) * 60000 - d.sec * 1000 - d.ms
+end
+
+while not task.is_cancelled() do
+    task.sleep(ms_to_next_hour())
+    local ok, err = monitor.rotate(time.format("capture/%Y-%m-%d_%H00.txt"))
+    if not ok then log.error("切割失败:", err) end
 end
 ```

@@ -584,6 +584,25 @@ impl SessionTab {
                         let _ = reply.send(Err(format!("failed to start save: {err}")));
                     }
                 }
+                MonitorRequest::Rotate {
+                    rel_path,
+                    script_dir,
+                    reply,
+                } => {
+                    let Some(base) = output_dir.map(Path::to_path_buf).or(script_dir) else {
+                        let _ = reply.send(Err("no output directory".to_string()));
+                        continue;
+                    };
+                    // Written on the UI thread on purpose: nothing may arrive between the
+                    // snapshot and the clear, and a failed write must leave the log intact.
+                    let result = self
+                        .state
+                        .rotate_receive_logs(|text| save_text(&base, &rel_path, text));
+                    if result.is_ok() {
+                        self.pending_selection_reset = true;
+                    }
+                    let _ = reply.send(result);
+                }
             }
         }
         handled

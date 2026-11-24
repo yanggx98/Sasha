@@ -365,6 +365,18 @@ impl SessionState {
         }
     }
 
+    /// Hands every log row (ignoring any filter) to `write` as display text, then clears the
+    /// log and markers, but only if `write` succeeded. Save and clear see the same rows because
+    /// nothing runs between them.
+    pub fn rotate_receive_logs(
+        &mut self,
+        write: impl FnOnce(&str) -> Result<(), String>,
+    ) -> Result<(), String> {
+        write(&self.visible_log_export_text())?;
+        self.clear_receive_logs();
+        Ok(())
+    }
+
     /// Pauses or resumes the receive display; a no-op when already in that state.
     pub fn set_receive_paused(&mut self, paused: bool) {
         if self.receive.paused != paused {
@@ -644,6 +656,32 @@ mod tests {
             .unwrap();
         assert_eq!(state.markers.len(), 1);
         state.clear_receive_logs();
+        assert!(state.markers.is_empty());
+    }
+
+    #[test]
+    fn rotate_receive_logs_clears_only_after_a_successful_write() {
+        let mut state = SessionState::new_simulated_demo();
+        state.clear_receive_logs();
+        state.record_tx_bytes(b"AT", "12:00:00.000");
+        let id = state.logs.last().expect("a log entry").id;
+        state
+            .markers
+            .set(id, "m", crate::model::log_marker::MarkerColor::Red)
+            .unwrap();
+
+        let mut written = String::new();
+        let failed = state.rotate_receive_logs(|text| {
+            written = text.to_string();
+            Err("disk full".to_string())
+        });
+        assert_eq!(failed, Err("disk full".to_string()));
+        assert!(written.contains("AT"));
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.markers.len(), 1);
+
+        state.rotate_receive_logs(|_| Ok(())).unwrap();
+        assert!(state.logs.is_empty());
         assert!(state.markers.is_empty());
     }
 
