@@ -78,8 +78,10 @@ sasha-cli monitor --port COM3 --until "READY" --duration 10000 --timestamp
 
 ## `run`
 
-不开窗口，对串口运行 Lua 脚本，API 与应用内一致（见 [Lua 脚本 API](lua-scripting-api.md)）。脚本输出
-（`print`、`log.*`）以 `[INFO] ...`、`[WARN] ...`、`[ERROR] ...` 写到 stdout。`--timeout <毫秒>` 到时后停止脚本。
+不开窗口，对串口运行 Lua 脚本，API 与应用内一致（见 [Lua 脚本 API](lua-scripting-api.md)）。脚本用
+`output.print` 输出的内容原样写到 stdout。调试日志（`print`、`log.*`）默认不显示，加 `--script-debug`
+后以 `[INFO] ...`、`[WARN] ...`、`[ERROR] ...` 写到 stdout。`--timeout <毫秒>` 到时后停止脚本。
+`monitor` 模块（接收区动作）在这里不可用，调用会报错。
 
 ```text
 sasha-cli run scripts/periodic_send.lua --port COM3 --timeout 5000

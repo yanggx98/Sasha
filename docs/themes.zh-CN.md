@@ -23,6 +23,7 @@ text = "#E3EEF5"        # 主文字
 accent = "#14B8A6"      # 发送按钮与高亮
 rx = "#4ADE80"          # 接收数据
 tx = "#7DD3FC"          # 发送数据（不随强调色联动）
+script = "#C4B5FD"      # 脚本输出行（output.print）的标签色
 error = "#FB7185"       # 校验错误
 border = "#FFFFFF1C"    # 卡片边框
 
@@ -38,7 +39,7 @@ text_muted = "#6B8394"
   错误与徽标底色来自 `error` 和 `accent`，已连接状态色来自 `rx`；深色与浅色使用不同的混合强度。
 - **`[overrides]`** 可用名称：`bg_canvas`、`bg_card`、`bg_strip`、`bg_popover`、`bg_hover`、
   `bg_toggle_active`、`border_card`、`border_popover`、`accent_blue`、`accent_blue_hover`、
-  `rx_green`、`tx_blue`、`text_primary`、`text_secondary`、`text_muted`、`error_text`、
+  `rx_green`、`tx_blue`、`script_tag`、`text_primary`、`text_secondary`、`text_muted`、`error_text`、
   `error_bg`、`sim_badge_bg`、`sim_badge_text`、`status_disconnected`、`status_connected`，
   优先于派生规则。
 - **出错处理：** TOML 无效或颜色非法的文件会被跳过，并在“主题警告”区域给出文件名和字段名，
@@ -48,8 +49,8 @@ text_muted = "#6B8394"
 
 ## 在设置中编辑配色
 
-**设置 > 视图 > 界面主题 > 编辑配色** 可编辑 8 个基础色（`canvas`、`card`、`text`、`accent`、
-`rx`、`tx`、`error`、`border`）。每行是色块加 `#RRGGBB` / `#RRGGBBAA` 输入框，点击色块可打开色盘（调色板、滑块、透明度）并与输入框同步；有效的值会实时
+**设置 > 视图 > 界面主题 > 编辑配色** 可编辑 9 个基础色（`canvas`、`card`、`text`、`accent`、
+`rx`、`tx`、`script`、`error`、`border`）。每行是色块加 `#RRGGBB` / `#RRGGBBAA` 输入框，点击色块可打开色盘（调色板、滑块、透明度）并与输入框同步；有效的值会实时
 预览，无效的会标红且不生效。
 
 - 内置主题不能直接修改：输入名称后点 **另存为**，会创建 `themes/<名称>.toml`（文件名为小写

@@ -393,6 +393,7 @@ impl RenderOnce for LogFilterBar {
                     FilterDirection::All => "filter.all",
                     FilterDirection::Rx => "filter.rx",
                     FilterDirection::Tx => "filter.tx",
+                    FilterDirection::Script => "filter.script",
                 },
                 "filter.direction_tooltip",
                 direction != FilterDirection::All,

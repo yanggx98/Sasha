@@ -633,6 +633,16 @@ impl SettingsWindow {
         cx.notify();
     }
 
+    fn set_script_debug(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let result = self.config_store.update(cx, |store, cx| {
+            let res = store.update(|cfg| cfg.script_debug = enabled);
+            cx.notify();
+            res
+        });
+        self.save_error = result.err();
+        cx.notify();
+    }
+
     fn set_auto_check_updates(&mut self, enabled: bool, cx: &mut Context<Self>) {
         let result = self.config_store.update(cx, |store, cx| {
             let res = store.update(|cfg| cfg.auto_check_updates = enabled);
@@ -1160,6 +1170,46 @@ impl SettingsWindow {
             )
             .into_any_element();
 
+        let script_debug = self.config_store.read(cx).config().script_debug;
+        let script_debug_picker = h_flex()
+            .p_0p5()
+            .rounded(px(6.))
+            .bg(theme.bg_card)
+            .gap_0p5()
+            .children(
+                [(true, "settings.on"), (false, "settings.off")]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, (value, key))| {
+                        let selected = script_debug == value;
+                        div()
+                            .id(ElementId::named_usize("settings-script-debug", idx))
+                            .px_2p5()
+                            .py_1()
+                            .rounded(px(4.))
+                            .text_xs()
+                            .cursor_pointer()
+                            .when(selected, |this| {
+                                this.bg(theme.bg_toggle_active)
+                                    .text_color(theme.accent_blue_hover)
+                                    .font_weight(FontWeight::MEDIUM)
+                            })
+                            .when(!selected, |this| {
+                                this.text_color(theme.text_secondary)
+                                    .hover(|s| s.bg(theme.bg_hover).text_color(theme.text_primary))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.set_script_debug(value, cx);
+                                }),
+                            )
+                            .child(tr_shared(locale, key))
+                    }),
+            )
+            .into_any_element();
+
         let reset_btn = self.flat_action_button(
             "settings-reset-defaults",
             tr_shared(locale, "settings.reset_btn"),
@@ -1184,6 +1234,11 @@ impl SettingsWindow {
                 tr_shared(locale, "settings.auto_update_title"),
                 tr_shared(locale, "settings.auto_update_desc"),
                 auto_check_picker,
+            ))
+            .child(self.render_setting_row(
+                tr_shared(locale, "settings.script_debug_title"),
+                tr_shared(locale, "settings.script_debug_desc"),
+                script_debug_picker,
             ))
             .child(self.render_setting_row(
                 tr_shared(locale, "settings.script_output_dir_title"),

@@ -9,7 +9,7 @@ use gpui_kit::*;
 use crate::i18n::{Locale, tr, tr_shared};
 use crate::model::{
     ActivePickerKind, FlowControl, ModemSignals, SerialConfig, SessionCounters,
-    SimulatedConnectionState,
+    SimulatedConnectionState, format_buffer_usage,
 };
 use crate::session_service::ControlLine;
 use crate::ui::motion::{STATUS_TRANSITION_MS, TransitionFlag, animate_toggle_colors, lerp_color};
@@ -392,8 +392,14 @@ impl RenderOnce for BottomBar {
                                     .size(px(12.))
                                     .text_color(theme.text_muted),
                             )
-                            .child(format!("RX: {} B", self.counters.rx_bytes))
-                            .child(format!("TX: {} B", self.counters.tx_bytes))
+                            .child(format!(
+                                "RX: {}",
+                                format_buffer_usage(self.counters.rx_bytes)
+                            ))
+                            .child(format!(
+                                "TX: {}",
+                                format_buffer_usage(self.counters.tx_bytes)
+                            ))
                     }),
             )
     }

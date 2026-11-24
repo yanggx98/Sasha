@@ -101,6 +101,9 @@ pub struct RunArgs {
     /// Stop the script after this many milliseconds
     #[arg(long)]
     pub timeout: Option<u64>,
+    /// Also print the script's log.* / print debug lines (prefixed with [INFO], [WARN] or [ERROR])
+    #[arg(long)]
+    pub script_debug: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

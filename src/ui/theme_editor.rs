@@ -1,7 +1,7 @@
 //! State of the inline theme color editor shown in Settings > View.
 //!
 //! Rendering and actions live in `settings_window.rs`; this file owns the
-//! eight color inputs, the name input and the draft parsing.
+//! nine color inputs, the name input and the draft parsing.
 
 use gpui_kit::component::color_picker::{ColorPickerEvent, ColorPickerState};
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -11,13 +11,14 @@ use crate::ui::settings_window::SettingsWindow;
 use crate::ui::theme_store::{BaseColors, ThemeBase, ThemeEntry, format_hex, parse_color};
 
 /// Editor rows: (locale key of the label, getter into [`BaseColors`]).
-pub const FIELDS: [(&str, fn(&BaseColors) -> Hsla); 8] = [
+pub const FIELDS: [(&str, fn(&BaseColors) -> Hsla); 9] = [
     ("settings.theme_edit_label_canvas", |c| c.canvas),
     ("settings.theme_edit_label_card", |c| c.card),
     ("settings.theme_edit_label_text", |c| c.text),
     ("settings.theme_edit_label_accent", |c| c.accent),
     ("settings.theme_edit_label_rx", |c| c.rx),
     ("settings.theme_edit_label_tx", |c| c.tx),
+    ("settings.theme_edit_label_script", |c| c.script),
     ("settings.theme_edit_label_error", |c| c.error),
     ("settings.theme_edit_label_border", |c| c.border),
 ];
@@ -133,8 +134,9 @@ impl ThemeEditor {
             accent: c[3],
             rx: c[4],
             tx: c[5],
-            error: c[6],
-            border: c[7],
+            script: c[6],
+            error: c[7],
+            border: c[8],
         })
     }
 

@@ -359,9 +359,9 @@ impl RenderOnce for ReceiveToolbar {
                 )
             }))
             .children(self.stream.as_ref().map(|(active, tooltip, callback)| {
-                self.text_tool_button(
+                self.icon_tool_button(
                     "rx-tool-stream",
-                    "⇥",
+                    LucideIcon::FileInput,
                     tooltip.clone(),
                     active.then_some(TransitionFlag {
                         active: true,

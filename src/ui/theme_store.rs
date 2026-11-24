@@ -205,7 +205,7 @@ pub fn search_highlight_colors(canvas: Hsla) -> (Hsla, Hsla) {
 
 // ------------------------------------------------------------ derivation
 
-/// The eight base colors a theme file defines.
+/// The nine base colors a theme file defines.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BaseColors {
     pub canvas: Hsla,
@@ -214,6 +214,7 @@ pub struct BaseColors {
     pub accent: Hsla,
     pub rx: Hsla,
     pub tx: Hsla,
+    pub script: Hsla,
     pub error: Hsla,
     pub border: Hsla,
 }
@@ -280,6 +281,7 @@ pub fn derive_theme(base: ThemeBase, c: &BaseColors) -> NanoTheme {
         accent_blue_hover: mix(c.accent, (p.accent_hover_target)(), p.accent_hover_mix),
         rx_green: c.rx,
         tx_blue: c.tx,
+        script_tag: c.script,
         text_primary: c.text,
         text_secondary: mix(c.text, c.canvas, p.secondary_mix),
         text_muted: mix(c.text, c.canvas, p.muted_mix),
@@ -307,6 +309,7 @@ fn token_slot<'a>(theme: &'a mut NanoTheme, key: &str) -> Option<&'a mut Hsla> {
         "accent_blue_hover" => &mut theme.accent_blue_hover,
         "rx_green" => &mut theme.rx_green,
         "tx_blue" => &mut theme.tx_blue,
+        "script_tag" => &mut theme.script_tag,
         "text_primary" => &mut theme.text_primary,
         "text_secondary" => &mut theme.text_secondary,
         "text_muted" => &mut theme.text_muted,
@@ -332,6 +335,7 @@ struct RawTheme {
     accent: Option<String>,
     rx: Option<String>,
     tx: Option<String>,
+    script: Option<String>,
     error: Option<String>,
     border: Option<String>,
     overrides: Option<BTreeMap<String, toml::Value>>,
@@ -390,6 +394,7 @@ fn parse_with(
         accent: pick("accent", &raw.accent, |b| b.accent)?,
         rx: pick("rx", &raw.rx, |b| b.rx)?,
         tx: pick("tx", &raw.tx, |b| b.tx)?,
+        script: pick("script", &raw.script, |b| b.script)?,
         error: pick("error", &raw.error, |b| b.error)?,
         border: pick("border", &raw.border, |b| b.border)?,
     };
@@ -440,6 +445,7 @@ fn builtin_base_colors() -> &'static [BaseColors; 2] {
                 accent: g(&raw.accent),
                 rx: g(&raw.rx),
                 tx: g(&raw.tx),
+                script: g(&raw.script),
                 error: g(&raw.error),
                 border: g(&raw.border),
             }
@@ -544,6 +550,7 @@ pub fn serialize_theme(
         ("accent", colors.accent),
         ("rx", colors.rx),
         ("tx", colors.tx),
+        ("script", colors.script),
         ("error", colors.error),
         ("border", colors.border),
     ] {
@@ -1070,6 +1077,7 @@ mod tests {
             t.accent_blue_hover,
             t.rx_green,
             t.tx_blue,
+            t.script_tag,
             t.text_primary,
             t.text_secondary,
             t.text_muted,
@@ -1080,6 +1088,28 @@ mod tests {
             t.status_disconnected,
             t.status_connected,
         ]
+    }
+
+    #[test]
+    fn script_color_is_a_base_color_with_fallback_override_and_roundtrip() {
+        let t = parse_theme("s", "base = \"dark\"\nscript = \"#112233\"\n").unwrap();
+        assert_eq!(t.theme.script_tag, rgb(0x112233).into());
+        assert_eq!(t.colors.script, rgb(0x112233).into());
+
+        // A theme without `script` takes the built-in one of the same base.
+        let plain = parse_theme("d", "base = \"dark\"\n").unwrap();
+        assert_eq!(plain.theme.script_tag, builtin_dark().theme.script_tag);
+
+        let overridden = parse_theme(
+            "o",
+            "script = \"#112233\"\n[overrides]\nscript_tag = \"#445566\"\n",
+        )
+        .unwrap();
+        assert_eq!(overridden.theme.script_tag, rgb(0x445566).into());
+
+        let text = serialize_theme("S", ThemeBase::Dark, &t.colors, None);
+        assert!(text.contains("script = \"#112233\""), "{text}");
+        assert_eq!(parse_theme("s2", &text).unwrap().colors, t.colors);
     }
 
     #[test]
@@ -1128,6 +1158,11 @@ mod tests {
                 assert!(contrast_ratio(t.rx_green, t.bg_canvas) >= 3.0, "{id}");
             }
             assert!(contrast_ratio(t.tx_blue, t.bg_canvas) >= 3.0, "{id}");
+            // The script tag must be readable and not mistaken for RX, TX or the accent.
+            assert!(contrast_ratio(t.script_tag, t.bg_canvas) >= 3.0, "{id}");
+            assert_ne!(t.script_tag, t.rx_green, "{id}");
+            assert_ne!(t.script_tag, t.tx_blue, "{id}");
+            assert_ne!(t.script_tag, t.accent_blue, "{id}");
         }
     }
 

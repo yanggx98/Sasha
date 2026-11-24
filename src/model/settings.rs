@@ -96,6 +96,9 @@ pub struct AppConfig {
     pub scripts: Vec<PathBuf>,
     /// Directory Lua `monitor.save` writes under; `None` means the script's own directory.
     pub script_output_dir: Option<PathBuf>,
+    /// Show a script's `log.*` / `print` debug lines in the receive area. `output.print`
+    /// content is always shown.
+    pub script_debug: bool,
     /// Optional custom background image path for the main workspace.
     pub background_image: Option<PathBuf>,
     /// Background image opacity percentage (`0..=100`).
@@ -133,6 +136,7 @@ impl Default for AppConfig {
             stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
             script_output_dir: None,
+            script_debug: false,
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
             theme: DEFAULT_THEME_ID.to_string(),
@@ -211,11 +215,15 @@ fn default_theme_id() -> String {
     DEFAULT_THEME_ID.to_string()
 }
 
-/// Formats a live usage figure as `512 B`, `1.5 KB`, or `1 MB`.
+/// Formats a byte figure as `512 B`, `1.5 KB`, `1 MB` or `1.5 GB` (1024-based, tenths truncated).
+/// Used for the buffer usage and the bottom bar's RX/TX counters.
 pub fn format_buffer_usage(bytes: u64) -> String {
+    const GB: u64 = 1024 * 1024 * 1024;
     const MB: u64 = 1024 * 1024;
     const KB: u64 = 1024;
-    if bytes >= MB {
+    if bytes >= GB {
+        format_scaled_bytes(bytes, GB, "GB")
+    } else if bytes >= MB {
         format_scaled_bytes(bytes, MB, "MB")
     } else if bytes >= KB {
         format_scaled_bytes(bytes, KB, "KB")
@@ -228,7 +236,7 @@ fn format_scaled_bytes(bytes: u64, unit: u64, suffix: &str) -> String {
     if bytes.is_multiple_of(unit) {
         return format!("{} {suffix}", bytes / unit);
     }
-    let tenths = (bytes * 10) / unit;
+    let tenths = (u128::from(bytes) * 10 / u128::from(unit)) as u64;
     let whole = tenths / 10;
     let frac = tenths % 10;
     if frac == 0 {
@@ -701,6 +709,25 @@ mod tests {
     }
 
     #[test]
+    fn script_debug_defaults_off_and_roundtrips() {
+        let dir = TempDir::new("script-debug");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\nlocale = \"en-US\"\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert!(!store.config().script_debug);
+
+        store.update(|cfg| cfg.script_debug = true).unwrap();
+        assert!(
+            ConfigStore::load_from_path(path.clone())
+                .config()
+                .script_debug
+        );
+
+        store.update(|cfg| cfg.script_debug = false).unwrap();
+        assert!(!ConfigStore::load_from_path(path).config().script_debug);
+    }
+
+    #[test]
     fn script_output_dir_defaults_to_none_and_roundtrips() {
         let dir = TempDir::new("script-output-dir");
         let path = dir.file(CONFIG_FILE_NAME);
@@ -754,6 +781,21 @@ mod tests {
         assert_eq!(format_buffer_usage(0), "0 B");
         assert_eq!(format_buffer_usage(1536), "1.5 KB");
         assert_eq!(format_buffer_usage(1024 * 1024), "1 MB");
+    }
+
+    #[test]
+    fn byte_counts_scale_up_to_gigabytes() {
+        assert_eq!(format_buffer_usage(1023), "1023 B");
+        assert_eq!(format_buffer_usage(1024), "1 KB");
+        assert_eq!(format_buffer_usage(1024 * 1024 * 1024 - 1), "1023.9 MB");
+        assert_eq!(format_buffer_usage(1024 * 1024 * 1024), "1 GB");
+        assert_eq!(format_buffer_usage(1536 * 1024 * 1024), "1.5 GB");
+        assert_eq!(
+            format_buffer_usage(5 * 1024 * 1024 * 1024 * 1024),
+            "5120 GB"
+        );
+        // The tenths step must not overflow on very large counters.
+        assert_eq!(format_buffer_usage(u64::MAX), "17179869183.9 GB");
     }
 
     #[test]
