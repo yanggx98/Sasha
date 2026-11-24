@@ -163,7 +163,7 @@ impl RenderOnce for LogView {
                                         marker_color_hsla(MarkerColor::Orange, 1.0)
                                     }
                                     LogDirection::ScriptError => theme.error_text,
-                                    LogDirection::ScriptOutput => theme.accent_blue_hover,
+                                    LogDirection::ScriptOutput => theme.script_tag,
                                 };
                                 let line = selectable_log_line(entry, show_timestamp, hex_mode);
                                 let mut highlights = Vec::new();

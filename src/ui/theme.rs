@@ -25,6 +25,8 @@ pub struct NanoTheme {
     /// Log direction colors.
     pub rx_green: Hsla,
     pub tx_blue: Hsla,
+    /// Tag color of the lines Lua scripts print (`output.print`).
+    pub script_tag: Hsla,
     /// Text colors.
     pub text_primary: Hsla,
     pub text_secondary: Hsla,

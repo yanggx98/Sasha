@@ -24,6 +24,7 @@ text = "#E3EEF5"        # primary text
 accent = "#14B8A6"      # send button and active highlights
 rx = "#4ADE80"          # received data
 tx = "#7DD3FC"          # sent data (does not follow accent)
+script = "#C4B5FD"      # tag of lines Lua scripts print (output.print)
 error = "#FB7185"       # validation errors
 border = "#FFFFFF1C"    # card border
 
@@ -42,7 +43,7 @@ text_muted = "#6B8394"
   Dark and light use different blend strengths.
 - **`[overrides]`** accepts the token names `bg_canvas`, `bg_card`, `bg_strip`,
   `bg_popover`, `bg_hover`, `bg_toggle_active`, `border_card`, `border_popover`,
-  `accent_blue`, `accent_blue_hover`, `rx_green`, `tx_blue`, `text_primary`,
+  `accent_blue`, `accent_blue_hover`, `rx_green`, `tx_blue`, `script_tag`, `text_primary`,
   `text_secondary`, `text_muted`, `error_text`, `error_bg`, `sim_badge_bg`,
   `sim_badge_text`, `status_disconnected` and `status_connected`, and wins over derivation.
 - **Errors:** a file with invalid TOML or an invalid color is skipped and reported in
@@ -52,8 +53,8 @@ text_muted = "#6B8394"
 
 ## Editing colors in Settings
 
-**Settings > View > Theme > Edit Colors** opens an editor for the eight base colors
-(`canvas`, `card`, `text`, `accent`, `rx`, `tx`, `error`, `border`). Each row is a swatch
+**Settings > View > Theme > Edit Colors** opens an editor for the nine base colors
+(`canvas`, `card`, `text`, `accent`, `rx`, `tx`, `script`, `error`, `border`). Each row is a swatch
 plus a `#RRGGBB` / `#RRGGBBAA` field; click the swatch to open a color picker (palette,
 sliders, alpha), which stays in sync with the field. Valid values preview live, invalid ones are
 outlined in red and not applied.
