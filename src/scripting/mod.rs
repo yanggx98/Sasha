@@ -51,6 +51,13 @@ pub enum MonitorRequest {
         script_dir: Option<PathBuf>,
         reply: Sender<Result<(), String>>,
     },
+    /// Like `Save`, but writes every row (ignoring the filter) and clears the log in the same
+    /// step, only if the write succeeded.
+    Rotate {
+        rel_path: PathBuf,
+        script_dir: Option<PathBuf>,
+        reply: Sender<Result<(), String>>,
+    },
 }
 
 /// Reason a script instance stopped before natural completion.
