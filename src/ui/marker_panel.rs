@@ -76,6 +76,33 @@ impl MarkerPanel {
             .child(Icon::new(icon).size(px(12.)))
     }
 
+    /// The section's collapse chevron. Same box (20px), icon (13px) and hover (text colour
+    /// only, no background) as the quick-send and script sections so the three line up.
+    fn section_toggle(
+        theme: NanoTheme,
+        id: &'static str,
+        icon: LucideIcon,
+        tooltip: SharedString,
+        on_click: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .size(px(20.))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_color(theme.text_muted)
+            .hover(move |s| s.text_color(theme.text_primary))
+            .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
+            .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                cx.stop_propagation();
+                on_click(event, window, cx);
+            })
+            .child(Icon::new(icon).size(px(13.)))
+    }
+
     fn text_button(
         theme: NanoTheme,
         id: &'static str,
@@ -242,7 +269,7 @@ impl RenderOnce for MarkerPanel {
                     .when(!self.collapsed, |this| {
                         this.border_b_1().border_color(theme.border_card)
                     })
-                    .child(Self::icon_button(
+                    .child(Self::section_toggle(
                         theme,
                         "marker-section-toggle",
                         section_icon,
