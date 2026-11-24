@@ -24,23 +24,34 @@ pub fn format_script_log(level: ScriptLogLevel, message: &str) -> String {
     format!("[{tag}] {message}")
 }
 
-fn print_logs(manager: &mut ScriptManager, out: &mut dyn Write) {
+/// Writes what the script printed: `output.print` content as is, and, only with `debug`, the
+/// levelled `log.*` / `print` lines with a `[LEVEL]` prefix.
+fn print_logs(manager: &mut ScriptManager, debug: bool, out: &mut dyn Write) {
     for event in manager.drain_events() {
-        if let ScriptEvent::Log(entry) = event {
-            let _ = writeln!(out, "{}", format_script_log(entry.level, &entry.message));
-            let _ = out.flush();
+        match event {
+            ScriptEvent::Output { message, .. } => {
+                let _ = writeln!(out, "{message}");
+                let _ = out.flush();
+            }
+            ScriptEvent::Log(entry) if debug => {
+                let _ = writeln!(out, "{}", format_script_log(entry.level, &entry.message));
+                let _ = out.flush();
+            }
+            _ => {}
         }
     }
 }
 
 /// Runs `source` on an attached session until it finishes or `timeout` passes, writing the
-/// script's log lines to `out` and problems to `err`.
+/// script's output (and, with `debug`, its log lines) to `out` and problems to `err`.
+#[allow(clippy::too_many_arguments)]
 pub fn script_flow(
     service: &SessionService,
     generation: u64,
     path: PathBuf,
     source: String,
     timeout: Option<Duration>,
+    debug: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> CliExit {
@@ -55,7 +66,7 @@ pub fn script_flow(
     let deadline = timeout.and_then(|t| Instant::now().checked_add(t));
     let mut timed_out = false;
     let status = loop {
-        print_logs(&mut manager, out);
+        print_logs(&mut manager, debug, out);
         let finished = manager
             .snapshots()
             .into_iter()
@@ -72,7 +83,7 @@ pub fn script_flow(
         thread::sleep(POLL_INTERVAL);
     };
     manager.join_all();
-    print_logs(&mut manager, out);
+    print_logs(&mut manager, debug, out);
 
     if timed_out {
         let _ = writeln!(err, "error: script timed out");
@@ -121,6 +132,7 @@ fn run_once(args: RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result<C
         args.script,
         source,
         args.timeout.map(Duration::from_millis),
+        args.script_debug,
         out,
         err,
     );
@@ -166,6 +178,7 @@ mod tests {
             PathBuf::from("test.lua"),
             source.to_string(),
             timeout,
+            false,
             &mut out,
             &mut err,
         );
@@ -183,19 +196,38 @@ mod tests {
         assert_eq!(format_script_log(ScriptLogLevel::Error, "c"), "[ERROR] c");
     }
 
+    const MIXED: &str = r#"output.print("T=", 25) print("hello") log.warn("careful")"#;
+
     #[test]
-    fn script_flow_completes_and_prints_logs() {
+    fn script_flow_prints_only_script_output_by_default() {
         let (service, generation, _writes) = connected();
-        let (exit, out, err) = run_source(
+        let (exit, out, err) = run_source(&service, generation, MIXED, None);
+        assert_eq!(exit, CliExit::Ok);
+        assert_eq!(out, "T=\t25\n");
+        assert!(err.is_empty(), "stderr was {err:?}");
+    }
+
+    #[test]
+    fn script_flow_with_script_debug_also_prints_levelled_logs_in_order() {
+        let (service, generation, _writes) = connected();
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = script_flow(
             &service,
             generation,
-            r#"print("hello") log.warn("careful")"#,
+            PathBuf::from("test.lua"),
+            MIXED.to_string(),
             None,
+            true,
+            &mut out,
+            &mut err,
         );
         assert_eq!(exit, CliExit::Ok);
-        assert!(out.contains("[INFO] hello"), "stdout was {out:?}");
-        assert!(out.contains("[WARN] careful"), "stdout was {out:?}");
-        assert!(err.is_empty(), "stderr was {err:?}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "T=\t25\n[INFO] hello\n[WARN] careful\n"
+        );
+        assert!(err.is_empty());
     }
 
     #[test]
@@ -260,6 +292,7 @@ mod tests {
                 rts: false,
             },
             timeout: None,
+            script_debug: false,
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let exit = run_script(args, &mut out, &mut err);

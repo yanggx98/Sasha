@@ -96,6 +96,9 @@ pub struct AppConfig {
     pub scripts: Vec<PathBuf>,
     /// Directory Lua `monitor.save` writes under; `None` means the script's own directory.
     pub script_output_dir: Option<PathBuf>,
+    /// Show a script's `log.*` / `print` debug lines in the receive area. `output.print`
+    /// content is always shown.
+    pub script_debug: bool,
     /// Optional custom background image path for the main workspace.
     pub background_image: Option<PathBuf>,
     /// Background image opacity percentage (`0..=100`).
@@ -133,6 +136,7 @@ impl Default for AppConfig {
             stream_output_scope: StreamOutputScope::default(),
             scripts: Vec::new(),
             script_output_dir: None,
+            script_debug: false,
             background_image: None,
             background_opacity: DEFAULT_BACKGROUND_OPACITY,
             theme: DEFAULT_THEME_ID.to_string(),
@@ -702,6 +706,25 @@ mod tests {
             ConfigStore::load_from_path(path).config().log_wrap,
             LogWrap::Anywhere
         );
+    }
+
+    #[test]
+    fn script_debug_defaults_off_and_roundtrips() {
+        let dir = TempDir::new("script-debug");
+        let path = dir.file(CONFIG_FILE_NAME);
+        fs::write(&path, "version = 1\nlocale = \"en-US\"\n").unwrap();
+        let mut store = ConfigStore::load_from_path(path.clone());
+        assert!(!store.config().script_debug);
+
+        store.update(|cfg| cfg.script_debug = true).unwrap();
+        assert!(
+            ConfigStore::load_from_path(path.clone())
+                .config()
+                .script_debug
+        );
+
+        store.update(|cfg| cfg.script_debug = false).unwrap();
+        assert!(!ConfigStore::load_from_path(path).config().script_debug);
     }
 
     #[test]

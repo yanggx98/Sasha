@@ -87,9 +87,11 @@ sasha-cli monitor --port COM3 --until "READY" --duration 10000 --timestamp
 ## `run`
 
 Runs a Lua script against the port without a window, using the same API as the app (see
-the [Lua scripting API](lua-scripting-api.md)). Script output (`print`, `log.*`) goes to
-stdout as `[INFO] ...`, `[WARN] ...` and `[ERROR] ...`. `--timeout <MS>` stops the script
-after that long.
+the [Lua scripting API](lua-scripting-api.md)). What a script prints with `output.print`
+goes to stdout as is. Its debug logs (`print`, `log.*`) are hidden unless you pass
+`--script-debug`, which prints them to stdout as `[INFO] ...`, `[WARN] ...` and
+`[ERROR] ...`. `--timeout <MS>` stops the script after that long. The `monitor` module
+(receive area actions) is not available here and raises an error.
 
 ```text
 sasha-cli run scripts/periodic_send.lua --port COM3 --timeout 5000

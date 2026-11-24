@@ -8,6 +8,8 @@ pub enum FilterDirection {
     All,
     Rx,
     Tx,
+    /// Only the lines scripts printed with `log.*` / `print`.
+    Script,
 }
 
 impl FilterDirection {
@@ -15,7 +17,8 @@ impl FilterDirection {
         match self {
             Self::All => Self::Rx,
             Self::Rx => Self::Tx,
-            Self::Tx => Self::All,
+            Self::Tx => Self::Script,
+            Self::Script => Self::All,
         }
     }
 }
@@ -87,9 +90,16 @@ impl LogFilterState {
     }
 
     fn matches(&self, entry: &LogEntry, hex_mode: bool) -> bool {
+        let wanted = self.applied.direction;
         let direction = match entry.direction {
-            LogDirection::Rx => self.applied.direction != FilterDirection::Tx,
-            LogDirection::Tx => self.applied.direction != FilterDirection::Rx,
+            LogDirection::Rx => matches!(wanted, FilterDirection::All | FilterDirection::Rx),
+            LogDirection::Tx => matches!(wanted, FilterDirection::All | FilterDirection::Tx),
+            LogDirection::ScriptInfo
+            | LogDirection::ScriptWarn
+            | LogDirection::ScriptError
+            | LogDirection::ScriptOutput => {
+                matches!(wanted, FilterDirection::All | FilterDirection::Script)
+            }
             // No system entries are currently emitted. Keep future status
             // messages visible until they have an explicit UI control.
             LogDirection::System => return true,
@@ -253,6 +263,41 @@ mod tests {
     }
 
     #[test]
+    fn script_lines_follow_the_direction_filter() {
+        let logs = [
+            entry(1, LogDirection::Rx, b"a"),
+            entry(2, LogDirection::Tx, b"b"),
+            entry(3, LogDirection::ScriptInfo, b"c"),
+            entry(4, LogDirection::ScriptWarn, b"d"),
+            entry(5, LogDirection::ScriptError, b"e"),
+            entry(6, LogDirection::ScriptOutput, b"f"),
+        ];
+        let visible = |filter: &LogFilterState| -> Vec<u64> {
+            logs.iter()
+                .filter(|log| filter.matches(log, false))
+                .map(|log| log.id)
+                .collect()
+        };
+        let mut filter = LogFilterState::default();
+        assert_eq!(visible(&filter), vec![1, 2, 3, 4, 5, 6]);
+        filter.draft.direction = FilterDirection::Rx;
+        filter.apply();
+        assert_eq!(visible(&filter), vec![1]);
+        filter.draft.direction = FilterDirection::Tx;
+        filter.apply();
+        assert_eq!(visible(&filter), vec![2]);
+        filter.draft.direction = FilterDirection::Script;
+        filter.apply();
+        assert_eq!(visible(&filter), vec![3, 4, 5, 6]);
+        assert!(filter.is_active());
+        filter.draft.query = "d".into();
+        filter.apply();
+        assert_eq!(visible(&filter), vec![4]);
+        assert_eq!(FilterDirection::Tx.next(), FilterDirection::Script);
+        assert_eq!(FilterDirection::Script.next(), FilterDirection::All);
+    }
+
+    #[test]
     fn regex_hex_and_invalid_drafts_keep_last_valid_filter() {
         let packet = entry(1, LogDirection::Rx, &[0xAA, 0x55]);
         let mut filter = LogFilterState::default();
@@ -331,6 +376,10 @@ mod tests {
             view.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
             vec![1]
         );
+        filter.draft.direction = filter.draft.direction.next();
+        filter.apply();
+        view.sync(&logs, &filter, false);
+        assert!(view.rows.is_empty(), "script filter hides serial rows");
         filter.draft.direction = filter.draft.direction.next();
         filter.apply();
         view.sync(&logs, &filter, false);

@@ -135,10 +135,15 @@ impl StreamOutput {
     }
 
     pub fn record(&mut self, entry: &LogEntry) {
+        // Script debug logs are not part of the capture; `output.print` content is.
+        if entry.direction.is_script_debug() {
+            return;
+        }
         self.enqueue(StreamMessage::Entry(entry.clone()));
     }
 
-    pub fn record_history(&mut self, entries: Vec<LogEntry>) {
+    pub fn record_history(&mut self, mut entries: Vec<LogEntry>) {
+        entries.retain(|entry| !entry.direction.is_script_debug());
         self.enqueue(StreamMessage::History(entries));
     }
 
@@ -341,6 +346,29 @@ mod tests {
             );
             std::fs::remove_file(path).unwrap();
         }
+    }
+
+    #[test]
+    fn script_output_is_captured_but_script_debug_logs_are_not() {
+        use crate::model::settings::StreamOutputScope;
+        let path = std::env::temp_dir().join(format!(
+            "sasha-script-{}-{}.txt",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        let mut session = SessionState::new_real_session(SerialConfig::default(), true);
+        session.record_script_log(LogDirection::ScriptWarn, "debug-before", "1");
+        session.record_script_log(LogDirection::ScriptOutput, "kept-before", "1");
+        let output = StreamOutput::open(&path, false).unwrap();
+        session.start_stream_output(output, StreamOutputScope::CurrentBufferAndFuture);
+        session.record_script_log(LogDirection::ScriptOutput, "parsed", "2");
+        session.record_script_log(LogDirection::ScriptInfo, "debug-after", "3");
+        assert!(session.stream_output.take().unwrap().finish().is_none());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "\u{FEFF}[1] LUA kept-before\n[2] LUA parsed\n"
+        );
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

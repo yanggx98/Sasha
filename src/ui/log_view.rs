@@ -156,7 +156,14 @@ impl RenderOnce for LogView {
                                 let tag_color = match entry.direction {
                                     LogDirection::Rx => theme.rx_green,
                                     LogDirection::Tx => theme.tx_blue,
-                                    LogDirection::System => theme.text_muted,
+                                    LogDirection::System | LogDirection::ScriptInfo => {
+                                        theme.text_muted
+                                    }
+                                    LogDirection::ScriptWarn => {
+                                        marker_color_hsla(MarkerColor::Orange, 1.0)
+                                    }
+                                    LogDirection::ScriptError => theme.error_text,
+                                    LogDirection::ScriptOutput => theme.accent_blue_hover,
                                 };
                                 let line = selectable_log_line(entry, show_timestamp, hex_mode);
                                 let mut highlights = Vec::new();

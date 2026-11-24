@@ -60,7 +60,8 @@ The strip at the top of the window is click-through except for a small handle at
 
 Use the filter icon next to Search in the receive toolbar to show or hide the
 filter drawer. It expands upward inside the same bordered toolbar surface.
-Click the direction button to cycle through **All → RX → TX → All**.
+Click the direction button to cycle through **All → RX → TX → Script → All**
+(**Script** shows only the lines scripts print).
 It starts at **All**. Edits to the direction, keyword and the options below stay
 in a draft until you click **Apply** or press Enter in the keyword box; **Apply**
 is highlighted while the draft differs from the active filter.
@@ -90,8 +91,11 @@ app restarts. Search, selection copying, Copy all and Save operate on filtered e
 Clear removes **all** displayed-cache entries, including those hidden by the
 filter, while keeping the filter settings and byte counters. Filtering does not
 affect serial reception, paused data retention, Lua input, or live stream output
-(including its initial buffer snapshot). Lua `print` / `log` output and connection
-errors remain in their separate panels or status messages. Incoming data updates
+(including its initial buffer snapshot). Lua `output.print` content appears in the
+receive area tagged `LUA`. Lua `print` / `log.*` debug lines appear there only while
+**Settings → General → Script Debug Logs** is on, tagged `LOG`, `WARN` or `ERR`; both
+follow the **Script** direction. Connection errors remain in their separate status
+messages. Incoming data updates
 the filtered view; automatic scrolling follows only changes to visible entries.
 
 ## Log markers
@@ -129,7 +133,7 @@ for a crosshair readout, pause the view, or clear recorded history.
 
 ## Live stream output
 
-Click `⇥` in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug `log` output is excluded.
+Click the continuous-save button (the file icon with an arrow) in the receive toolbar and choose an output path. Existing files are appended without replacing their content. The button stays highlighted while capturing; click it again to stop, or hover to see the path. Capture is per session, and a file can be used by only one session at a time. Lua debug logs (`print`, `log.*`) are excluded; `output.print` content is captured.
 
 Under **Settings → General → Stream output scope**, choose **Current buffer and future** or **Future only** (default). The former snapshots that session's retained visible and paused logs when the file is ready, then records subsequent events in order; cleared or trimmed history and other sessions are excluded. The latter records only events after the file is ready and capture is attached. This global preference is persisted and applies to the next capture; changing it does not backfill an active file again.
 

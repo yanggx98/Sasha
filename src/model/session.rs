@@ -594,6 +594,20 @@ impl SessionState {
         }
     }
 
+    /// Records a line a Lua script printed (`direction` must be one of the script directions).
+    /// A multi-line message becomes one row per line; an empty message becomes one blank row.
+    /// Like TX rows it waits while paused, but it is not serial traffic, so the RX/TX counters
+    /// are untouched.
+    pub fn record_script_log(&mut self, direction: LogDirection, message: &str, timestamp: &str) {
+        debug_assert!(direction.is_script());
+        let message = message.trim_end_matches(['\r', '\n']);
+        for line in message.split('\n') {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let entry = self.build_log_entry(timestamp, direction, line.as_bytes().to_vec());
+            self.record_log(entry);
+        }
+    }
+
     /// Records transmitted bytes after a successful serial write, updating TX counters
     /// and respecting `receive.paused`.
     pub fn record_tx_bytes(&mut self, payload: &[u8], timestamp: &str) {
@@ -657,6 +671,46 @@ mod tests {
         assert_eq!(state.markers.len(), 1);
         state.clear_receive_logs();
         assert!(state.markers.is_empty());
+    }
+
+    #[test]
+    fn script_log_lines_are_split_per_line_and_leave_the_counters_alone() {
+        let mut state = SessionState::new_simulated_demo();
+        state.clear_receive_logs();
+        let counters = (state.counters.rx_bytes, state.counters.tx_bytes);
+        state.record_script_log(LogDirection::ScriptInfo, "T=25\nH=40\r\n", "10:00:00.000");
+        assert_eq!(state.logs.len(), 2);
+        assert_eq!(state.logs[0].bytes, b"T=25");
+        assert_eq!(state.logs[1].bytes, b"H=40");
+        assert!(
+            state
+                .logs
+                .iter()
+                .all(|entry| entry.direction == LogDirection::ScriptInfo)
+        );
+
+        // An empty message (`print()`) still shows one blank line, at its own level.
+        state.record_script_log(LogDirection::ScriptWarn, "", "10:00:00.001");
+        assert_eq!(state.logs.len(), 3);
+        assert_eq!(state.logs[2].direction, LogDirection::ScriptWarn);
+        assert!(state.logs[2].bytes.is_empty());
+
+        assert_eq!((state.counters.rx_bytes, state.counters.tx_bytes), counters);
+    }
+
+    #[test]
+    fn script_log_lines_wait_for_resume_like_other_rows() {
+        let mut state = SessionState::new_simulated_demo();
+        state.clear_receive_logs();
+        state.set_receive_paused(true);
+        state.record_script_log(LogDirection::ScriptError, "boom", "10:00:00.000");
+        assert!(state.logs.is_empty());
+        assert_eq!(state.retained_while_paused.len(), 1);
+        state.set_receive_paused(false);
+        assert_eq!(state.logs.len(), 1);
+        assert_eq!(state.logs[0].direction, LogDirection::ScriptError);
+        // Saved text keeps the tag so the file shows who said it.
+        assert_eq!(state.visible_log_export_text(), "[10:00:00.000] ERR boom");
     }
 
     #[test]

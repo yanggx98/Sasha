@@ -121,7 +121,13 @@ pub enum ScriptEvent {
         run_id: u64,
         status: ScriptStatus,
     },
+    /// Debug log line (`log.*`, `print`); hosts show these only when script debugging is on.
     Log(ScriptLogEntry),
+    /// Content the script chose to show (`output.print`).
+    Output {
+        run_id: u64,
+        message: String,
+    },
 }
 
 /// Point-in-time snapshot of a script instance for UI or test inspection.

@@ -7,6 +7,12 @@ pub enum LogDirection {
     Rx,
     Tx,
     System,
+    /// A Lua script's debug log: `log.info` / `print`, `log.warn` and `log.error`.
+    ScriptInfo,
+    ScriptWarn,
+    ScriptError,
+    /// Content a Lua script chose to show with `output.print`.
+    ScriptOutput,
 }
 
 impl LogDirection {
@@ -15,7 +21,25 @@ impl LogDirection {
             Self::Rx => "RX",
             Self::Tx => "TX",
             Self::System => "SYS",
+            Self::ScriptInfo => "LOG",
+            Self::ScriptWarn => "WARN",
+            Self::ScriptError => "ERR",
+            Self::ScriptOutput => "LUA",
         }
+    }
+
+    /// Lines a script printed itself, as opposed to serial data.
+    pub fn is_script(self) -> bool {
+        self.is_script_debug() || self == Self::ScriptOutput
+    }
+
+    /// The levelled debug log lines (`log.*`, `print`), shown only while script debugging is
+    /// on and never part of a live stream capture.
+    pub fn is_script_debug(self) -> bool {
+        matches!(
+            self,
+            Self::ScriptInfo | Self::ScriptWarn | Self::ScriptError
+        )
     }
 }
 
@@ -70,7 +94,8 @@ impl LogEntry {
     /// Like [`Self::format_payload`], plus ANSI style spans (byte ranges into the
     /// returned text). HEX mode never has spans.
     pub fn format_payload_styled(&self, hex_mode: bool) -> (String, AnsiSpans) {
-        if hex_mode {
+        // Script output is text the script chose to show, never raw serial bytes.
+        if hex_mode && !self.direction.is_script() {
             (format_hex_bytes(&self.bytes), Vec::new())
         } else {
             let text = String::from_utf8_lossy(&self.bytes);
@@ -580,6 +605,49 @@ mod tests {
         let with_nul = LogEntry::new(2, "14:26:07.400", LogDirection::Rx, b"\0OK\r\n".to_vec());
         assert_eq!(with_nul.format_payload(false), "OK");
         assert_eq!(with_nul.format_payload(true), "00 4F 4B 0D 0A");
+    }
+
+    #[test]
+    fn script_directions_have_level_tags_and_stay_text_in_hex_mode() {
+        assert_eq!(LogDirection::ScriptInfo.tag(), "LOG");
+        assert_eq!(LogDirection::ScriptWarn.tag(), "WARN");
+        assert_eq!(LogDirection::ScriptError.tag(), "ERR");
+        assert_eq!(LogDirection::ScriptOutput.tag(), "LUA");
+        for direction in [
+            LogDirection::ScriptInfo,
+            LogDirection::ScriptWarn,
+            LogDirection::ScriptError,
+            LogDirection::ScriptOutput,
+        ] {
+            assert!(direction.is_script());
+        }
+        for direction in [LogDirection::Rx, LogDirection::Tx, LogDirection::System] {
+            assert!(!direction.is_script());
+            assert!(!direction.is_script_debug());
+        }
+        // Only the levelled `log.*` lines are debug output; `output.print` is content.
+        assert!(!LogDirection::ScriptOutput.is_script_debug());
+        for direction in [
+            LogDirection::ScriptInfo,
+            LogDirection::ScriptWarn,
+            LogDirection::ScriptError,
+        ] {
+            assert!(direction.is_script_debug());
+        }
+
+        // A script's message is already text: HEX mode must not turn it into bytes.
+        let entry = LogEntry::new(
+            1,
+            "10:00:00.000",
+            LogDirection::ScriptInfo,
+            b"T=25".to_vec(),
+        );
+        assert_eq!(entry.format_payload(true), "T=25");
+        assert_eq!(entry.format_payload(false), "T=25");
+        assert_eq!(
+            selectable_log_line(&entry, true, true).text,
+            "[10:00:00.000] LOG T=25"
+        );
     }
 
     #[test]

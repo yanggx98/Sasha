@@ -21,6 +21,24 @@ pub(crate) fn register_api(lua: &Lua, ctx: ScriptContext) -> mlua::Result<()> {
     register_checksum_module(lua)?;
     register_monitor_module(lua, &ctx)?;
     register_time_module(lua)?;
+    register_output_module(lua, &ctx)?;
+    Ok(())
+}
+
+/// `output.print(...)`: content the script wants the user to see. Unlike `log.*` and `print`
+/// (debug logs), hosts always show it.
+fn register_output_module(lua: &Lua, ctx: &ScriptContext) -> mlua::Result<()> {
+    let output = lua.create_table()?;
+    let print_ctx = ctx.clone();
+    output.set(
+        "print",
+        lua.create_function(move |_, args: MultiValue| {
+            let message = format_lua_args(args)?;
+            print_ctx.append_output(message);
+            Ok(())
+        })?,
+    )?;
+    lua.globals().set("output", output)?;
     Ok(())
 }
 

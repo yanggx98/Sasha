@@ -222,20 +222,32 @@ impl ScriptContext {
             }
             logs.push_back(entry.clone());
         }
+        self.push_text_event(ScriptEvent::Log(entry));
+    }
+
+    /// Queues content the script wants shown (`output.print`).
+    pub(crate) fn append_output(&self, message: String) {
+        self.push_text_event(ScriptEvent::Output {
+            run_id: self.shared.run_id,
+            message,
+        });
+    }
+
+    /// Queues a log or output event, shedding the oldest such event when the queue is full.
+    /// Lifecycle events are never dropped.
+    fn push_text_event(&self, event: ScriptEvent) {
         let mut events = self
             .events
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if events.len() >= SCRIPT_EVENT_QUEUE_MAX {
-            // Shed the oldest log line; lifecycle events are never dropped.
-            if let Some(pos) = events
+        if events.len() >= SCRIPT_EVENT_QUEUE_MAX
+            && let Some(pos) = events
                 .iter()
-                .position(|ev| matches!(ev, ScriptEvent::Log(_)))
-            {
-                events.remove(pos);
-            }
+                .position(|ev| matches!(ev, ScriptEvent::Log(_) | ScriptEvent::Output { .. }))
+        {
+            events.remove(pos);
         }
-        events.push_back(ScriptEvent::Log(entry));
+        events.push_back(event);
     }
 
     /// Drains all currently queued chunks from `RxSubscriber` into `RxBuffer`.

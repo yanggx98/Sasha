@@ -64,6 +64,8 @@
 
 每条日志均携带所属实例的 `run_id` 与级别标签。
 
+> **这些是调试日志，不是脚本的"输出"。** 图形界面里，`log.*` 和 `print` 默认不显示；在「设置 → 通用 → 脚本调试日志」打开后，它们才会出现在接收区，带 `LOG`、`WARN`、`ERR` 标签（对应 `info`、`warn`、`error`），并且**不会**进入持续保存。`sasha-cli run` 需要加 `--script-debug` 才会打印它们，格式为 `[INFO] ...`、`[WARN] ...`、`[ERROR] ...`。想让用户看到脚本解析出的内容，请使用下面的 `output` 模块。
+
 ---
 
 ### 1.4 `checksum` 模块
@@ -106,7 +108,19 @@
 
 ---
 
-### 1.6 `time` 模块（只读时钟）
+### 1.6 `output` 模块（脚本输出）
+
+| 函数签名 | 说明 | 返回值 |
+| --- | --- | --- |
+| `output.print(...)` | 输出脚本想让用户看到的内容；多参数以 `\t` 拼接（与 `print` 相同），含换行的内容按行拆开 | 无返回值 |
+
+- **图形界面**：内容始终显示在接收区，带 `LUA` 标签，不受「脚本调试日志」开关影响；过滤栏的方向按钮循环到 **脚本** 时，会只显示脚本输出（和已开启的调试日志）。它会被 `monitor.save` / `monitor.rotate` 保存，也会进入持续保存；HEX 显示模式下它仍以文本显示。它不计入 RX/TX 字节数，也不会被当成设备数据发给脚本自己。
+- **`sasha-cli run`**：原样写到 stdout（不加前缀），不需要 `--script-debug`。
+- 事件队列有上限（10000 条），脚本输出过快而宿主来不及处理时，最旧的输出会被丢弃，生命周期事件不会丢。
+
+---
+
+### 1.7 `time` 模块（只读时钟）
 
 脚本无法使用 `os`，`time` 提供只读的时间访问，使用本机本地时区、毫秒精度。图形界面与 `sasha-cli run` 中均可用。
 
@@ -169,7 +183,7 @@ serial.send("AT\r\n")
 
 local resp, err = serial.wait_text("OK\r\n", 1000)
 if resp then
-    log.info("设备应答:", resp)
+    output.print("设备应答:", resp)
 else
     log.warn("等待 OK 超时:", err)
 end
@@ -191,7 +205,7 @@ local hex_parts = {}
 for i = 1, #raw do
     hex_parts[#hex_parts + 1] = string.format("%02X", string.byte(raw, i))
 end
-log.info("收到字节:", table.concat(hex_parts, " "))
+output.print("收到字节:", table.concat(hex_parts, " "))
 ```
 
 ### 5.3 周期轮询（响应停止请求）
@@ -203,7 +217,7 @@ while not task.is_cancelled() do
     serial.send("PING\n")
     local line = serial.wait_text("PONG\n", 500)
     if line then
-        print("第", count, "次心跳成功")
+        output.print("第", count, "次心跳成功")
     else
         log.warn("第", count, "次心跳超时")
     end

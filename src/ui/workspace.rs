@@ -37,8 +37,10 @@ use crate::model::{
     ThroughputSpan, current_timestamp_hms_ms, format_buffer_usage, format_log_buffer_limit,
     parse_log_buffer_limit_for, theoretical_max_bytes_per_sec,
 };
-use crate::model::{MarkerColor, panel_items};
-use crate::scripting::{MonitorRequest, ScriptEvent, ScriptManager, ScriptStatus, save_text};
+use crate::model::{LogDirection, MarkerColor, panel_items};
+use crate::scripting::{
+    MonitorRequest, ScriptEvent, ScriptLogLevel, ScriptManager, ScriptStatus, save_text,
+};
 use crate::serial::{SerialConnection, SerialEvent, enumerate_serial_ports_for};
 use crate::session_service::{ControlLine, SessionService, SessionTxError};
 use crate::ui::bottom_bar::{BottomBar, SignalControls};
@@ -157,6 +159,8 @@ struct SessionTab {
     script_manager: ScriptManager,
     /// Receive-area actions requested by this tab's scripts (Lua `monitor` module).
     monitor_requests: Receiver<MonitorRequest>,
+    /// Mirrors the "script debug" setting as of the last poll or script start.
+    script_debug: bool,
     /// Set when a script cleared the log; the next render resets the text selection,
     /// which needs a `Window` the script poller does not have.
     pending_selection_reset: bool,
@@ -258,6 +262,7 @@ impl SessionTab {
             script_states: HashMap::new(),
             script_manager,
             monitor_requests,
+            script_debug: false,
             pending_selection_reset: false,
             script_poll_task: None,
             script_preferred_width: SCRIPT_PANEL_MIN_WIDTH,
@@ -540,7 +545,31 @@ impl SessionTab {
                         entry.status = Some(status);
                     }
                 }
+                // Debug lines (`log.*`, `print`) only reach the receive area while script
+                // debugging is on; with it off they are dropped. Rows are stamped when the UI
+                // picks them up, up to one poll tick (50 ms) after the script printed them.
+                ScriptEvent::Log(entry) if self.script_debug => {
+                    let direction = match entry.level {
+                        ScriptLogLevel::Info => LogDirection::ScriptInfo,
+                        ScriptLogLevel::Warn => LogDirection::ScriptWarn,
+                        ScriptLogLevel::Error => LogDirection::ScriptError,
+                    };
+                    self.state.record_script_log(
+                        direction,
+                        &entry.message,
+                        &current_timestamp_hms_ms(),
+                    );
+                    self.log_selection.observe_log_len(self.state.logs.len());
+                }
                 ScriptEvent::Log(_) => {}
+                ScriptEvent::Output { message, .. } => {
+                    self.state.record_script_log(
+                        LogDirection::ScriptOutput,
+                        &message,
+                        &current_timestamp_hms_ms(),
+                    );
+                    self.log_selection.observe_log_len(self.state.logs.len());
+                }
             }
         }
         true
@@ -2645,10 +2674,14 @@ impl SashaApp {
                     .timer(Duration::from_millis(50))
                     .await;
                 let keep_going = this.update(cx, |app, cx| {
-                    let output_dir = app.config_store.read(cx).config().script_output_dir.clone();
+                    let (output_dir, script_debug) = {
+                        let cfg = app.config_store.read(cx).config();
+                        (cfg.script_output_dir.clone(), cfg.script_debug)
+                    };
                     let Some(tab) = app.tab_mut(tab_id) else {
                         return false;
                     };
+                    tab.script_debug = script_debug;
                     // Read before draining: a script that finishes after this read has
                     // already queued its requests, so the drain below still sees them.
                     let still_running = tab.script_manager.running_count() > 0;
@@ -2675,10 +2708,12 @@ impl SashaApp {
     }
 
     fn run_script(&mut self, tab_id: u64, path: PathBuf, cx: &mut Context<Self>) {
+        let script_debug = self.config_store.read(cx).config().script_debug;
         let started = {
             let Some(tab) = self.tab_mut(tab_id) else {
                 return;
             };
+            tab.script_debug = script_debug;
             if tab.state.is_simulated_session || !tab.state.connection.is_connected() {
                 return;
             }

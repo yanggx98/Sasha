@@ -1100,3 +1100,94 @@ mod time_tests {
         }
     }
 }
+
+mod output_tests {
+    use super::*;
+
+    fn run_to_end(src: &str) -> (ScriptManager, ScriptInstanceSnapshot) {
+        let (service, generation, _writes) = setup_connected_service();
+        let mut manager = ScriptManager::new();
+        let id = manager
+            .start_script(
+                PathBuf::from("output.lua"),
+                src.to_string(),
+                &service,
+                generation,
+            )
+            .unwrap();
+        let snap = wait_until_finished(&manager, id, Duration::from_secs(5));
+        (manager, snap)
+    }
+
+    fn outputs(events: &[ScriptEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                ScriptEvent::Output { message, .. } => Some(message.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn output_print_emits_output_events_joined_like_print() {
+        let (mut manager, snap) =
+            run_to_end(r#"output.print("T=", 25, true) output.print() output.print("a\nb")"#);
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        let events = manager.drain_events();
+        assert_eq!(outputs(&events), vec!["T=\t25\ttrue", "", "a\nb"]);
+        // Output is not a log line: it never lands in the instance's debug log buffer.
+        assert!(snap.logs.is_empty());
+    }
+
+    #[test]
+    fn log_and_print_stay_debug_log_events() {
+        let (mut manager, snap) = run_to_end(r#"log.warn("w") print("p")"#);
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        let events = manager.drain_events();
+        assert!(outputs(&events).is_empty());
+        let logs: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ScriptEvent::Log(entry) => Some((entry.level, entry.message.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            logs,
+            vec![
+                (ScriptLogLevel::Warn, "w".to_string()),
+                (ScriptLogLevel::Info, "p".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn output_queue_is_bounded_and_keeps_lifecycle_events() {
+        let (mut manager, snap) = run_to_end(r#"for i = 1, 12000 do output.print(i) end"#);
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        let events = manager.drain_events();
+        let printed = outputs(&events);
+        assert!(printed.len() <= crate::scripting::SCRIPT_EVENT_QUEUE_MAX);
+        // The newest lines survive; the oldest were shed.
+        assert_eq!(printed.last().map(String::as_str), Some("12000"));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ScriptEvent::Started { .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ScriptEvent::StatusChanged { .. }))
+        );
+    }
+
+    #[test]
+    fn output_is_available_without_a_receive_area() {
+        // The CLI never calls enable_monitor; output must still work there.
+        let (mut manager, snap) = run_to_end(r#"output.print("hi")"#);
+        assert_eq!(snap.status, ScriptStatus::Completed);
+        assert_eq!(outputs(&manager.drain_events()), vec!["hi"]);
+    }
+}
