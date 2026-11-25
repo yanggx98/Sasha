@@ -368,8 +368,11 @@ const TIMER_ICON_W: f32 = 28.;
 const TIMER_DIVIDER_W: f32 = 1.;
 const TIMER_INPUT_W: f32 = 64.;
 const TIMER_UNIT_W: f32 = 24.;
+const TIMER_CAPSULE_RADIUS: f32 = 8.;
+const TIMER_CAPSULE_BORDER: f32 = 1.;
 /// Total width including the 1px border on each side.
-const TIMER_CAPSULE_W: f32 = TIMER_ICON_W + TIMER_DIVIDER_W + TIMER_INPUT_W + TIMER_UNIT_W + 2.;
+const TIMER_CAPSULE_W: f32 =
+    TIMER_ICON_W + TIMER_DIVIDER_W + TIMER_INPUT_W + TIMER_UNIT_W + 2. * TIMER_CAPSULE_BORDER;
 
 /// Always-visible capsule `[clock | interval ms]`. Clicking the clock segment only
 /// enables/cancels timed-send mode (the send button then plays/pauses); the
@@ -446,7 +449,13 @@ fn build_timer_row(
         .w(px(TIMER_ICON_W))
         .h_full()
         .when(clickable, |el| {
-            el.cursor_pointer().hover(move |s| s.bg(icon_hover_bg))
+            // GPUI clips overflow to a rectangle, so round the hover fill at the inner edge.
+            let inner_radius = px(TIMER_CAPSULE_RADIUS - TIMER_CAPSULE_BORDER);
+            el.cursor_pointer().hover(move |s| {
+                s.bg(icon_hover_bg)
+                    .rounded_tl(inner_radius)
+                    .rounded_bl(inner_radius)
+            })
         })
         .tooltip(move |window, cx| Tooltip::new(icon_tooltip.clone()).build(window, cx))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -486,8 +495,8 @@ fn build_timer_row(
         .w(px(TIMER_CAPSULE_W))
         .items_center()
         .h(px(28.))
-        .rounded(px(8.))
-        .border_1()
+        .rounded(px(TIMER_CAPSULE_RADIUS))
+        .border(px(TIMER_CAPSULE_BORDER))
         .overflow_hidden()
         .text_xs()
         .when(!clickable, |el| el.opacity(0.6))
