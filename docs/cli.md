@@ -94,7 +94,7 @@ goes to stdout as is. Its debug logs (`print`, `log.*`) are hidden unless you pa
 (receive area actions) is not available here and raises an error.
 
 ```text
-sasha-cli run scripts/periodic_send.lua --port COM3 --timeout 5000
+sasha-cli run my_script.lua --port COM3 --timeout 5000
 ```
 
 ## Exit codes

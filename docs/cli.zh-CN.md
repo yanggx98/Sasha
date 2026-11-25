@@ -84,7 +84,7 @@ sasha-cli monitor --port COM3 --until "READY" --duration 10000 --timestamp
 `monitor` 模块（接收区动作）在这里不可用，调用会报错。
 
 ```text
-sasha-cli run scripts/periodic_send.lua --port COM3 --timeout 5000
+sasha-cli run my_script.lua --port COM3 --timeout 5000
 ```
 
 ## 退出码
